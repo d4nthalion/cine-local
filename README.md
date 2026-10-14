@@ -1,6 +1,6 @@
 # CineLocal
 
-Cliente de escritorio para Windows con estilo de plataforma de streaming (HBO Max / Netflix / Filmin) que reproduce tus películas y series desde `D:\Películas y Series`.
+Cliente de escritorio para Windows con estilo de plataforma de streaming (HBO Max / Netflix / Filmin) que reproduce tus películas y series desde una ruta configurable.
 
 ## Cómo organiza la biblioteca
 
