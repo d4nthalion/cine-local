@@ -1,0 +1,53 @@
+const { contextBridge, ipcRenderer } = require('electron');
+
+const on = (ch) => (cb) => {
+  const fn = (_e, data) => cb(data);
+  ipcRenderer.on(ch, fn);
+  return () => ipcRenderer.removeListener(ch, fn);
+};
+
+contextBridge.exposeInMainWorld('api', {
+  platform: process.platform,
+  getSettings: () => ipcRenderer.invoke('settings:get'),
+  setSettings: (patch) => ipcRenderer.invoke('settings:set', patch),
+  testKey: (key) => ipcRenderer.invoke('tmdb:test', key),
+  getLibrary: () => ipcRenderer.invoke('library:get'),
+  scan: () => ipcRenderer.invoke('library:scan'),
+  refreshMeta: () => ipcRenderer.invoke('library:refreshMeta'),
+  searchMeta: (q) => ipcRenderer.invoke('meta:search', q),
+  identify: (q) => ipcRenderer.invoke('meta:identify', q),
+  play: (q) => ipcRenderer.invoke('play', q),
+  markProgress: (q) => ipcRenderer.invoke('progress:mark', q),
+  toggleFavorite: (id) => ipcRenderer.invoke('favorites:toggle', id),
+  toggleFullscreen: () => ipcRenderer.invoke('window:toggleFullscreen'),
+  setFullscreen: (v) => ipcRenderer.invoke('window:setFullscreen', v),
+  isFullscreen: () => ipcRenderer.invoke('window:isFullscreen'),
+  pickFolder: () => ipcRenderer.invoke('dialog:pickFolder'),
+  pickMpv: () => ipcRenderer.invoke('dialog:pickMpv'),
+  openExternal: (url) => ipcRenderer.invoke('shell:open', url),
+  showInFolder: (p) => ipcRenderer.invoke('shell:showItem', p),
+  copy: (text) => ipcRenderer.invoke('clipboard:write', text),
+  emule: {
+    get: () => ipcRenderer.invoke('emule:get'),
+    info: () => ipcRenderer.invoke('emule:info'),
+    test: (q) => ipcRenderer.invoke('emule:test', q),
+    launch: () => ipcRenderer.invoke('emule:launch'),
+    refresh: () => ipcRenderer.invoke('emule:refresh'),
+    connect: () => ipcRenderer.invoke('emule:connect'),
+    search: (q) => ipcRenderer.invoke('emule:search', q),
+    results: () => ipcRenderer.invoke('emule:results'),
+    download: (hash) => ipcRenderer.invoke('emule:download', hash),
+    addLink: (link) => ipcRenderer.invoke('emule:addLink', link),
+    op: (hash, op) => ipcRenderer.invoke('emule:op', { hash, op }),
+    pickExe: () => ipcRenderer.invoke('dialog:pickEmule'),
+    onUpdate: on('emule:update')
+  },
+  onLibrary: on('library:updated'),
+  onMetaProgress: on('meta:progress'),
+  onProgress: on('progress:updated'),
+  onPlayerClosed: on('player:closed'),
+  onFullscreen: on('window:fullscreen'),
+  onToast: on('toast'),
+  onNewItems: on('library:new'),
+  onOpenItem: on('open-item')
+});

@@ -1,0 +1,67 @@
+{
+  "name": "cinelocal",
+  "productName": "CineLocal",
+  "version": "1.0.0",
+  "description": "Tu cine en casa: películas y series de tu disco con estilo de plataforma de streaming",
+  "main": "src/main/main.js",
+  "author": "Carlos",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win nsis portable --x64"
+  },
+  "build": {
+    "appId": "com.cinelocal.app",
+    "productName": "CineLocal",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "src/**/*",
+      "build/icon.png",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "player-ui",
+        "to": "player-ui",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "mpv",
+        "to": "mpv",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "win": {
+      "icon": "build/icon.ico",
+      "target": [
+        "nsis",
+        "portable"
+      ],
+      "signAndEditExecutable": true
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "shortcutName": "CineLocal",
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico"
+    },
+    "portable": {
+      "artifactName": "CineLocal-${version}-portable.exe"
+    }
+  },
+  "devDependencies": {
+    "electron": "^33.4.11",
+    "electron-builder": "^25.1.8"
+  },
+  "allowScripts": {
+    "electron@33.4.11": true
+  }
+}

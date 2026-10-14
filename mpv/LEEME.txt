@@ -1,0 +1,1 @@
+Copia aquí mpv.exe (y sus archivos) para incluirlo en el instalador.
