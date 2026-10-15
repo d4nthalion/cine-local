@@ -9,6 +9,7 @@ const { findExternalSubs } = require('./subs');
 const { LibraryWatcher, isStable } = require('./watcher');
 const emule = require('./emule');
 const { EmuleService } = require('./emule/service');
+const { LetterboxdService, keyOf: lbKey } = require('./letterboxd');
 
 app.setAppUserModelId('com.cinelocal.app');
 if (!app.requestSingleInstanceLock()) { app.quit(); process.exit(0); }
@@ -40,7 +41,9 @@ const DEFAULT_SETTINGS = {
   emuleMoveToLibrary: true,      // mover los vídeos terminados a la biblioteca
   emuleSearchMethod: 'global',
   myProviders: [],               // plataformas contratadas: [{ id, name }] (ids de TMDB)
-  region: 'ES'                    // país de las plataformas (independiente del idioma de los metadatos)
+  region: 'ES',                   // país de las plataformas (independiente del idioma de los metadatos)
+  lbUser: '',                    // usuario de Letterboxd
+  lbMarkWatched: true            // marcar como vistas las películas que ya has visto en Letterboxd
 };
 
 // ---------- persistencia sencilla en JSON ----------
@@ -71,6 +74,7 @@ const metadata = store('metadata.json', {});
 const progress = store('progress.json', {});
 const userState = store('state.json', { favorites: [], lastPlayed: {} });
 const emuleState = store('emule.json', { tracked: {} });
+const lbStore = store('letterboxd.json', { films: {}, ids: {}, user: '', syncedAt: 0, fullAt: 0, source: null });
 
 let win = null;
 const player = new Player();
@@ -137,13 +141,13 @@ function send(ch, payload) {
 }
 
 app.on('second-instance', () => { if (win) { if (win.isMinimized()) win.restore(); win.focus(); } });
-app.whenReady().then(() => { createWindow(); restartWatcher(); emuleService.restart(); if (embeddedMode()) winEmbed.start(); });
+app.whenReady().then(() => { createWindow(); restartWatcher(); emuleService.restart(); if (embeddedMode()) winEmbed.start(); setTimeout(autoSyncLetterboxd, 15000); });
 app.on('window-all-closed', () => {
   player.stop();
   winEmbed.stop();
   watcher.stop();
   emuleService.stop();
-  for (const s of [settings, library, metadata, progress, userState, emuleState]) s.flushSync();
+  for (const s of [settings, library, metadata, progress, userState, emuleState, lbStore]) s.flushSync();
   app.quit();
 });
 
@@ -501,6 +505,44 @@ emuleService.on('completed', ({ name, moved, problem }) => {
   }
 });
 
+// ---------- Letterboxd ----------
+const letterboxd = new LetterboxdService({
+  store: lbStore,
+  tmdb: () => tmdb(),
+  // título+año de las películas de la biblioteca -> id de TMDB (evita búsquedas para lo que ya tienes)
+  libraryIndex: () => {
+    const m = new Map();
+    for (const it of library.data.items) {
+      const meta = it.type === 'movie' && metadata.data[it.id]?.meta;
+      if (!meta?.tmdbId) continue;
+      for (const t of [meta.title, meta.originalTitle, it.title]) if (t) m.set(lbKey(t, meta.year), meta.tmdbId);
+    }
+    return m;
+  }
+});
+letterboxd.on('status', st => send('letterboxd:status', st));
+letterboxd.on('updated', () => { markLetterboxdWatched(); send('letterboxd:update', letterboxd.snapshot()); });
+
+/** Las películas de la biblioteca que ya has visto en Letterboxd se marcan como vistas (sin tocar las que tienen progreso) */
+function markLetterboxdWatched() {
+  if (!settings.data.lbMarkWatched) return;
+  const seen = new Set(letterboxd.snapshot().films.filter(f => f.watched && f.tmdbId).map(f => f.tmdbId));
+  let n = 0;
+  for (const it of library.data.items) {
+    const id = it.type === 'movie' && metadata.data[it.id]?.meta?.tmdbId;
+    if (id && seen.has(id) && !progress.data[it.path]) { progress.data[it.path] = { pos: 0, dur: 0, watched: true, at: Date.now(), lb: true }; n++; }
+  }
+  if (n) { progress.save(); send('progress:updated', progress.data); }
+}
+
+/** Al abrir: sincronización completa si hace más de 3 días; si no, sólo lo último (RSS) */
+function autoSyncLetterboxd() {
+  const user = settings.data.lbUser;
+  if (!user) return;
+  const full = lbStore.data.user !== user || Date.now() - (lbStore.data.fullAt || 0) > 3 * 864e5;
+  letterboxd.sync(user, { full }).catch(e => console.error('Letterboxd:', e.message));
+}
+
 function emuleTemplatePath() {
   try { return emule.installTemplate(DATA); } catch (e) { console.error('Plantilla de eMule:', e); return null; }
 }
@@ -516,6 +558,11 @@ ipcMain.handle('settings:set', async (_e, patch) => {
   if (before.libraryPath !== s.libraryPath || before.singleFileFolderAsMovie !== s.singleFileFolderAsMovie) await scan();
   else if (before.tmdbKey !== s.tmdbKey || before.metaLang !== s.metaLang) fetchMissingMetadata();
   if (['emuleEnabled', 'emulePort', 'emulePassword'].some(k => before[k] !== s[k])) emuleService.restart();
+  if (before.lbUser !== s.lbUser) {
+    if (lbStore.data.user && lbStore.data.user !== s.lbUser) letterboxd.reset();
+    if (s.lbUser) letterboxd.sync(s.lbUser, { full: true }).catch(() => {});
+  }
+  if (!before.lbMarkWatched && s.lbMarkWatched) markLetterboxdWatched();
   return s;
 });
 ipcMain.handle('tmdb:test', async (_e, key) => {
@@ -632,6 +679,19 @@ ipcMain.handle('shell:open', (_e, url) => {
 });
 ipcMain.handle('shell:showItem', (_e, p) => shell.showItemInFolder(p));
 ipcMain.handle('clipboard:write', (_e, text) => clipboard.writeText(String(text)));
+
+ipcMain.handle('letterboxd:get', () => letterboxd.snapshot());
+ipcMain.handle('letterboxd:sync', async (_e, full = true) => {
+  try { await letterboxd.sync(settings.data.lbUser, { full }); return { ok: true }; }
+  catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('letterboxd:import', async () => {
+  const r = await dialog.showOpenDialog(win, { title: 'Exportación de Letterboxd', properties: ['openFile'], filters: [{ name: 'Exportación de Letterboxd (.zip)', extensions: ['zip'] }] });
+  if (r.canceled || !r.filePaths[0]) return { ok: false, canceled: true };
+  try { await letterboxd.importExport(fs.readFileSync(r.filePaths[0]), settings.data.lbUser); return { ok: true }; }
+  catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('letterboxd:clear', () => { letterboxd.reset(); return letterboxd.snapshot(); });
 
 ipcMain.handle('emule:get', () => emuleService.snapshot);
 ipcMain.handle('emule:info', async () => ({ ...(await emule.inspect(settings.data.emulePath)), templatePath: emuleTemplatePath() }));

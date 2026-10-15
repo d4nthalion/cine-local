@@ -45,6 +45,14 @@ contextBridge.exposeInMainWorld('api', {
     pickExe: () => ipcRenderer.invoke('dialog:pickEmule'),
     onUpdate: on('emule:update')
   },
+  letterboxd: {
+    get: () => ipcRenderer.invoke('letterboxd:get'),
+    sync: (full = true) => ipcRenderer.invoke('letterboxd:sync', full),
+    importZip: () => ipcRenderer.invoke('letterboxd:import'),
+    clear: () => ipcRenderer.invoke('letterboxd:clear'),
+    onUpdate: on('letterboxd:update'),
+    onStatus: on('letterboxd:status')
+  },
   onLibrary: on('library:updated'),
   onMetaProgress: on('meta:progress'),
   onProgress: on('progress:updated'),

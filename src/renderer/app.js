@@ -48,7 +48,9 @@ const S = {
   heroIdx: 0,
   heroTimer: null,
   heroList: [],
-  filters: { movies: { genre: null, sort: 'added' }, series: { genre: null, sort: 'added' }, directors: { sort: 'count', q: '' }, filmo: 'all', filmoSort: 'year' },
+  filters: { movies: { genre: null, sort: 'added' }, series: { genre: null, sort: 'added' }, directors: { sort: 'count', q: '' }, filmo: 'all', filmoSort: 'year', watchlist: 'all' },
+  lb: { films: [], status: {} },   // Letterboxd: películas vistas, notas y watchlist
+  lbById: new Map(),
   people: {},
   season: {},
   query: '',
@@ -60,6 +62,21 @@ const S = {
 };
 
 // ---------------------------------------------------------------- utilidades de datos
+function setLb(snap) {
+  S.lb = snap || { films: [], status: {} };
+  S.lbById = new Map(S.lb.films.filter(f => f.tmdbId).map(f => [f.tmdbId, f]));
+}
+/** Datos de Letterboxd de una película de la biblioteca (o de un id de TMDB) */
+const lbOf = (x) => typeof x === 'number' ? S.lbById.get(x) || null : (x?.type === 'movie' && x.meta?.tmdbId ? S.lbById.get(x.meta.tmdbId) || null : null);
+const lbStars = (r) => r ? '★'.repeat(Math.floor(r)) + (r % 1 ? '½' : '') : '';
+const hasLb = () => S.lb.films.length > 0;
+/** Watchlist de Letterboxd en su orden, con la película de la biblioteca si ya la tienes */
+function watchlistEntries() {
+  const owned = new Map(S.lib.items.filter(i => i.type === 'movie' && i.meta?.tmdbId).map(i => [i.meta.tmdbId, i]));
+  return S.lb.films.filter(f => f.watchlist).sort((a, b) => (a.wlOrder ?? 1e9) - (b.wlOrder ?? 1e9))
+    .map(f => ({ f, it: f.tmdbId ? owned.get(f.tmdbId) || null : null }));
+}
+
 const byId = (id) => S.lib.items.find(i => i.id === id);
 const T = (it) => it.meta?.title || it.title;
 const Y = (it) => it.meta?.year || it.year;
@@ -134,6 +151,7 @@ function sortItems(items, sort) {
   if (sort === 'title') a.sort((x, y) => T(x).localeCompare(T(y), 'es', { numeric: true }));
   else if (sort === 'year') a.sort((x, y) => (Y(y) || 0) - (Y(x) || 0));
   else if (sort === 'rating') a.sort((x, y) => (y.meta?.rating || 0) - (x.meta?.rating || 0));
+  else if (sort === 'mine') a.sort((x, y) => (lbOf(y)?.rating || 0) - (lbOf(x)?.rating || 0) || (y.meta?.rating || 0) - (x.meta?.rating || 0));
   else a.sort((x, y) => (y.added || 0) - (x.added || 0));
   return a;
 }
@@ -174,10 +192,35 @@ function card(it) {
       ${poster ? `<img loading="lazy" src="${esc(poster)}" alt="">` : placeholder(it)}
       ${isNew && !watched ? '<span class="tag new">Nuevo</span>' : ''}
       ${watched ? `<span class="watched-mark" title="Visto">${I.check}</span>` : ''}
+      ${lbBadge(lbOf(it))}
       ${bar}
     </div>
     <div class="cap"><div class="t">${esc(T(it))}</div><div class="s">${esc(sub)}</div></div>
   </div>`;
+}
+function lbBadge(lb) {
+  if (!lb?.rating && !lb?.liked) return '';
+  return `<span class="lb-badge" title="Tu nota en Letterboxd">${lb.rating ? `<b>${lbStars(lb.rating)}</b>` : ''}${lb.liked ? '<i>♥</i>' : ''}</span>`;
+}
+/** Película que no está en la biblioteca: "Dónde verla" y, si eMule está activo, buscarla */
+function missingCard(f, { tag = '', sub } = {}) {
+  const ph = { title: f.title, year: f.year, type: 'movie', meta: null };
+  const lb = lbOf(f.id);
+  const open = f.id ? `data-providers="${f.id}" data-ptitle="${esc(f.title)}" data-palt="${esc(f.originalTitle || '')}"` : (f.url ? `data-lb-url="${esc(f.url)}"` : '');
+  const line = sub ?? [f.year, lb?.watched ? 'Vista' : '', f.rating ? '★ ' + f.rating.toFixed(1) : ''].filter(Boolean).join(' · ');
+  return `<div class="card missing" tabindex="0" ${open}>
+    <div class="art">${f.poster ? `<img loading="lazy" src="${esc(f.poster)}" alt="">` : placeholder(ph)}
+      ${tag}${lbBadge(lb)}
+      <div class="missing-hover"><span>${I.eye}${f.id ? 'Dónde verla' : 'Ver en Letterboxd'}</span>${S.settings.emuleEnabled ? `<button class="mh-emule" data-action="emule-find" data-q="${esc(f.title)}" data-alt="${esc(f.originalTitle || '')}">${I.download}Buscar en eMule</button>` : ''}</div>
+    </div>
+    <div class="cap"><div class="t">${esc(f.title)}</div><div class="s">${esc(line || 'Sin fecha')}</div></div>
+  </div>`;
+}
+/** Tarjeta de la watchlist: la tuya si la tienes, si no, la de "Dónde verla" */
+function watchlistCard({ f, it }) {
+  if (it) return card(it);
+  return missingCard({ id: f.tmdbId, title: f.localTitle || f.title, originalTitle: f.localTitle && f.localTitle !== f.title ? f.title : '', year: f.year, poster: f.poster,
+    url: f.slug ? `https://letterboxd.com/film/${f.slug}/` : null }, { sub: [f.year, 'No la tienes'].filter(Boolean).join(' · ') });
 }
 
 function wideCard({ it, p, ep }) {
@@ -361,12 +404,15 @@ function filmographyHTML(d, p) {
     popular: (a, b) => (b.f.votes || 0) - (a.f.votes || 0) || (b.f.popularity || 0) - (a.f.popularity || 0) || byYear(a, b),
     rating: (a, b) => (b.f.rating || b.it?.meta?.rating || 0) - (a.f.rating || a.it?.meta?.rating || 0) || byYear(a, b),
     title: (a, b) => titleOf(a).localeCompare(titleOf(b), 'es', { numeric: true }),
-    owned: (a, b) => (b.it ? 1 : 0) - (a.it ? 1 : 0) || byYear(a, b)
+    owned: (a, b) => (b.it ? 1 : 0) - (a.it ? 1 : 0) || byYear(a, b),
+    mine: (a, b) => (lbOf(b.f.id || b.it?.meta?.tmdbId)?.rating || 0) - (lbOf(a.f.id || a.it?.meta?.tmdbId)?.rating || 0) || byYear(a, b)
   };
   entries.sort(sorters[S.filters.filmoSort] || byYear);
   const have = entries.filter(e => e.it).length;
   const mode = S.filters.filmo;
-  const list = mode === 'owned' ? entries.filter(e => e.it) : mode === 'missing' ? entries.filter(e => !e.it) : entries;
+  const seenOf = e => lbOf(e.f.id || e.it?.meta?.tmdbId)?.watched;
+  const seenLb = entries.filter(seenOf).length;
+  const list = mode === 'owned' ? entries.filter(e => e.it) : mode === 'missing' ? entries.filter(e => !e.it) : mode === 'seen' ? entries.filter(seenOf) : entries;
   const now = new Date().toISOString().slice(0, 10);
   return `<div class="section-title filmo-head">
       <span>Filmografía</span>
@@ -374,23 +420,17 @@ function filmographyHTML(d, p) {
         <button class="chip ${mode === 'all' ? 'on' : ''}" data-filmo="all">Todas · ${entries.length}</button>
         <button class="chip ${mode === 'owned' ? 'on' : ''}" data-filmo="owned"><i class="dot-own"></i>En tu biblioteca · ${have}</button>
         <button class="chip ${mode === 'missing' ? 'on' : ''}" data-filmo="missing">No disponibles · ${entries.length - have}</button>
+        ${seenLb ? `<button class="chip ${mode === 'seen' ? 'on' : ''}" data-filmo="seen">Vistas en Letterboxd · ${seenLb}</button>` : ''}
       </div>
       <select class="select filmo-sort" data-filmo-sort title="Ordenar">
-        ${[['year', 'Año (más antiguas)'], ['recent', 'Año (más recientes)'], ['popular', 'Popularidad'], ['rating', 'Valoración'], ['title', 'Título (A-Z)'], ['owned', 'Disponibles primero']]
+        ${[['year', 'Año (más antiguas)'], ['recent', 'Año (más recientes)'], ['popular', 'Popularidad'], ['rating', 'Valoración'], ...(hasLb() ? [['mine', 'Mi nota (Letterboxd)']] : []), ['title', 'Título (A-Z)'], ['owned', 'Disponibles primero']]
           .map(([v, l]) => `<option value="${v}" ${S.filters.filmoSort === v ? 'selected' : ''}>${l}</option>`).join('')}
       </select>
     </div>
     <div class="grid filmo">${list.map(({ f, it }) => {
       if (it) return card(it).replace('class="card"', 'class="card owned"').replace('<div class="cap">', '<div class="cap"><div class="own-badge">' + I.check + 'En tu biblioteca</div>');
       const upcoming = f.date && f.date > now;
-      const ph = { title: f.title, year: f.year, type: 'movie', meta: null };
-      return `<div class="card missing" tabindex="0" data-providers="${f.id}" data-ptitle="${esc(f.title)}" data-palt="${esc(f.originalTitle || '')}">
-        <div class="art">${f.poster ? `<img loading="lazy" src="${esc(f.poster)}" alt="">` : placeholder(ph)}
-          ${upcoming ? '<span class="tag">Próximamente</span>' : ''}
-          <div class="missing-hover"><span>${I.eye}Dónde verla</span>${S.settings.emuleEnabled ? `<button class="mh-emule" data-action="emule-find" data-q="${esc(f.title)}" data-alt="${esc(f.originalTitle || '')}">${I.download}Buscar en eMule</button>` : ''}</div>
-        </div>
-        <div class="cap"><div class="t">${esc(f.title)}</div><div class="s">${[f.year, f.rating ? '★ ' + f.rating.toFixed(1) : ''].filter(Boolean).join(' · ') || 'Sin fecha'}</div></div>
-      </div>`;
+      return missingCard(f, { tag: upcoming ? '<span class="tag">Próximamente</span>' : '' });
     }).join('')}</div>`;
 }
 
@@ -487,6 +527,12 @@ function viewHome() {
   rows += row('Continuar viendo', cont.map(wideCard).join(''), 'cont');
   rows += row('Añadido recientemente', recent.map(card).join(''), 'recent');
   if (favs.length) rows += row('Mi lista', favs.map(card).join(''), 'favs', 'list');
+  const wl = watchlistEntries();
+  if (wl.length) {
+    // primero las que ya puedes ver
+    const sorted = [...wl.filter(e => e.it), ...wl.filter(e => !e.it)].slice(0, 30);
+    rows += row('Tu watchlist de Letterboxd', sorted.map(watchlistCard).join(''), 'lbwl', 'watchlist');
+  }
   rows += row('Series', series.slice(0, 30).map(card).join(''), 'series', 'series');
   rows += row('Películas', movies.slice(0, 30).map(card).join(''), 'movies', 'movies');
   const dirs = sortDirectors(allDirectors(), 'count');
@@ -586,11 +632,27 @@ function viewGrid(kind) {
       </div>
       <div class="spacer"></div>
       <select class="select" data-sort="${kind}">
-        ${[['added', 'Añadidas recientemente'], ['title', 'Título (A-Z)'], ['year', 'Año'], ['rating', 'Valoración']]
+        ${[['added', 'Añadidas recientemente'], ['title', 'Título (A-Z)'], ['year', 'Año'], ['rating', 'Valoración'], ...(kind === 'movies' && hasLb() ? [['mine', 'Mi nota (Letterboxd)']] : [])]
           .map(([v, l]) => `<option value="${v}" ${f.sort === v ? 'selected' : ''}>${l}</option>`).join('')}
       </select>
     </div>
     ${list.length ? `<div class="grid">${list.map(card).join('')}</div>` : `<div class="empty"><p>No hay ${title.toLowerCase()} en tu biblioteca.</p></div>`}
+  </div>`;
+}
+
+function viewWatchlist() {
+  const all = watchlistEntries();
+  const mode = S.filters.watchlist;
+  const have = all.filter(e => e.it).length;
+  const list = mode === 'owned' ? all.filter(e => e.it) : mode === 'missing' ? all.filter(e => !e.it) : all;
+  return `<div class="page"><h1 class="page-title">Watchlist de Letterboxd<span class="count">${all.length}</span></h1>
+    ${all.length ? `<div class="toolbar"><div class="chips">
+        <button class="chip ${mode === 'all' ? 'on' : ''}" data-wl="all">Todas · ${all.length}</button>
+        <button class="chip ${mode === 'owned' ? 'on' : ''}" data-wl="owned"><i class="dot-own"></i>En tu biblioteca · ${have}</button>
+        <button class="chip ${mode === 'missing' ? 'on' : ''}" data-wl="missing">No las tienes · ${all.length - have}</button>
+      </div></div>
+      <div class="grid filmo">${list.map(e => e.it ? card(e.it).replace('class="card"', 'class="card owned"').replace('<div class="cap">', '<div class="cap"><div class="own-badge">' + I.check + 'En tu biblioteca</div>') : watchlistCard(e)).join('')}</div>`
+      : `<div class="empty"><h2>Tu watchlist está vacía</h2><p>${S.settings.lbUser ? 'Sincroniza tu perfil desde Ajustes.' : 'Conecta tu perfil de Letterboxd en Ajustes.'}</p><button class="btn btn-ghost" data-nav="settings">Ajustes</button></div>`}
   </div>`;
 }
 
@@ -666,6 +728,7 @@ function viewDetail(id) {
         ${m.tagline ? `<p class="tagline">${esc(m.tagline)}</p>` : ''}
         ${m.overview ? `<p class="overview">${esc(m.overview)}</p>` : ''}
         ${credit ? `<div class="credits-line">${credit}</div>` : ''}
+        ${lbLine(lbOf(it))}
         <div class="actions">
           ${playButtonFor(it)}
           ${restart}
@@ -685,6 +748,19 @@ function viewDetail(id) {
     </section>
     <div class="detail-body">${body}</div>
   </div>`;
+}
+
+function lbLine(lb) {
+  if (!lb) return '';
+  const parts = [];
+  if (lb.rating) parts.push(`Tu nota <b class="lb-stars">${lbStars(lb.rating)}</b>`);
+  if (lb.liked) parts.push('<span class="lb-heart">♥</span> Te gustó');
+  if (lb.watched && lb.date) parts.push(`Vista el ${fmtDate(lb.date)}`);
+  else if (lb.watched) parts.push('Vista');
+  if (lb.watchlist) parts.push('En tu watchlist');
+  if (!parts.length) return '';
+  const url = lb.slug ? `https://letterboxd.com/film/${lb.slug}/` : null;
+  return `<div class="lb-line" ${url ? `data-url="${esc(url)}" title="Abrir en Letterboxd"` : ''}><span class="lb-logo"><i></i><i></i><i></i></span>${parts.join('<i class="dot"></i>')}</div>`;
 }
 
 function seasonSection(it) {
@@ -776,6 +852,10 @@ function viewSettings() {
 
     <div class="set-group" id="platforms"><h3>Mis plataformas</h3>
       ${platformsSettingsHTML()}
+    </div>
+
+    <div class="set-group" id="letterboxd"><h3>Letterboxd</h3>
+      ${letterboxdSettingsHTML(s, sw)}
     </div>
 
     <div class="set-group"><h3>Descargas (eMule)</h3>
@@ -1047,6 +1127,36 @@ function platformsSettingsHTML() {
       ${p.logo ? `<img loading="lazy" src="${esc(p.logo)}" alt="">` : `<i class="prov-ph">${esc(p.name[0])}</i>`}<span>${esc(p.name)}</span><i class="plat-check">${I.check}</i></button>`).join('')}</div>
     ${all.length > shown.length || S.allProviders ? `<button class="link-btn plat-more" data-action="all-providers">${S.allProviders ? 'Mostrar sólo las principales' : `Ver todas (${all.length})`}</button>` : ''}`;
 }
+function lbStatusHTML() {
+  const lb = S.lb, st = lb.status || {};
+  if (st.running) return `<span class="status-pill"><span class="spinner sm"></span>${esc(st.text || 'Sincronizando…')}</span>`;
+  if (st.error) return `<span class="status-pill bad">${esc(st.error)}</span>`;
+  if (!lb.syncedAt) return S.settings.lbUser ? 'Aún no se ha sincronizado.' : 'Sin conectar.';
+  const n = f => lb.films.filter(f).length;
+  return `${n(f => f.watched)} vistas · ${n(f => f.rating)} con nota · ${n(f => f.watchlist)} en la watchlist · ${lb.source === 'export' ? 'importado' : 'sincronizado'} el ${new Date(lb.syncedAt).toLocaleString('es-ES', { dateStyle: 'medium', timeStyle: 'short' })}`
+    + (n(f => !f.tmdbId) ? ` · ${n(f => !f.tmdbId)} sin identificar` : '');
+}
+function letterboxdSettingsHTML(s, sw) {
+  return `<div class="set-row"><div class="lbl"><div class="t">Usuario de Letterboxd</div>
+      <div class="d">Se lee tu perfil público: películas vistas, tus notas, los “me gusta” y la watchlist. Al abrir CineLocal se añade lo último que hayas visto.</div></div>
+      <div class="ctl"><input class="input" data-set-text="lbUser" value="${esc(s.lbUser || '')}" placeholder="tu_usuario" spellcheck="false" style="min-width:200px">
+      <button class="btn btn-ghost btn-sm" data-action="lb-sync" ${s.lbUser && !S.lb.status?.running ? '' : 'disabled'}>Sincronizar ahora</button></div></div>
+    <div class="set-row"><div class="lbl"><div class="t">Estado</div><div class="d" id="lbStatus">${lbStatusHTML()}</div></div>
+      <div class="ctl">${S.lb.syncedAt ? '<button class="btn btn-ghost btn-sm" data-action="lb-clear">Borrar datos</button>' : ''}</div></div>
+    <div class="set-row"><div class="lbl"><div class="t">Importar la exportación de Letterboxd</div>
+      <div class="d">Alternativa si la lectura del perfil falla: en Letterboxd, <a data-url="https://letterboxd.com/settings/data/">Settings → Data → Export your data</a>, y elige aquí el .zip descargado.</div></div>
+      <div class="ctl"><button class="btn btn-ghost btn-sm" data-action="lb-import" ${S.lb.status?.running ? 'disabled' : ''}>Elegir .zip</button></div></div>
+    <div class="set-row"><div class="lbl"><div class="t">Marcar como vistas las que ya has visto en Letterboxd</div>
+      <div class="d">Sólo películas de tu biblioteca que aún no hayas empezado en CineLocal.</div></div>
+      <div class="ctl">${sw('lbMarkWatched', s.lbMarkWatched !== false)}</div></div>`;
+}
+function paintLbStatus() {
+  if (S.route.name !== 'settings') return;
+  const el = $('#lbStatus');
+  if (el) el.innerHTML = lbStatusHTML();
+  $$('[data-action="lb-sync"],[data-action="lb-import"]').forEach(b => { b.disabled = !!S.lb.status?.running || (b.dataset.action === 'lb-sync' && !S.settings.lbUser); });
+}
+
 async function loadProviderList() {
   if (S.providerListLoading) return;
   S.providerListLoading = true;
@@ -1074,6 +1184,7 @@ function render(keepScroll = false) {
     case 'movies': html = viewGrid('movies'); break;
     case 'series': html = viewGrid('series'); break;
     case 'list': html = viewList(); break;
+    case 'watchlist': html = viewWatchlist(); break;
     case 'search': html = viewSearch(); break;
     case 'detail': html = viewDetail(r.id); break;
     case 'directors': html = viewDirectors(); break;
@@ -1215,6 +1326,7 @@ async function saveSetting(key, value) {
   S.settings = await window.api.setSettings({ [key]: value });
   if (key === 'region') S.providerList = null;   // recargar la lista del nuevo país (los ids de TMDB son los mismos en todos)
   if (key === 'subLang' || key === 'emuleEnabled' || key === 'playerMode' || key === 'region') render(true);
+  if (key === 'lbUser') { setLb(await window.api.letterboxd.get()); paintLbStatus(); }
   if (key.startsWith('emule')) paintEmule();
   if (key === 'emuleEnabled' && value) loadEmuleInfo();
 }
@@ -1362,6 +1474,17 @@ document.addEventListener('click', async (e) => {
       S.settings = await window.api.setSettings({ myProviders: next });
       render(true);
     } else if (a === 'all-providers') { S.allProviders = !S.allProviders; render(true); }
+    else if (a === 'lb-sync') {
+      const r = await window.api.letterboxd.sync(true);
+      if (r.ok) toast('Letterboxd sincronizado', 'ok'); else toast(r.error, 'error');
+    } else if (a === 'lb-import') {
+      const r = await window.api.letterboxd.importZip();
+      if (r.ok) toast('Exportación de Letterboxd importada', 'ok'); else if (!r.canceled) toast(r.error, 'error');
+    } else if (a === 'lb-clear') {
+      if (await confirmModal('Borrar datos de Letterboxd', 'Se quitarán tus notas y tu watchlist de CineLocal. Lo que ya está marcado como visto se mantiene.', 'Borrar')) {
+        setLb(await window.api.letterboxd.clear()); render(true);
+      }
+    }
     else if (a.startsWith('emule-') || a.startsWith('dl-') || a === 'pick-emule' || a === 'copy') emuleAction(a, action);
     return;
   }
@@ -1372,8 +1495,14 @@ document.addEventListener('click', async (e) => {
   const dirEl = t.closest('[data-director]');
   if (dirEl) { go('director', { id: dirEl.dataset.director }); return; }
 
+  const wlc = t.closest('[data-wl]');
+  if (wlc) { S.filters.watchlist = wlc.dataset.wl; render(true); return; }
+
   const fm = t.closest('[data-filmo]');
   if (fm) { S.filters.filmo = fm.dataset.filmo; render(true); return; }
+
+  const lbu = t.closest('[data-lb-url]');
+  if (lbu) { window.api.openExternal(lbu.dataset.lbUrl); return; }
 
   const pv = t.closest('[data-providers]');
   if (pv) { showProviders(+pv.dataset.providers, pv.dataset.ptitle, pv.dataset.palt); return; }
@@ -1475,6 +1604,12 @@ window.api.onPlayerClosed(({ error }) => {
 window.api.onFullscreen((fs) => document.body.classList.toggle('fullscreen', fs));
 window.api.onToast(({ type, text }) => toast(text, type));
 window.api.emule.onUpdate((snap) => { S.emule.snap = snap; paintEmule(); });
+window.api.letterboxd.onStatus((st) => { S.lb.status = st; paintLbStatus(); });
+window.api.letterboxd.onUpdate((snap) => {
+  setLb(snap);
+  if (S.route.name === 'downloads' || (S.route.name === 'settings' && /INPUT|SELECT/.test(document.activeElement?.tagName))) { paintLbStatus(); return; }
+  render(true);
+});
 window.api.onNewItems((list) => {
   for (const x of list.slice(0, 4)) {
     const el = document.createElement('div');
@@ -1502,6 +1637,7 @@ window.api.onMetaProgress((p) => {
   S.settings = await window.api.getSettings();
   S.lib = await window.api.getLibrary();
   S.emule.snap = await window.api.emule.get();
+  setLb(await window.api.letterboxd.get());
   render();
   paintEmule();
   if (S.settings.emuleEnabled) loadEmuleInfo();

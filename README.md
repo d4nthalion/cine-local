@@ -78,6 +78,26 @@ CineLocal puede buscar y descargar con eMule y seguir el progreso desde la secci
 * No abras el puerto del servidor web en el router: CineLocal solo se conecta a `127.0.0.1`.
 * Prueba contra un eMule real: `npx electron test/emule-test.js <carpetaTemporal> <carpetaCapturas> <contraseña>`.
 
+## Letterboxd
+
+En *Ajustes → Letterboxd* escribe tu usuario y CineLocal importa tu perfil público: las películas vistas, tus notas, los “me gusta”, las fechas del diario y la watchlist.
+
+* **Portada:** fila *Tu watchlist de Letterboxd*, con las que ya tienes primero. Las que no tienes llevan *Dónde verla* y *Buscar en eMule*. *Ver todo* abre la watchlist completa.
+* **Tarjetas y fichas:** muestran tu nota en estrellas y el ♥. La ficha añade además la fecha en que la viste y enlaza a la película en Letterboxd.
+* **Orden y filtros:** *Mi nota (Letterboxd)* en Películas y en la filmografía de los directores. La filmografía tiene también el filtro *Vistas en Letterboxd*.
+* **Vistas:** opcionalmente, marca como vistas en CineLocal las películas de tu biblioteca que ya has visto, sin tocar las que tienen progreso.
+
+Letterboxd no tiene API pública, así que las páginas del perfil (`/usuario/films/`, `/usuario/watchlist/`, `/usuario/rss/`) se leen desde una ventana oculta de Chromium, que supera la comprobación de Cloudflare.
+
+* **Ritmo:** se pide como mucho una página cada 1,5 s y, si Cloudflare corta, se espera y se reintenta.
+* **Sincronización:** la primera es completa; un perfil de 3.000 películas lleva un par de minutos. Al abrir la app se añade lo último del RSS, y cada 3 días se repite la sincronización completa.
+* **Emparejado con TMDB:** cada película se identifica primero con tu biblioteca y después con una búsqueda en TMDB por título y año. Como último recurso se usa el `data-tmdb-id` de su ficha en Letterboxd. El resultado se guarda en `%APPDATA%\CineLocal\letterboxd.json`.
+* **Alternativa:** importar el ZIP de *Letterboxd → Settings → Data → Export your data* (`watched.csv`, `ratings.csv`, `watchlist.csv`, `diary.csv`, `likes/films.csv`).
+
+Pruebas:
+* Perfil: `npx electron test/letterboxd-test.js <copiaDeDatos> <carpetaCapturas> profile <usuario>`.
+* ZIP: `npx electron test/letterboxd-test.js <copiaDeDatos> <carpetaCapturas> export <zip>`.
+
 ## Desarrollo
 
 ```bash
