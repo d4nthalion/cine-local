@@ -38,7 +38,9 @@ const DEFAULT_SETTINGS = {
   emulePassword: '',
   emulePath: '',
   emuleMoveToLibrary: true,      // mover los vídeos terminados a la biblioteca
-  emuleSearchMethod: 'global'
+  emuleSearchMethod: 'global',
+  myProviders: [],               // plataformas contratadas: [{ id, name }] (ids de TMDB)
+  region: 'ES'                    // país de las plataformas (independiente del idioma de los metadatos)
 };
 
 // ---------- persistencia sencilla en JSON ----------
@@ -147,7 +149,7 @@ app.on('window-all-closed', () => {
 
 // ---------- biblioteca ----------
 function tmdb() {
-  return new TMDB(settings.data.tmdbKey, settings.data.metaLang || 'es-ES', (u, o) => net.fetch(u, o));
+  return new TMDB(settings.data.tmdbKey, settings.data.metaLang || 'es-ES', (u, o) => net.fetch(u, o), settings.data.region || 'ES');
 }
 
 function view() {
@@ -281,6 +283,8 @@ function needsFetch(it, lang) {
   if (!m) return true;
   if (!m.manual && m.matcher !== MATCHER_VERSION) return true;
   if (m.lang !== lang && !m.failed) return true;
+  // fichas antiguas sin datos de dirección (foto/id): recargar detalles (no se vuelve a buscar)
+  if (it.type === 'movie' && !m.failed && m.meta && !Array.isArray(m.meta.directors)) return true;
   if (m.failed) return Date.now() - (m.at || 0) > 1000 * 60 * 60 * 24 * 3; // reintenta a los 3 días
   if (it.type === 'series') {
     const have = Object.keys(m.meta?.seasons || {}).map(Number);
@@ -523,6 +527,41 @@ ipcMain.handle('library:get', () => view());
 ipcMain.handle('library:scan', () => scan());
 ipcMain.handle('library:refreshMeta', () => { fetchMissingMetadata(true); return true; });
 
+const people = store('people.json', {});
+ipcMain.handle('meta:person', async (_e, id) => {
+  const c = people.data[id];
+  // las fichas guardadas antes de añadir la popularidad se vuelven a pedir
+  if (c && Date.now() - c.at < 1000 * 60 * 60 * 24 * 30 && c.lang === settings.data.metaLang && Array.isArray(c.data?.films) && c.data.films.every(f => 'popularity' in f)) return c.data;
+  const api = tmdb();
+  if (!api.enabled) return null;
+  try {
+    const data = await api.person(id);
+    people.data[id] = { data, at: Date.now(), lang: settings.data.metaLang };
+    people.save();
+    return data;
+  } catch { return c?.data || null; }
+});
+let providerListCache = null;
+ipcMain.handle('meta:providerList', async () => {
+  const k = (settings.data.region || 'ES') + ':' + settings.data.metaLang;
+  if (providerListCache?.k === k && Date.now() - providerListCache.at < 1000 * 60 * 60 * 24) return providerListCache.data;
+  const api = tmdb();
+  if (!api.enabled) throw new Error('Configura tu API key de TMDB en Ajustes');
+  const data = await api.providerList();
+  providerListCache = { k, data, at: Date.now() };
+  return data;
+});
+const providersCache = new Map();
+ipcMain.handle('meta:providers', async (_e, movieId) => {
+  const k = movieId + ':' + (settings.data.region || 'ES');
+  const c = providersCache.get(k);
+  if (c && Date.now() - c.at < 1000 * 60 * 60 * 12) return c.data;
+  const api = tmdb();
+  if (!api.enabled) throw new Error('Configura tu API key de TMDB en Ajustes');
+  const data = await api.watchProviders(movieId);
+  providersCache.set(k, { data, at: Date.now() });
+  return data;
+});
 ipcMain.handle('meta:search', async (_e, { type, query, year }) => {
   const api = tmdb();
   if (!api.enabled) throw new Error('Configura tu API key de TMDB en Ajustes');

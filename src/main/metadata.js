@@ -3,11 +3,12 @@ const API = 'https://api.themoviedb.org/3';
 const IMG = 'https://image.tmdb.org/t/p/';
 
 class TMDB {
-  constructor(key, language = 'es-ES', fetchImpl = globalThis.fetch) {
+  /** region: país para plataformas y calificaciones por edad; por defecto, el del idioma */
+  constructor(key, language = 'es-ES', fetchImpl = globalThis.fetch, region = null) {
     this.fetch = fetchImpl;
     this.key = (key || '').trim();
     this.language = language;
-    this.region = (language.split('-')[1] || 'ES').toUpperCase();
+    this.region = (region || language.split('-')[1] || 'ES').toUpperCase();
   }
 
   get enabled() { return !!this.key; }
@@ -137,9 +138,43 @@ class TMDB {
       logo: this.pickLogo(d.images),
       certification: cert,
       director: (d.credits?.crew || []).filter(c => c.job === 'Director').map(c => c.name).join(', '),
+      directors: (d.credits?.crew || []).filter(c => c.job === 'Director').map(c => ({ id: c.id, name: c.name, photo: img(c.profile_path, 'w342') })),
       cast: castOf(d.credits),
       trailer: trailerOf(d.videos)
     };
+  }
+
+  /** Ficha de una persona (biografía, foto, fechas) */
+  async person(id) {
+    const d = await this.get(`/person/${id}`, { language: this.language, append_to_response: 'movie_credits' });
+    let bio = d.biography;
+    if (!bio) bio = (await this.get(`/person/${id}`, { language: 'en-US' }).catch(() => ({}))).biography;
+    return {
+      id: d.id, name: d.name, bio: bio || '', photo: img(d.profile_path, 'h632'),
+      birthday: d.birthday, deathday: d.deathday, place: d.place_of_birth,
+      films: directedFilms(d.movie_credits)
+    };
+  }
+
+  /** Plataformas donde ver una película (datos de JustWatch vía TMDB) */
+  async watchProviders(movieId) {
+    const r = await this.get(`/movie/${movieId}/watch/providers`);
+    const reg = r.results?.[this.region];
+    if (!reg) return { region: this.region, link: null, groups: [] };
+    const map = list => (list || []).sort((a, b) => (a.display_priority ?? 99) - (b.display_priority ?? 99))
+      .map(p => ({ id: p.provider_id, name: p.provider_name, logo: img(p.logo_path, 'w92') }));
+    const groups = [
+      ['Suscripción', reg.flatrate], ['Gratis', reg.free], ['Con anuncios', reg.ads], ['Alquiler', reg.rent], ['Compra', reg.buy]
+    ].filter(([, l]) => l?.length).map(([label, l]) => ({ label, providers: map(l) }));
+    return { region: this.region, link: reg.link || null, groups };
+  }
+
+  /** Plataformas de películas disponibles en la región, en el orden en que las destaca TMDB/JustWatch */
+  async providerList() {
+    const r = await this.get('/watch/providers/movie', { watch_region: this.region, language: this.language });
+    return (r.results || [])
+      .map(p => ({ id: p.provider_id, name: p.provider_name, logo: img(p.logo_path, 'w92'), priority: p.display_priorities?.[this.region] ?? p.display_priority ?? 999 }))
+      .sort((a, b) => a.priority - b.priority);
   }
 
   async tv(id, seasons = []) {
@@ -251,6 +286,20 @@ function rankResults(results, query, year) {
     if (year && r.year) s += Math.max(0, 4 - Math.abs(+r.year - year) * 2);
     return { ...r, _s: s };
   }).sort((a, b) => b._s - a._s);
+}
+
+/** Películas dirigidas (sin duplicados), ordenadas por fecha; sin fecha al final */
+function directedFilms(credits) {
+  const seen = new Set();
+  return (credits?.crew || [])
+    .filter(c => c.job === 'Director' && !seen.has(c.id) && seen.add(c.id))
+    .map(c => ({
+      id: c.id, title: c.title, originalTitle: c.original_title,
+      date: c.release_date || null, year: c.release_date ? +c.release_date.slice(0, 4) : null,
+      poster: img(c.poster_path, 'w342'), rating: c.vote_average ? Math.round(c.vote_average * 10) / 10 : null,
+      votes: c.vote_count || 0, popularity: c.popularity || 0, overview: c.overview || ''
+    }))
+    .sort((a, b) => (a.date ? 0 : 1) - (b.date ? 0 : 1) || String(a.date).localeCompare(String(b.date)));
 }
 
 function img(p, size) { return p ? IMG + size + p : null; }
