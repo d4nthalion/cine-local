@@ -37,7 +37,7 @@ D:\Películas y Series\
 * Portada con carrusel destacado, *Continuar viendo*, *Añadido recientemente*, filas por género y mejor valoradas.
 * Fichas con fondo, logo, sinopsis, reparto, tráiler, temporadas y episodios con miniaturas.
 * Reanuda donde lo dejaste, marca vistos y reproduce el siguiente episodio automáticamente.
-* Mi lista, búsqueda (título, actor, director, género) y filtros/orden en Películas y Series.
+* Mi lista, búsqueda (título, actor, director, género) y orden en Películas y Series, con filtro de vistas / sin ver y, tras el icono de filtros, por género.
 * Detección automática: lo que copies o descargues en la carpeta aparece solo (cuando termina de copiarse), con aviso en la app y notificación de Windows.
 * Pantalla completa de la app: botón en la barra superior, **F11**, u opción *Iniciar en pantalla completa*.
 

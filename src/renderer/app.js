@@ -25,6 +25,7 @@ const I = {
   download: '<svg viewBox="0 0 24 24"><path d="M11 3h2v9.2l3.3-3.3 1.4 1.4L12 16l-5.7-5.7 1.4-1.4 3.3 3.3zM4 18h16v2H4z"/></svg>',
   pause: '<svg viewBox="0 0 24 24"><path d="M7 5h4v14H7zm6 0h4v14h-4z"/></svg>',
   close: '<svg viewBox="0 0 24 24"><path d="m6.4 5 5.6 5.6L17.6 5 19 6.4 13.4 12l5.6 5.6-1.4 1.4-5.6-5.6L6.4 19 5 17.6l5.6-5.6L5 6.4z"/></svg>',
+  filter: '<svg viewBox="0 0 24 24"><path d="M3 6h18v2H3zm4 5h10v2H7zm3 5h4v2h-4z"/></svg>',
   link: '<svg viewBox="0 0 24 24"><path d="M10.6 13.4a1 1 0 0 0 1.4 0l4-4a3 3 0 0 0-4.2-4.3l-1.3 1.3 1.4 1.4 1.3-1.3a1 1 0 0 1 1.4 1.5l-4 4a1 1 0 0 0 0 1.4zm2.8-2.8a1 1 0 0 0-1.4 0l-4 4a3 3 0 0 0 4.2 4.3l1.3-1.3-1.4-1.4-1.3 1.3a1 1 0 0 1-1.4-1.5l4-4a1 1 0 0 0 0-1.4z"/></svg>'
 };
 
@@ -48,7 +49,7 @@ const S = {
   heroIdx: 0,
   heroTimer: null,
   heroList: [],
-  filters: { movies: { genre: null, sort: 'added' }, series: { genre: null, sort: 'added' }, directors: { sort: 'count', q: '' }, filmo: 'all', filmoSort: 'year', watchlist: 'all' },
+  filters: { movies: { genre: null, sort: 'added', seen: 'all', open: false }, series: { genre: null, sort: 'added', seen: 'all', open: false }, directors: { sort: 'count', q: '' }, filmo: 'all', filmoSort: 'year', watchlist: 'all' },
   lb: { films: [], status: {} },   // Letterboxd: películas vistas, notas y watchlist
   lbById: new Map(),
   people: {},
@@ -616,27 +617,40 @@ function viewEmpty() {
     </div></div></div>`;
 }
 
+const isSeen = it => it.type === 'movie' ? !!prog(it.path)?.watched : it.episodes.every(e => prog(e.path)?.watched);
+
 function viewGrid(kind) {
   const f = S.filters[kind];
   const base = S.lib.items.filter(i => i.type === (kind === 'movies' ? 'movie' : 'series'));
   const genres = allGenres(base).map(([g]) => g);
-  let list = f.genre ? base.filter(i => i.meta?.genres?.includes(f.genre)) : base;
+  const byGenre = f.genre ? base.filter(i => i.meta?.genres?.includes(f.genre)) : base;
+  const seen = byGenre.filter(isSeen).length;
+  let list = f.seen === 'seen' ? byGenre.filter(isSeen) : f.seen === 'unseen' ? byGenre.filter(i => !isSeen(i)) : byGenre;
   list = sortItems(list, f.sort);
   const title = kind === 'movies' ? 'Películas' : 'Series';
   return `<div class="page">
     <h1 class="page-title">${title}<span class="count">${list.length}</span></h1>
     <div class="toolbar">
       <div class="chips">
-        <button class="chip ${!f.genre ? 'on' : ''}" data-genre="">Todos</button>
-        ${genres.map(g => `<button class="chip ${f.genre === g ? 'on' : ''}" data-genre="${esc(g)}">${esc(g)}</button>`).join('')}
+        <button class="chip ${f.seen === 'all' ? 'on' : ''}" data-seen="all">Todas · ${byGenre.length}</button>
+        <button class="chip ${f.seen === 'seen' ? 'on' : ''}" data-seen="seen">Vistas · ${seen}</button>
+        <button class="chip ${f.seen === 'unseen' ? 'on' : ''}" data-seen="unseen">Sin ver · ${byGenre.length - seen}</button>
       </div>
       <div class="spacer"></div>
+      ${f.genre ? `<button class="chip genre-on" data-genre="" title="Quitar filtro">${esc(f.genre)}${I.close}</button>` : ''}
+      ${genres.length ? `<button class="icon-btn filter-btn ${f.open ? 'open' : ''} ${f.genre ? 'active' : ''}" data-action="toggle-genres" title="Filtrar por género">${I.filter}</button>` : ''}
       <select class="select" data-sort="${kind}">
         ${[['added', 'Añadidas recientemente'], ['title', 'Título (A-Z)'], ['year', 'Año'], ['rating', 'Valoración'], ...(kind === 'movies' && hasLb() ? [['mine', 'Mi nota (Letterboxd)']] : [])]
           .map(([v, l]) => `<option value="${v}" ${f.sort === v ? 'selected' : ''}>${l}</option>`).join('')}
       </select>
     </div>
-    ${list.length ? `<div class="grid">${list.map(card).join('')}</div>` : `<div class="empty"><p>No hay ${title.toLowerCase()} en tu biblioteca.</p></div>`}
+    ${f.open && genres.length ? `<div class="genre-panel">
+        <span class="lbl">Género</span>
+        <button class="gchip ${!f.genre ? 'on' : ''}" data-genre="">Todos</button>
+        ${genres.map(g => `<button class="gchip ${f.genre === g ? 'on' : ''}" data-genre="${esc(g)}">${esc(g)}</button>`).join('')}
+      </div>` : ''}
+    ${list.length ? `<div class="grid">${list.map(card).join('')}</div>`
+      : `<div class="empty"><p>${base.length ? 'No hay ninguna con estos filtros.' : `No hay ${title.toLowerCase()} en tu biblioteca.`}</p></div>`}
   </div>`;
 }
 
@@ -1428,6 +1442,7 @@ document.addEventListener('click', async (e) => {
   if (action) {
     const a = action.dataset.action;
     if (a === 'back') back();
+    else if (a === 'toggle-genres') { const f = S.filters[S.route.name]; f.open = !f.open; render(true); }
     else if (a === 'bio-more') {
       const d = allDirectors().find(x => x.key === S.route.id);
       const pp = d?.id ? S.people[d.id] : null;
@@ -1517,7 +1532,10 @@ document.addEventListener('click', async (e) => {
   if (dot) { setHero(+dot.dataset.heroDot); startHeroTimer(); return; }
 
   const g = t.closest('[data-genre]');
-  if (g) { S.filters[S.route.name].genre = g.dataset.genre || null; render(); return; }
+  if (g) { S.filters[S.route.name].genre = g.dataset.genre || null; render(true); return; }
+
+  const sn = t.closest('[data-seen]');
+  if (sn) { S.filters[S.route.name].seen = sn.dataset.seen; render(true); return; }
 
   const sb = t.closest('[data-season]');
   if (sb) { S.season[sb.dataset.id] = +sb.dataset.season; render(true); return; }
