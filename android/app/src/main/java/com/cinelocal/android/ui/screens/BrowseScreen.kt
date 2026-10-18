@@ -8,21 +8,20 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.Sort
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.FilterList
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilterChipDefaults
-import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.ui.unit.Dp
+import com.cinelocal.android.ui.components.MenuButton
+import com.cinelocal.android.ui.components.ScanRefreshBox
+import com.cinelocal.android.ui.components.TextTabs
+import com.cinelocal.android.ui.theme.TNUM
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -85,70 +84,70 @@ fun BrowseScreen(kind: BrowseKind, nav: Nav) {
     val sorts = Sort.entries.filter { it != Sort.MINE || (kind == BrowseKind.MOVIES && lbById.isNotEmpty()) }
 
     Column(Modifier.fillMaxSize()) {
-        MainTopBar(nav, kind.title)
+        MainTopBar(nav, compactLogo = true)
+        ScreenTitle(kind.title, base.size)
         if (base.isEmpty()) {
             if (kind == BrowseKind.LIST) EmptyState("Mi lista está vacía", "Añade películas y series desde su ficha con el botón «Mi lista».")
             else EmptyState("Nada por aquí", "No hay ${kind.title.lowercase()} en la biblioteca.")
             return
         }
+        TextTabs(
+            Seen.entries.map { it.label }, seen.ordinal, { seen = Seen.entries[it] },
+            Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp)
+        )
         Row(
-            Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 4.dp),
+            Modifier.horizontalScroll(rememberScrollState()).padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 4.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            ChipMenu(sort.label, Icons.AutoMirrored.Filled.Sort, sorts.map { it.label }, sort.label) { i -> sort = sorts[i] }
-            for (s in Seen.entries) {
-                FilterChip(
-                    selected = seen == s, onClick = { seen = s }, label = { Text(s.label) },
-                    colors = FilterChipDefaults.filterChipColors(selectedContainerColor = CL.accent.copy(alpha = .35f))
-                )
-            }
+            MenuButton("Orden", sort.short, sorts.map { it.label }, sorts.indexOf(sort)) { i -> sort = sorts[i] }
             if (genres.isNotEmpty()) {
-                ChipMenu(genre ?: "Géneros", Icons.Default.FilterList, listOf("Todos los géneros") + genres, genre ?: "Todos los géneros") { i ->
+                MenuButton("Género", genre ?: "Todos", listOf("Todos los géneros") + genres, genre?.let { genres.indexOf(it) + 1 } ?: 0) { i ->
                     genre = if (i == 0) null else genres[i - 1]
                 }
             }
         }
-        TitleGrid(shown, progress, nav)
+        ScanRefreshBox { TitleGrid(shown, progress, nav) }
     }
 }
 
+/** Título de pantalla editorial: "Películas 128" */
 @Composable
-fun TitleGrid(list: List<Title>, progress: Map<String, Progress>, nav: Nav) {
+fun ScreenTitle(title: String, count: Int?) {
+    Row(Modifier.padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 4.dp), verticalAlignment = Alignment.Bottom) {
+        Text(title, style = MaterialTheme.typography.headlineLarge, color = CL.text)
+        if (count != null && count > 0) Text(
+            " $count", style = MaterialTheme.typography.headlineLarge.copy(fontFeatureSettings = TNUM), color = CL.text4
+        )
+    }
+}
+
+/** Etiqueta corta del orden para el botón */
+private val Sort.short get() = when (this) {
+    Sort.ADDED -> "Añadido"
+    Sort.TITLE -> "Título"
+    Sort.YEAR -> "Año"
+    Sort.RATING -> "Valoración"
+    Sort.MINE -> "Mi nota"
+}
+
+@Composable
+fun TitleGrid(list: List<Title>, progress: Map<String, Progress>, nav: Nav, top: Dp = 8.dp) {
     val lbById by LocalContext.current.repo.lbById.collectAsStateWithLifecycle()
     LazyVerticalGrid(
-        columns = GridCells.Adaptive(108.dp),
-        contentPadding = PaddingValues(16.dp),
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
+        columns = GridCells.Adaptive(104.dp),
+        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = top, bottom = 24.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
         modifier = Modifier.fillMaxSize()
     ) {
         items(list, key = { it.id }) { t ->
-            PosterCard(
-                t, isWatched(t, progress),
-                if (t.isMovie) fraction(progress[t.item.path]?.takeIf { !it.watched }) else 0f,
-                null, lbOf(t, lbById)
-            ) { nav.detail(t.id) }
-        }
-    }
-}
-
-/** Chip que abre un menú de opciones */
-@Composable
-fun ChipMenu(label: String, icon: androidx.compose.ui.graphics.vector.ImageVector, options: List<String>, selected: String, onSelect: (Int) -> Unit) {
-    var open by rememberSaveable { mutableStateOf(false) }
-    Box {
-        FilterChip(
-            selected = false, onClick = { open = true }, label = { Text(label) },
-            leadingIcon = { Icon(icon, null, Modifier.size(18.dp)) }
-        )
-        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
-            options.forEachIndexed { i, o ->
-                DropdownMenuItem(
-                    text = { Text(o) },
-                    trailingIcon = { if (o == selected) Icon(Icons.Default.Check, null) },
-                    onClick = { open = false; onSelect(i) }
-                )
+            Box(Modifier.animateItem(fadeInSpec = tween(180), placementSpec = spring(stiffness = Spring.StiffnessMediumLow), fadeOutSpec = tween(120))) {
+                PosterCard(
+                    t, isWatched(t, progress),
+                    if (t.isMovie) fraction(progress[t.item.path]?.takeIf { !it.watched }) else 0f,
+                    null, lbOf(t, lbById)
+                ) { nav.detail(t.id) }
             }
         }
     }

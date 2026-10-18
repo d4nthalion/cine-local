@@ -8,11 +8,28 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.sp
+import com.cinelocal.android.ui.allGenres
+import com.cinelocal.android.ui.components.BarIcon
+import com.cinelocal.android.ui.components.SearchField
+import com.cinelocal.android.ui.theme.CL
+import com.cinelocal.android.ui.theme.Display
+import com.cinelocal.android.ui.theme.TNUM
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -47,19 +64,51 @@ fun SearchScreen(nav: Nav) {
     val results = if (q.isEmpty()) emptyList() else titles.filter { matches(it, q) }
 
     Column(Modifier.fillMaxSize()) {
-        OutlinedTextField(
-            value = query,
-            onValueChange = { query = it },
-            placeholder = { Text("Títulos, géneros, reparto…") },
-            singleLine = true,
-            leadingIcon = { IconButton(onClick = { nav.back() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Volver") } },
-            trailingIcon = { if (query.isNotEmpty()) IconButton(onClick = { query = "" }) { Icon(Icons.Default.Close, "Borrar") } },
-            modifier = Modifier.fillMaxWidth().windowInsetsPadding(WindowInsets.statusBars).padding(12.dp).focusRequester(focus)
-        )
+        Row(
+            Modifier.fillMaxWidth().windowInsetsPadding(WindowInsets.statusBars).padding(start = 4.dp, end = 16.dp, top = 6.dp, bottom = 6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            BarIcon(Icons.AutoMirrored.Rounded.ArrowBack, "Volver") { nav.back() }
+            SearchField(query, { query = it }, Modifier.weight(1f).padding(start = 4.dp), textModifier = Modifier.focusRequester(focus))
+        }
         when {
-            q.isEmpty() -> {}
+            q.isEmpty() -> GenreList(allGenres(titles)) { query = it }
             results.isEmpty() -> EmptyState("Sin resultados", "No hay nada en tu biblioteca que coincida con «$query».")
-            else -> TitleGrid(results, progress, nav)
+            else -> {
+                Kicker(if (results.size == 1) "1 RESULTADO" else "${results.size} RESULTADOS")
+                TitleGrid(results, progress, nav, top = 4.dp)
+            }
+        }
+    }
+}
+
+@Composable
+private fun Kicker(text: String) = Text(
+    text, Modifier.padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 8.dp),
+    style = MaterialTheme.typography.labelSmall, color = CL.text3
+)
+
+/** Con la consulta vacía: explorar por género (matches ya busca por género) */
+@Composable
+private fun GenreList(genres: List<Pair<String, Int>>, onPick: (String) -> Unit) {
+    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 24.dp)) {
+        item { Kicker("EXPLORAR POR GÉNERO") }
+        items(genres, key = { it.first }) { (g, n) ->
+            val interaction = remember { MutableInteractionSource() }
+            val pressed by interaction.collectIsPressedAsState()
+            Row(
+                Modifier.fillMaxWidth().height(52.dp)
+                    .background(if (pressed) CL.bg3 else Color.Transparent)
+                    .clickable(interaction, indication = null) { onPick(g) }
+                    .padding(horizontal = 16.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    g, Modifier.weight(1f), color = if (pressed) CL.text else CL.text2, maxLines = 1,
+                    style = TextStyle(fontFamily = Display, fontWeight = FontWeight.SemiBold, fontSize = 26.sp, lineHeight = 30.sp)
+                )
+                Text("$n", style = MaterialTheme.typography.labelMedium.copy(fontFeatureSettings = TNUM), color = CL.text4)
+            }
         }
     }
 }

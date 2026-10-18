@@ -102,7 +102,10 @@ data class MetaEntry(
 data class Progress(val pos: Double = 0.0, val dur: Double = 0.0, val watched: Boolean = false, val at: Long = 0, val lb: Boolean = false)   // lb: marcada por Letterboxd
 
 @Serializable
-data class UserState(val favorites: List<String> = emptyList())
+data class UserState(
+    val favorites: List<String> = emptyList(),
+    val requested: Map<String, Long> = emptyMap()   // películas de la watchlist pedidas por ntfy: clave de Letterboxd → cuándo
+)
 
 @Serializable
 data class Settings(
@@ -117,9 +120,13 @@ data class Settings(
     val subMode: String = "foreign",     // always | foreign | off
     val autoplayNext: Boolean = true,
     val lbUser: String = "",             // usuario de Letterboxd
-    val lbMarkWatched: Boolean = true    // marcar como vistas las películas que ya has visto en Letterboxd
+    val lbMarkWatched: Boolean = true,   // marcar como vistas las películas que ya has visto en Letterboxd
+    val ntfyServer: String = "",         // vacío: https://ntfy.sh
+    val ntfyTopic: String = "",          // tema de ntfy al que llegan las peticiones de descarga
+    val ntfyToken: String = ""           // token de acceso, sólo si el tema está protegido
 ) {
     val configured get() = libraryPath.isNotBlank()
+    val ntfyReady get() = ntfyTopic.isNotBlank()
 }
 
 /** Un título con sus metadatos, listo para pintar */

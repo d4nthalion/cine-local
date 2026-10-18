@@ -79,6 +79,14 @@ fun fmtDate(iso: String): String {
     return if (p.size == 3 && p[1] in 1..12) "${p[2]} de ${MONTHS[p[1] - 1]} de ${p[0]}" else iso
 }
 
+private val MONTHS_SHORT = listOf("ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic")
+
+/** "2024-01-28" -> "28 ene 2024" */
+fun fmtDateShort(iso: String): String {
+    val p = iso.take(10).split('-').mapNotNull { it.toIntOrNull() }
+    return if (p.size == 3 && p[1] in 1..12) "${p[2]} ${MONTHS_SHORT[p[1] - 1]} ${p[0]}" else iso
+}
+
 fun allGenres(list: List<Title>): List<Pair<String, Int>> =
     list.flatMap { it.meta?.genres.orEmpty() }.groupingBy { it }.eachCount().toList().sortedByDescending { it.second }
 

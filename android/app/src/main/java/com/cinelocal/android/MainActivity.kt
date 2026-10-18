@@ -10,7 +10,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.TextButton
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
@@ -23,14 +22,6 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.List
-import androidx.compose.material.icons.filled.Home
-import androidx.compose.material.icons.filled.Movie
-import androidx.compose.material.icons.filled.Tv
-import androidx.compose.material3.Icon
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -41,7 +32,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.toArgb
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.NavHostController
@@ -50,6 +40,30 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.cinelocal.android.player.PlayerActivity
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.material.icons.filled.Bookmark
+import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Movie
+import androidx.compose.material.icons.filled.Tv
+import androidx.compose.material.icons.outlined.BookmarkBorder
+import androidx.compose.material.icons.outlined.Home
+import androidx.compose.material.icons.outlined.Movie
+import androidx.compose.material.icons.outlined.Tv
+import androidx.compose.material3.Snackbar
+import androidx.navigation.NavBackStackEntry
+import com.cinelocal.android.ui.components.BottomNav
+import com.cinelocal.android.ui.components.NavTab
+import com.cinelocal.android.ui.components.TextAction
+import com.cinelocal.android.ui.theme.Dur
+import com.cinelocal.android.ui.theme.EaseEmphasized
+import com.cinelocal.android.ui.theme.EaseExit
 import com.cinelocal.android.ui.screens.BrowseKind
 import com.cinelocal.android.ui.screens.BrowseScreen
 import com.cinelocal.android.ui.screens.DetailScreen
@@ -66,7 +80,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge(
             statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
-            navigationBarStyle = SystemBarStyle.dark(CL.bg2.toArgb())
+            navigationBarStyle = SystemBarStyle.dark(CL.bg.toArgb())
         )
         // Al abrir: mostrar lo conocido y volver a escanear la carpeta de red
         if (savedInstanceState == null) { repo.scan(); repo.autoSyncLetterboxd() }
@@ -96,14 +110,14 @@ class Nav(private val nav: NavHostController, private val ctx: android.content.C
         ctx.startActivity(PlayerActivity.intent(ctx, itemId, episodeId, fromStart))
 }
 
-private data class Tab(val route: String, val label: String, val icon: ImageVector)
-
 private val tabs = listOf(
-    Tab("home", "Inicio", Icons.Default.Home),
-    Tab("movies", "Películas", Icons.Default.Movie),
-    Tab("series", "Series", Icons.Default.Tv),
-    Tab("list", "Mi lista", Icons.AutoMirrored.Filled.List)
+    NavTab("home", "Inicio", Icons.Outlined.Home, Icons.Filled.Home),
+    NavTab("movies", "Películas", Icons.Outlined.Movie, Icons.Filled.Movie),
+    NavTab("series", "Series", Icons.Outlined.Tv, Icons.Filled.Tv),
+    NavTab("list", "Mi lista", Icons.Outlined.BookmarkBorder, Icons.Filled.Bookmark)
 )
+private val tabRoutes = tabs.map { it.route }.toSet()
+private fun isTab(e: NavBackStackEntry) = e.destination.route in tabRoutes
 
 @Composable
 private fun App() {
@@ -129,28 +143,39 @@ private fun App() {
 
     Scaffold(
         containerColor = CL.bg,
-        snackbarHost = { SnackbarHost(snackbar) },
-        bottomBar = {
-            if (tabs.any { it.route == route }) {
-                NavigationBar(containerColor = CL.bg2) {
-                    for (t in tabs) {
-                        NavigationBarItem(
-                            selected = route == t.route,
-                            onClick = { nav.tab(t.route) },
-                            icon = { Icon(t.icon, null) },
-                            label = { Text(t.label) },
-                            colors = NavigationBarItemDefaults.colors(
-                                selectedIconColor = CL.text, selectedTextColor = CL.text,
-                                unselectedIconColor = CL.text3, unselectedTextColor = CL.text3,
-                                indicatorColor = CL.accent.copy(alpha = .35f)
-                            )
-                        )
-                    }
-                }
+        snackbarHost = {
+            SnackbarHost(snackbar) { data ->
+                Snackbar(
+                    data, shape = RoundedCornerShape(4.dp), containerColor = CL.bg4, contentColor = CL.text,
+                    actionColor = CL.accent, dismissActionContentColor = CL.text2
+                )
             }
+        },
+        bottomBar = {
+            if (route in tabRoutes) BottomNav(tabs, route) { nav.tab(it.route) }
         }
     ) { pad ->
-        NavHost(navController, startDestination = "home", modifier = Modifier.padding(bottom = pad.calculateBottomPadding())) {
+        NavHost(
+            navController, startDestination = "home",
+            modifier = Modifier.padding(bottom = pad.calculateBottomPadding()),
+            // entre pestañas sólo fundido; hacia ficha, buscar, ajustes y watchlist, entrada lateral corta
+            enterTransition = {
+                if (isTab(initialState) && isTab(targetState)) fadeIn(tween(180, easing = LinearEasing))
+                else fadeIn(tween(Dur.base)) + slideInHorizontally(tween(Dur.slow, easing = EaseEmphasized)) { it / 10 }
+            },
+            exitTransition = {
+                if (isTab(initialState) && isTab(targetState)) fadeOut(tween(120))
+                else fadeOut(tween(Dur.fast)) + scaleOut(tween(Dur.base), targetScale = 0.97f)
+            },
+            popEnterTransition = {
+                if (isTab(initialState) && isTab(targetState)) fadeIn(tween(180, easing = LinearEasing))
+                else fadeIn(tween(Dur.base)) + scaleIn(tween(Dur.base), initialScale = .97f)
+            },
+            popExitTransition = {
+                if (isTab(initialState) && isTab(targetState)) fadeOut(tween(120))
+                else fadeOut(tween(Dur.fast)) + slideOutHorizontally(tween(Dur.base, easing = EaseExit)) { it / 10 }
+            }
+        ) {
             composable("home") { HomeScreen(nav) }
             composable("movies") { BrowseScreen(BrowseKind.MOVIES, nav) }
             composable("series") { BrowseScreen(BrowseKind.SERIES, nav) }
@@ -169,10 +194,10 @@ private fun CloudflareDialog(web: WebView, onCancel: () -> Unit) {
     // sólo se cancela con el botón: un toque fuera sin querer no debe cortar la sincronización
     Dialog(onDismissRequest = {}, properties = DialogProperties(usePlatformDefaultWidth = false, dismissOnClickOutside = false, dismissOnBackPress = false)) {
         Column(
-            Modifier.fillMaxWidth(0.94f).clip(RoundedCornerShape(14.dp)).background(CL.bg2).padding(16.dp),
+            Modifier.fillMaxWidth(0.94f).clip(RoundedCornerShape(8.dp)).background(CL.bg2).padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            Text("Comprobando la conexión con Letterboxd", style = MaterialTheme.typography.titleLarge, color = CL.text)
+            Text("Comprobando la conexión con Letterboxd", style = MaterialTheme.typography.headlineSmall, color = CL.text)
             Text("Letterboxd verifica que la conexión viene de un navegador. Suele pasar sola en unos segundos; si aparece una casilla, márcala.",
                 style = MaterialTheme.typography.bodyMedium, color = CL.text2)
             AndroidView(
@@ -180,7 +205,7 @@ private fun CloudflareDialog(web: WebView, onCancel: () -> Unit) {
                 onRelease = { (it.parent as? ViewGroup)?.removeView(it) },
                 modifier = Modifier.fillMaxWidth().height(560.dp).clip(RoundedCornerShape(8.dp))
             )
-            TextButton(onClick = onCancel, modifier = Modifier.align(Alignment.End)) { Text("Cancelar") }
+            TextAction("Cancelar", modifier = Modifier.align(Alignment.End), onClick = onCancel)
         }
     }
 }

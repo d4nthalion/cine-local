@@ -275,6 +275,33 @@ class Repository(private val context: Context) {
         st.copy(favorites = if (id in st.favorites) st.favorites - id else listOf(id) + st.favorites)
     }
 
+    // ---------------------------------------------------------------- peticiones de descarga (ntfy)
+
+    /** Avisa por ntfy de que quieres una película de la watchlist que no está en la biblioteca */
+    suspend fun requestDownload(e: LbEntry) = withContext(Dispatchers.IO) {
+        val s = settings.value
+        val f = e.film
+        val name = e.localTitle ?: f.title
+        val year = f.year?.let { " ($it)" }.orEmpty()
+        val tmdb = e.tmdbId?.let { "https://www.themoviedb.org/movie/$it" }
+        val links = listOfNotNull(f.url?.let { Ntfy.Link("Letterboxd", it) }, tmdb?.let { Ntfy.Link("TMDB", it) })
+        Ntfy(s.ntfyServer, s.ntfyTopic, s.ntfyToken).send(
+            title = "Descargar: $name$year",
+            message = listOfNotNull(
+                if (name != f.title) "${f.title}$year" else null,
+                "Pedida desde CineLocal: está en tu watchlist de Letterboxd y no en la biblioteca."
+            ).joinToString("\n"),
+            tags = listOf("movie_camera"),
+            click = f.url ?: tmdb,
+            links = links
+        )
+        userState.update { it.copy(requested = it.requested + (e.key to System.currentTimeMillis())) }
+    }
+
+    suspend fun testNtfy(s: Settings) = withContext(Dispatchers.IO) {
+        Ntfy(s.ntfyServer, s.ntfyTopic, s.ntfyToken).send("CineLocal", "Aviso de prueba: las peticiones de descarga llegarán aquí.", listOf("white_check_mark"))
+    }
+
     fun flushAll() {
         for (s in listOf(settings, library, metadata, progress, userState, letterboxd.store)) s.flush()
     }
