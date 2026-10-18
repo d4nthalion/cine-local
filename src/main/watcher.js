@@ -7,31 +7,37 @@ const { isVideo } = require('./scanner');
 class LibraryWatcher extends EventEmitter {
   constructor() {
     super();
-    this.watcher = null;
+    this.watchers = new Map();   // carpeta -> fs.FSWatcher
+    this.retries = new Map();    // carpeta -> temporizador de reintento
     this.timer = null;
-    this.retry = null;
-    this.root = null;
   }
 
-  start(root) {
+  /** Vigila todas las carpetas de la biblioteca */
+  start(roots) {
     this.stop();
-    this.root = root;
-    if (!root || !fs.existsSync(root)) {
-      // disco desconectado: reintentar cada 30 s
-      this.retry = setTimeout(() => this.start(root), 30000);
-      return;
-    }
+    for (const root of new Set((Array.isArray(roots) ? roots : [roots]).filter(Boolean))) this.watch(root);
+  }
+
+  watch(root) {
+    const retry = (change) => this.retries.set(root, setTimeout(() => {
+      this.retries.delete(root);
+      if (change) this.emit('change');
+      this.watch(root);
+    }, 30000));
+    if (!fs.existsSync(root)) return retry(false);   // disco desconectado: reintentar cada 30 s
     try {
-      this.watcher = fs.watch(root, { recursive: true }, (_ev, name) => {
+      const w = fs.watch(root, { recursive: true }, (_ev, name) => {
         // carpetas (sin extensión) o vídeos; ignorar .srt, .nfo, temporales, etc.
         if (!name || isVideo(name) || !path.extname(name)) this.schedule(3000);
       });
-      this.watcher.on('error', () => {
-        this.stop();
-        this.retry = setTimeout(() => { this.emit('change'); this.start(root); }, 30000);
+      w.on('error', () => {
+        try { w.close(); } catch {}
+        this.watchers.delete(root);
+        retry(true);
       });
+      this.watchers.set(root, w);
     } catch {
-      this.retry = setTimeout(() => this.start(root), 30000);
+      retry(false);
     }
   }
 
@@ -46,9 +52,10 @@ class LibraryWatcher extends EventEmitter {
 
   stop() {
     clearTimeout(this.timer);
-    clearTimeout(this.retry);
-    try { this.watcher?.close(); } catch {}
-    this.watcher = null;
+    for (const t of this.retries.values()) clearTimeout(t);
+    for (const w of this.watchers.values()) try { w.close(); } catch {}
+    this.retries.clear();
+    this.watchers.clear();
   }
 }
 

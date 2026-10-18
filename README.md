@@ -15,6 +15,11 @@ D:\Películas y Series\
 ```
 
 * **Archivo suelto = película. Carpeta = serie.**
+* **Varias carpetas:** en *Ajustes → Biblioteca → Añadir nueva ruta* puedes sumar todas las que quieras, por ejemplo una por disco.
+  * Todo aparece en una sola biblioteca. Una serie repartida entre carpetas (mismo título y año) se muestra como una sola.
+  * Lo que ya había en una carpeta recién añadida no se anuncia como novedad.
+  * Si un disco está desconectado, se conservan sus títulos y se avisa de que falta.
+  * La primera carpeta es la principal: ahí mueve eMule las descargas.
 * Episodios reconocidos: `S01E02`, `1x02`, `Cap.102`, `Episodio 2`, `02 - Título`… y subcarpetas `Temporada N` / `Season N` / `S01`.
 * Se limpian del título las etiquetas típicas (1080p, BluRay, x265, Castellano…) y se detecta el año.
 * Se ignoran `sample`, `extras`, `featurettes`, etc.

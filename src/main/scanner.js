@@ -210,4 +210,31 @@ function scanLibrary(root, options = {}) {
   return { ok: true, items, scannedAt: Date.now() };
 }
 
-module.exports = { scanLibrary, parseName, parseEpisode, isVideo, hashId };
+/**
+ * Escanea varias carpetas de biblioteca y junta el resultado.
+ * Una serie repartida entre carpetas (mismo título y año) se muestra como una sola, con el id de la primera.
+ * Devuelve también qué carpetas fallaron, para conservar lo que ya se conocía de ellas.
+ */
+function scanLibraries(roots, options = {}) {
+  const items = [], failed = [];
+  const shows = new Map();
+  for (const root of roots) {
+    const r = scanLibrary(root, options);
+    if (!r.ok) { failed.push({ root, error: r.error }); continue; }
+    for (const it of r.items) {
+      if (it.type !== 'series') { items.push(it); continue; }
+      const key = it.title.toLowerCase() + '|' + (it.year || '');
+      const prev = shows.get(key);
+      if (!prev) { shows.set(key, it); items.push(it); continue; }
+      prev.episodes = [...prev.episodes, ...it.episodes]
+        .sort((a, b) => a.season - b.season || a.episode - b.episode || naturalCompare(a.fileName, b.fileName));
+      prev.seasons = [...new Set(prev.episodes.map(e => e.season))].sort((a, b) => a - b);
+      prev.added = Math.max(prev.added, it.added);
+      (prev.extraPaths ||= []).push(it.path);
+    }
+  }
+  items.sort((a, b) => naturalCompare(a.title, b.title));
+  return { ok: failed.length < roots.length, items, failed, scannedAt: Date.now() };
+}
+
+module.exports = { scanLibrary, scanLibraries, parseName, parseEpisode, isVideo, hashId };

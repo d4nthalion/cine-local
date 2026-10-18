@@ -1,7 +1,7 @@
 const { app, BrowserWindow, ipcMain, dialog, shell, Menu, nativeTheme, net, Notification, clipboard } = require('electron');
 const path = require('path');
 const fs = require('fs');
-const { scanLibrary } = require('./scanner');
+const { scanLibraries } = require('./scanner');
 const { TMDB } = require('./metadata');
 const { Player, findMpv } = require('./player');
 const { WinEmbed } = require('./winembed');
@@ -18,7 +18,8 @@ const DATA = app.getPath('userData');
 const DEFAULT_LIBRARY = process.platform === 'win32' ? 'D:\\Películas y Series' : path.join(app.getPath('videos'));
 
 const DEFAULT_SETTINGS = {
-  libraryPath: DEFAULT_LIBRARY,
+  libraryPath: DEFAULT_LIBRARY,   // carpeta principal (ahí mueve eMule las descargas)
+  extraLibraryPaths: [],          // más carpetas de películas y series
   tmdbKey: '',
   metaLang: 'es-ES',
   audioLang: 'spa',
@@ -177,9 +178,22 @@ function view() {
 const watcher = new LibraryWatcher();
 watcher.on('change', () => scan());
 
+/** Todas las carpetas de la biblioteca: la principal y las añadidas */
+function libraryRoots(s = settings.data) {
+  const seen = new Set();
+  return [s.libraryPath, ...(s.extraLibraryPaths || [])]
+    .map(p => (p || '').trim()).filter(Boolean)
+    .filter(p => { const k = path.resolve(p).toLowerCase(); return !seen.has(k) && seen.add(k); });
+}
+const isUnder = (p, root) => { const rel = path.relative(root, p); return !!rel && !rel.startsWith('..') && !path.isAbsolute(rel); };
+const rootOf = p => libraryRoots().find(r => isUnder(p, r)) || settings.data.libraryPath;
+
+// carpetas recién añadidas: lo que se encuentre en ellas al escanearlas por primera vez no se anuncia como novedad
+const silentRoots = new Set();
+
 function restartWatcher() {
   watcher.stop();
-  if (settings.data.autoWatch !== false) watcher.start(settings.data.libraryPath);
+  if (settings.data.autoWatch !== false) watcher.start(libraryRoots());
 }
 
 let scanning = null;
@@ -204,7 +218,17 @@ async function doScan() {
   }
   const prevIds = new Set(prevItems.map(i => i.id));
 
-  const r = scanLibrary(settings.data.libraryPath, { singleFileFolderAsMovie: settings.data.singleFileFolderAsMovie });
+  const roots = libraryRoots();
+  const r = roots.length
+    ? scanLibraries(roots, { singleFileFolderAsMovie: settings.data.singleFileFolderAsMovie })
+    : { ok: false, items: [], failed: [{ root: '', error: 'No hay ninguna carpeta de biblioteca configurada' }] };
+  // Carpeta que no está (disco desconectado): se conserva lo que ya se conocía de ella
+  if (r.ok && r.failed.length) {
+    const ids = new Set(r.items.map(i => i.id));
+    for (const it of prevItems) if (!ids.has(it.id) && r.failed.some(f => isUnder(it.path, f.root))) r.items.push(it);
+    r.items.sort((a, b) => a.title.localeCompare(b.title, 'es', { numeric: true }));
+  }
+  r.error = r.failed.map(f => f.error).join(' · ') || null;
 
   // Los archivos nuevos que aún se están copiando/descargando se dejan para más tarde
   let pending = false;
@@ -224,6 +248,7 @@ async function doScan() {
   const added = [];
   if (hadLibrary && r.ok) {
     for (const it of items) {
+      if ([...silentRoots].some(root => isUnder(it.path, root))) continue;
       if (it.type === 'movie') { if (!known.has(it.path)) added.push({ it, eps: null, newShow: false }); }
       else {
         const eps = it.episodes.filter(e => !known.has(e.path));
@@ -236,8 +261,9 @@ async function doScan() {
   if (!r.ok && hadLibrary) {
     library.data = { ...library.data, error: r.error };
   } else {
-    library.data = { items, scannedAt: Date.now(), error: r.ok ? null : r.error };
+    library.data = { items, scannedAt: Date.now(), error: r.error };
   }
+  for (const root of silentRoots) if (!r.failed.some(f => f.root === root)) silentRoots.delete(root);
   send('library:updated', view());
   if (added.length) announceNew(added);
   fetchMissingMetadata();
@@ -382,7 +408,7 @@ function buildPlaylist(item, episodeId, fromStart) {
   };
   if (item.type === 'movie') {
     const t = item.meta?.title || item.title;
-    return [{ path: item.path, title: t, start: startOf(item.path), subs: findExternalSubs(settings.data.libraryPath, item) }];
+    return [{ path: item.path, title: t, start: startOf(item.path), subs: findExternalSubs(rootOf(item.path), item) }];
   }
   const eps = item.episodes;
   let idx = Math.max(0, eps.findIndex(e => e.id === episodeId));
@@ -553,9 +579,12 @@ ipcMain.handle('settings:set', async (_e, patch) => {
   const before = { ...settings.data };
   settings.data = { ...settings.data, ...patch };
   const s = settings.data;
-  if (before.libraryPath !== s.libraryPath || before.autoWatch !== s.autoWatch) restartWatcher();
-  if (before.libraryPath !== s.libraryPath) library.data = { items: [], scannedAt: 0, error: null };  // otra biblioteca: no anunciar todo como nuevo
-  if (before.libraryPath !== s.libraryPath || before.singleFileFolderAsMovie !== s.singleFileFolderAsMovie) await scan();
+  const oldRoots = libraryRoots(before), newRoots = libraryRoots(s);
+  const rootsChanged = oldRoots.join('|') !== newRoots.join('|');
+  // carpeta nueva: lo que ya tenga no es una novedad
+  for (const r of newRoots) if (!oldRoots.includes(r)) silentRoots.add(r);
+  if (rootsChanged || before.autoWatch !== s.autoWatch) restartWatcher();
+  if (rootsChanged || before.singleFileFolderAsMovie !== s.singleFileFolderAsMovie) await scan();
   else if (before.tmdbKey !== s.tmdbKey || before.metaLang !== s.metaLang) fetchMissingMetadata();
   if (['emuleEnabled', 'emulePort', 'emulePassword'].some(k => before[k] !== s[k])) emuleService.restart();
   if (before.lbUser !== s.lbUser) {

@@ -592,7 +592,7 @@ function setHero(i) {
 function banners() {
   let out = '';
   if (S.lib.error) {
-    out += `<div class="banner"><div class="txt"><b>No se puede leer la biblioteca.</b> ${esc(S.lib.error)}. Comprueba que el disco esté conectado o cambia la carpeta en Ajustes.</div>
+    out += `<div class="banner"><div class="txt"><b>${S.lib.items.length ? 'Falta una carpeta de la biblioteca.' : 'No se puede leer la biblioteca.'}</b> ${esc(S.lib.error)}. Comprueba que el disco esté conectado o cambia la carpeta en Ajustes.</div>
       <button class="btn btn-ghost btn-sm" data-nav="settings">Ajustes</button></div>`;
   }
   if (!S.lib.hasKey) {
@@ -610,7 +610,7 @@ function viewEmpty() {
   return `<div class="page">${banners()}<div class="empty">
     <div class="big-ico">${I.film}</div>
     <h2>Tu biblioteca está vacía</h2>
-    <p>CineLocal busca en <b>${esc(S.settings.libraryPath)}</b>.<br>Los archivos de vídeo sueltos se muestran como películas y cada carpeta como una serie.</p>
+    <p>CineLocal busca en ${libPaths().filter(Boolean).map(p => `<b>${esc(p)}</b>`).join(', ') || 'ninguna carpeta'}.<br>Los archivos de vídeo sueltos se muestran como películas y cada carpeta como una serie.</p>
     <div class="actions" style="justify-content:center">
       <button class="btn btn-primary" data-action="scan">Escanear ahora</button>
       <button class="btn btn-ghost" data-nav="settings">Cambiar carpeta</button>
@@ -818,9 +818,16 @@ function viewSettings() {
     <h1 class="page-title">Ajustes</h1>
 
     <div class="set-group"><h3>Biblioteca</h3>
-      <div class="set-row"><div class="lbl"><div class="t">Carpeta de películas y series</div>
-        <div class="d">Archivos de vídeo sueltos = películas · cada carpeta = una serie (admite subcarpetas por temporada).</div></div>
-        <div class="ctl"><input class="input" data-set-text="libraryPath" value="${esc(s.libraryPath)}"><button class="btn btn-ghost btn-sm" data-action="pick-folder">Examinar</button></div></div>
+      <div class="set-row lib-paths"><div class="lbl"><div class="t">Carpetas de películas y series</div>
+        <div class="d">Archivos de vídeo sueltos = películas · cada carpeta = una serie (admite subcarpetas por temporada). Una serie repartida en varias carpetas se junta en una sola.${libPaths().length > 1 ? ' Las descargas de eMule se mueven a la primera.' : ''}</div></div>
+        <div class="ctl">
+          ${libPaths().map((p, i, all) => `<div class="lib-path">
+            <input class="input" data-lib-path="${i}" value="${esc(p)}" placeholder="Ruta de la carpeta">
+            <button class="btn btn-ghost btn-sm" data-action="pick-folder" data-idx="${i}">Examinar</button>
+            ${all.length > 1 ? `<button class="icon-btn sm" data-action="remove-lib-path" data-idx="${i}" title="Quitar esta carpeta">${I.close}</button>` : ''}
+          </div>`).join('')}
+          <button class="btn btn-ghost btn-sm add-path" data-action="add-lib-path">${I.plus}Añadir nueva ruta</button>
+        </div></div>
       <div class="set-row"><div class="lbl"><div class="t">Escanear de nuevo</div><div class="d">${S.lib.items.length} títulos · último escaneo ${S.lib.scannedAt ? new Date(S.lib.scannedAt).toLocaleString('es-ES') : 'nunca'}</div></div>
         <div class="ctl"><button class="btn btn-ghost btn-sm" data-action="scan">Escanear ahora</button></div></div>
       <div class="set-row"><div class="lbl"><div class="t">Detectar archivos nuevos automáticamente</div><div class="d">Vigila la carpeta y añade lo nuevo en cuanto termine de copiarse, con aviso en la app y en Windows.</div></div>
@@ -1336,6 +1343,18 @@ async function identify(id) {
   search();
 }
 
+/** Carpetas de la biblioteca: la principal (libraryPath) y las añadidas (extraLibraryPaths) */
+function libPaths() {
+  return [S.settings.libraryPath || '', ...(S.settings.extraLibraryPaths || [])];
+}
+
+async function saveLibPaths(list) {
+  list = list.map(p => (p || '').trim()).filter(Boolean);
+  S.settings = await window.api.setSettings({ libraryPath: list[0] || '', extraLibraryPaths: list.slice(1) });
+  S.lib = await window.api.getLibrary();
+  render(true);
+}
+
 async function saveSetting(key, value) {
   S.settings = await window.api.setSettings({ [key]: value });
   if (key === 'region') S.providerList = null;   // recargar la lista del nuevo país (los ids de TMDB son los mismos en todos)
@@ -1468,7 +1487,15 @@ document.addEventListener('click', async (e) => {
     } else if (a === 'fullscreen') window.api.toggleFullscreen();
     else if (a === 'pick-folder') {
       const p = await window.api.pickFolder();
-      if (p) { await saveSetting('libraryPath', p); S.lib = await window.api.getLibrary(); render(true); }
+      if (p) { const list = libPaths(); list[+action.dataset.idx || 0] = p; await saveLibPaths(list); }
+    } else if (a === 'add-lib-path') {
+      const p = await window.api.pickFolder();
+      if (p) {
+        if (libPaths().some(x => x.toLowerCase() === p.toLowerCase())) toast('Esa carpeta ya está en la biblioteca');
+        else { await saveLibPaths([...libPaths(), p]); toast('Carpeta añadida: escaneando…', 'ok'); }
+      }
+    } else if (a === 'remove-lib-path') {
+      const list = libPaths(); list.splice(+action.dataset.idx, 1); await saveLibPaths(list);
     } else if (a === 'pick-mpv') {
       const p = await window.api.pickMpv();
       if (p) { await saveSetting('mpvPath', p); S.lib = await window.api.getLibrary(); closeModal(); render(true); toast(S.lib.mpv ? 'mpv configurado' : 'Ese archivo no parece mpv', S.lib.mpv ? 'ok' : 'error'); }
@@ -1552,6 +1579,9 @@ document.addEventListener('change', (e) => {
       if (t.dataset.set === 'startFullscreen') window.api.setFullscreen(v);
       if (t.dataset.set === 'singleFileFolderAsMovie') window.api.getLibrary().then(l => { S.lib = l; });
     });
+  } else if (t.dataset.libPath) {
+    const list = [...document.querySelectorAll('[data-lib-path]')].map(x => x.value.trim());
+    saveLibPaths(list);
   } else if (t.dataset.setText) {
     const key = t.dataset.setText;
     const v = t.value.trim();
