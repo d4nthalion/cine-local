@@ -73,6 +73,12 @@ class Tmdb(key: String, private val language: String = "es-ES", region: String? 
         }
     }
 
+    /** Título y póster de una película por su id (null si TMDB no la tiene) */
+    fun movieBasic(id: Int): SearchResult? = try {
+        val x = get("/movie/$id", mapOf("language" to language))
+        SearchResult(id, x.str("title") ?: "", x.str("original_title"), x.str("release_date")?.take(4)?.toIntOrNull(), img(x.str("poster_path"), "w342"), null)
+    } catch (_: IOException) { null }
+
     /**
      * Mejor coincidencia para un nombre de archivo/carpeta. Entiende "Director - Título"
      * comprobando el director contra TMDB con tolerancia a erratas. Devuelve el id de TMDB o null.

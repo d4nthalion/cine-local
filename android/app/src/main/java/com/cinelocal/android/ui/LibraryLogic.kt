@@ -2,6 +2,7 @@ package com.cinelocal.android.ui
 
 import com.cinelocal.android.core.Episode
 import com.cinelocal.android.core.EpisodeMeta
+import com.cinelocal.android.core.LbEntry
 import com.cinelocal.android.core.NameParser
 import com.cinelocal.android.core.Progress
 import com.cinelocal.android.core.Title
@@ -45,13 +46,37 @@ fun continueList(titles: List<Title>, progress: Map<String, Progress>): List<Con
     return out.sortedByDescending { it.at }
 }
 
-enum class Sort(val label: String) { ADDED("Añadido recientemente"), TITLE("Título"), YEAR("Año"), RATING("Valoración") }
+enum class Sort(val label: String) { ADDED("Añadido recientemente"), TITLE("Título"), YEAR("Año"), RATING("Valoración"), MINE("Mi nota (Letterboxd)") }
 
-fun sortTitles(list: List<Title>, sort: Sort): List<Title> = when (sort) {
+fun sortTitles(list: List<Title>, sort: Sort, lb: Map<Int, LbEntry> = emptyMap()): List<Title> = when (sort) {
     Sort.TITLE -> list.sortedWith(compareBy(NameParser.naturalOrder) { it.name })
     Sort.YEAR -> list.sortedByDescending { it.year ?: 0 }
     Sort.RATING -> list.sortedByDescending { it.meta?.rating ?: 0.0 }
     Sort.ADDED -> list.sortedByDescending { it.item.added }
+    // tu nota primero; sin nota, las que te gustaron; después el resto por valoración de TMDB
+    Sort.MINE -> list.sortedWith(
+        compareByDescending<Title> { lbOf(it, lb)?.film?.rating ?: 0.0 }
+            .thenByDescending { lbOf(it, lb)?.film?.liked == true }
+            .thenByDescending { it.meta?.rating ?: 0.0 }
+    )
+}
+
+/** Datos de Letterboxd de una película de la biblioteca */
+fun lbOf(t: Title, lb: Map<Int, LbEntry>): LbEntry? = if (t.isMovie) t.meta?.tmdbId?.let { lb[it] } else null
+
+/** Watchlist de Letterboxd en su orden, con la película de la biblioteca si ya la tienes */
+fun watchlistEntries(entries: List<LbEntry>, titles: List<Title>): List<Pair<LbEntry, Title?>> {
+    val owned = titles.filter { it.isMovie && it.meta?.tmdbId != null }.associateBy { it.meta!!.tmdbId }
+    return entries.filter { it.film.watchlist }.sortedBy { it.film.wlOrder ?: Int.MAX_VALUE }
+        .map { it to it.tmdbId?.let { id -> owned[id] } }
+}
+
+private val MONTHS = listOf("enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre")
+
+/** "2024-01-28" -> "28 de enero de 2024" */
+fun fmtDate(iso: String): String {
+    val p = iso.take(10).split('-').mapNotNull { it.toIntOrNull() }
+    return if (p.size == 3 && p[1] in 1..12) "${p[2]} de ${MONTHS[p[1] - 1]} de ${p[0]}" else iso
 }
 
 fun allGenres(list: List<Title>): List<Pair<String, Int>> =

@@ -40,6 +40,8 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.SubcomposeAsyncImage
+import com.cinelocal.android.core.LbEntry
+import com.cinelocal.android.core.Letterboxd
 import com.cinelocal.android.core.Title
 import com.cinelocal.android.ui.theme.CL
 
@@ -93,7 +95,7 @@ fun ProgressBar(fraction: Float, modifier: Modifier = Modifier) {
 
 /** Tarjeta vertical (póster) */
 @Composable
-fun PosterCard(t: Title, watched: Boolean, progress: Float, width: Dp?, onClick: () -> Unit) {
+fun PosterCard(t: Title, watched: Boolean, progress: Float, width: Dp?, lb: LbEntry? = null, onClick: () -> Unit) {
     val w = if (width != null) Modifier.width(width) else Modifier.fillMaxWidth()
     Box(w.aspectRatio(2f / 3f).clip(cardShape).clickable(onClick = onClick)) {
         Artwork(t.meta?.poster, t.name, listOfNotNull(t.year?.toString(), if (t.isMovie) "Película" else "Serie").joinToString(" · "), Modifier.fillMaxSize())
@@ -103,7 +105,39 @@ fun PosterCard(t: Title, watched: Boolean, progress: Float, width: Dp?, onClick:
                 contentAlignment = Alignment.Center
             ) { Icon(Icons.Default.Check, "Vista", Modifier.size(15.dp), tint = Color.White) }
         }
+        LbBadge(lb, Modifier.align(Alignment.BottomStart).padding(start = 6.dp, bottom = if (progress > 0f) 9.dp else 6.dp))
         if (progress > 0f) ProgressBar(progress, Modifier.align(Alignment.BottomStart).fillMaxWidth())
+    }
+}
+
+/** Tu nota de Letterboxd en estrellas verdes y el ♥ si te gustó */
+@Composable
+fun LbBadge(lb: LbEntry?, modifier: Modifier = Modifier) {
+    val f = lb?.film ?: return
+    if (f.rating == null && !f.liked) return
+    Row(
+        modifier.clip(RoundedCornerShape(4.dp)).background(Color(0xCC000000)).padding(horizontal = 5.dp, vertical = 1.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        if (f.rating != null) Text(Letterboxd.stars(f.rating), color = CL.lbGreen, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+        if (f.liked) Text((if (f.rating != null) " " else "") + "♥", color = CL.lbOrange, fontSize = 11.sp)
+    }
+}
+
+/** Película de la watchlist que no está en la biblioteca: abre su ficha en Letterboxd */
+@Composable
+fun MissingCard(e: LbEntry, width: Dp?, onClick: () -> Unit) {
+    val w = if (width != null) Modifier.width(width) else Modifier.fillMaxWidth()
+    val title = e.localTitle ?: e.film.title
+    Box(w.aspectRatio(2f / 3f).clip(cardShape).clickable(onClick = onClick)) {
+        Artwork(e.poster, title, e.film.year?.toString(), Modifier.fillMaxSize())
+        Box(Modifier.fillMaxSize().background(Color(0x59000000)))
+        Text(
+            "No la tienes", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold,
+            modifier = Modifier.align(Alignment.TopStart).padding(6.dp).clip(RoundedCornerShape(4.dp))
+                .background(Color(0xCC000000)).padding(horizontal = 5.dp, vertical = 2.dp)
+        )
+        LbBadge(e, Modifier.align(Alignment.BottomStart).padding(6.dp))
     }
 }
 

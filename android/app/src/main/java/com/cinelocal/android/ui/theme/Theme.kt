@@ -23,6 +23,10 @@ object CL {
     val accent2 = Color(0xFFEC4899)
     val ok = Color(0xFF22C55E)
     val star = Color(0xFFFACC15)
+    // Letterboxd
+    val lbGreen = Color(0xFF00E054)
+    val lbOrange = Color(0xFFFF8000)
+    val lbBlue = Color(0xFF40BCF4)
     val grad = Brush.linearGradient(listOf(Color(0xFF8B5CF6), Color(0xFFEC4899)))
 }
 

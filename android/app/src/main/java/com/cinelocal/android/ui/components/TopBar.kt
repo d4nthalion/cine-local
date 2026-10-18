@@ -111,9 +111,10 @@ fun GradientButton(text: String, modifier: Modifier = Modifier, icon: (@Composab
 }
 
 @Composable
-fun SecondaryButton(text: String, modifier: Modifier = Modifier, icon: (@Composable () -> Unit)? = null, onClick: () -> Unit) {
+fun SecondaryButton(text: String, modifier: Modifier = Modifier, icon: (@Composable () -> Unit)? = null, enabled: Boolean = true, onClick: () -> Unit) {
     Button(
         onClick = onClick,
+        enabled = enabled,
         modifier = modifier,
         shape = MaterialTheme.shapes.small,
         colors = ButtonDefaults.buttonColors(containerColor = Color(0x26FFFFFF), contentColor = Color.White)

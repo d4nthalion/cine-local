@@ -41,6 +41,7 @@ import com.cinelocal.android.ui.Sort
 import com.cinelocal.android.ui.allGenres
 import com.cinelocal.android.ui.fraction
 import com.cinelocal.android.ui.isWatched
+import com.cinelocal.android.ui.lbOf
 import com.cinelocal.android.ui.sortTitles
 import com.cinelocal.android.ui.components.EmptyState
 import com.cinelocal.android.ui.components.MainTopBar
@@ -57,6 +58,7 @@ fun BrowseScreen(kind: BrowseKind, nav: Nav) {
     val titles by repo.titles.collectAsStateWithLifecycle()
     val progress by repo.progress.flow.collectAsStateWithLifecycle()
     val user by repo.userState.flow.collectAsStateWithLifecycle()
+    val lbById by repo.lbById.collectAsStateWithLifecycle()
 
     // En Mi lista, "Añadido recientemente" respeta el orden en que se añadieron a la lista
     var sort by rememberSaveable { mutableStateOf(Sort.ADDED) }
@@ -78,7 +80,9 @@ fun BrowseScreen(kind: BrowseKind, nav: Nav) {
                 Seen.UNSEEN -> !isWatched(it, progress)
             }
         }
-        .let { if (kind == BrowseKind.LIST && sort == Sort.ADDED) it else sortTitles(it, sort) }
+        .let { if (kind == BrowseKind.LIST && sort == Sort.ADDED) it else sortTitles(it, sort, lbById) }
+    // "Mi nota" sólo en Películas y con datos de Letterboxd
+    val sorts = Sort.entries.filter { it != Sort.MINE || (kind == BrowseKind.MOVIES && lbById.isNotEmpty()) }
 
     Column(Modifier.fillMaxSize()) {
         MainTopBar(nav, kind.title)
@@ -92,7 +96,7 @@ fun BrowseScreen(kind: BrowseKind, nav: Nav) {
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            ChipMenu(sort.label, Icons.AutoMirrored.Filled.Sort, Sort.entries.map { it.label }, sort.label) { i -> sort = Sort.entries[i] }
+            ChipMenu(sort.label, Icons.AutoMirrored.Filled.Sort, sorts.map { it.label }, sort.label) { i -> sort = sorts[i] }
             for (s in Seen.entries) {
                 FilterChip(
                     selected = seen == s, onClick = { seen = s }, label = { Text(s.label) },
@@ -111,6 +115,7 @@ fun BrowseScreen(kind: BrowseKind, nav: Nav) {
 
 @Composable
 fun TitleGrid(list: List<Title>, progress: Map<String, Progress>, nav: Nav) {
+    val lbById by LocalContext.current.repo.lbById.collectAsStateWithLifecycle()
     LazyVerticalGrid(
         columns = GridCells.Adaptive(108.dp),
         contentPadding = PaddingValues(16.dp),
@@ -122,7 +127,7 @@ fun TitleGrid(list: List<Title>, progress: Map<String, Progress>, nav: Nav) {
             PosterCard(
                 t, isWatched(t, progress),
                 if (t.isMovie) fraction(progress[t.item.path]?.takeIf { !it.watched }) else 0f,
-                null
+                null, lbOf(t, lbById)
             ) { nav.detail(t.id) }
         }
     }

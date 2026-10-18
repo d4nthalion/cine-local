@@ -99,7 +99,7 @@ data class MetaEntry(
 
 /** Progreso por archivo, en segundos (mismo formato que progress.json del escritorio) */
 @Serializable
-data class Progress(val pos: Double = 0.0, val dur: Double = 0.0, val watched: Boolean = false, val at: Long = 0)
+data class Progress(val pos: Double = 0.0, val dur: Double = 0.0, val watched: Boolean = false, val at: Long = 0, val lb: Boolean = false)   // lb: marcada por Letterboxd
 
 @Serializable
 data class UserState(val favorites: List<String> = emptyList())
@@ -115,7 +115,9 @@ data class Settings(
     val audioLang: String = "spa",
     val subLang: String = "spa",
     val subMode: String = "foreign",     // always | foreign | off
-    val autoplayNext: Boolean = true
+    val autoplayNext: Boolean = true,
+    val lbUser: String = "",             // usuario de Letterboxd
+    val lbMarkWatched: Boolean = true    // marcar como vistas las películas que ya has visto en Letterboxd
 ) {
     val configured get() = libraryPath.isNotBlank()
 }

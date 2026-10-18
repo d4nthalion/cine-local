@@ -2,6 +2,8 @@ package com.cinelocal.android.data
 
 import android.content.Context
 import android.net.Uri
+import com.cinelocal.android.core.LbEntry
+import com.cinelocal.android.core.Letterboxd
 import com.cinelocal.android.core.LibraryData
 import com.cinelocal.android.core.LibraryItem
 import com.cinelocal.android.core.LibraryScanner
@@ -14,11 +16,13 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -36,7 +40,7 @@ data class Status(
 )
 
 /** Estado de la app: biblioteca, metadatos, progreso y ajustes (equivalente a main.js en escritorio) */
-class Repository(context: Context) {
+class Repository(private val context: Context) {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val dir: File = context.filesDir
@@ -59,6 +63,62 @@ class Repository(context: Context) {
 
     fun title(id: String): Title? = titles.value.firstOrNull { it.id == id }
 
+    // ---------------------------------------------------------------- Letterboxd
+
+    val letterboxd = LetterboxdService(
+        context, dir, scope,
+        tmdb = { settings.value.let { Tmdb(it.tmdbKey, it.metaLang, it.region) } },
+        libraryIndex = ::libraryIndex,
+        onUpdated = ::markLetterboxdWatched
+    )
+
+    /** Películas de Letterboxd con su id de TMDB */
+    val lbEntries: StateFlow<List<LbEntry>> = letterboxd.store.flow
+        .map { letterboxd.entries(it) }
+        .stateIn(scope, SharingStarted.Eagerly, emptyList())
+
+    /** Por id de TMDB, para cruzarlas con la biblioteca */
+    val lbById: StateFlow<Map<Int, LbEntry>> = lbEntries
+        .map { list -> list.filter { it.tmdbId != null }.associateBy { it.tmdbId!! } }
+        .stateIn(scope, SharingStarted.Eagerly, emptyMap())
+
+    /** Título y año de cada película de la biblioteca -> su id de TMDB */
+    private fun libraryIndex(): Map<String, Int> {
+        val out = HashMap<String, Int>()
+        for (t in titles.value) {
+            val id = t.meta?.tmdbId ?: continue
+            if (!t.isMovie) continue
+            val year = t.meta.year ?: t.item.year
+            for (name in listOf(t.meta.title, t.meta.originalTitle, t.item.title)) if (!name.isNullOrBlank()) out[Letterboxd.keyOf(name, year)] = id
+        }
+        return out
+    }
+
+    /** Marca como vistas las películas de la biblioteca vistas en Letterboxd, si no tienen progreso en CineLocal */
+    fun markLetterboxdWatched() {
+        if (!settings.value.lbMarkWatched) return
+        // de lo guardado, no de lbEntries: justo después de sincronizar aún puede tener la lista anterior
+        val seen = letterboxd.entries().filter { it.film.watched }.mapNotNull { it.tmdbId }.toSet()
+        val now = System.currentTimeMillis()
+        val add = titles.value.filter { it.isMovie && it.meta?.tmdbId in seen && progress.value[it.item.path] == null }
+            .associate { it.item.path to Progress(watched = true, at = now, lb = true) }
+        if (add.isNotEmpty()) progress.update { it + add }
+    }
+
+    fun lbSync(full: Boolean = true) = letterboxd.sync(settings.value.lbUser, full)
+
+    fun lbImport(bytes: ByteArray) = letterboxd.importExport(bytes, settings.value.lbUser)
+
+    /** Al abrir: sincronización completa si cambió el usuario o hace más de 3 días; si no, sólo lo último (RSS) */
+    fun autoSyncLetterboxd() = scope.launch {
+        delay(15_000)   // después del escaneo y los metadatos, como en escritorio
+        val user = settings.value.lbUser
+        if (user.isBlank()) return@launch
+        val d = letterboxd.store.value
+        val full = d.user != Letterboxd.cleanUser(user) || System.currentTimeMillis() - d.fullAt > 3L * 24 * 3600 * 1000
+        letterboxd.sync(user, full)
+    }
+
     fun clearMessage() = _status.update { it.copy(message = null) }
 
     // ---------------------------------------------------------------- ajustes
@@ -70,6 +130,11 @@ class Repository(context: Context) {
         if (old.libraryPath != new.libraryPath) library.set(LibraryData())
         if (libraryChanged) scan()
         else if (old.tmdbKey != new.tmdbKey || old.metaLang != new.metaLang) fetchMissingMetadata()
+        if (Letterboxd.cleanUser(old.lbUser) != Letterboxd.cleanUser(new.lbUser)) {
+            if (letterboxd.store.value.user.isNotEmpty()) letterboxd.reset()
+            if (new.lbUser.isNotBlank()) letterboxd.sync(new.lbUser, full = true)
+        }
+        if (!old.lbMarkWatched && new.lbMarkWatched) markLetterboxdWatched()
     }
 
     private fun location(s: Settings = settings.value): SmbLocation =
@@ -146,6 +211,7 @@ class Repository(context: Context) {
                 _status.update { st -> st.copy(metaDone = i + 1) }
             }
             _status.update { it.copy(metaDone = 0, metaTotal = 0) }
+            markLetterboxdWatched()   // películas recién identificadas que ya viste en Letterboxd
         }
     }
 
@@ -210,6 +276,6 @@ class Repository(context: Context) {
     }
 
     fun flushAll() {
-        for (s in listOf(settings, library, metadata, progress, userState)) s.flush()
+        for (s in listOf(settings, library, metadata, progress, userState, letterboxd.store)) s.flush()
     }
 }

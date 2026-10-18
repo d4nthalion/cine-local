@@ -40,6 +40,7 @@ import com.cinelocal.android.ui.screens.DetailScreen
 import com.cinelocal.android.ui.screens.HomeScreen
 import com.cinelocal.android.ui.screens.SearchScreen
 import com.cinelocal.android.ui.screens.SettingsScreen
+import com.cinelocal.android.ui.screens.WatchlistScreen
 import com.cinelocal.android.ui.theme.CL
 import com.cinelocal.android.ui.theme.CineLocalTheme
 
@@ -52,7 +53,7 @@ class MainActivity : ComponentActivity() {
             navigationBarStyle = SystemBarStyle.dark(CL.bg2.toArgb())
         )
         // Al abrir: mostrar lo conocido y volver a escanear la carpeta de red
-        if (savedInstanceState == null) repo.scan()
+        if (savedInstanceState == null) { repo.scan(); repo.autoSyncLetterboxd() }
         setContent { CineLocalTheme { App() } }
     }
 
@@ -67,6 +68,8 @@ class Nav(private val nav: NavHostController, private val ctx: android.content.C
     fun detail(id: String) = nav.navigate("detail/$id")
     fun search() = nav.navigate("search")
     fun settings() = nav.navigate("settings")
+    fun watchlist() = nav.navigate("watchlist")
+    fun open(url: String) = ctx.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url)))
     fun tab(route: String) = nav.navigate(route) {
         popUpTo(nav.graph.findStartDestination().id) { saveState = true }
         launchSingleTop = true
@@ -134,6 +137,7 @@ private fun App() {
             composable("list") { BrowseScreen(BrowseKind.LIST, nav) }
             composable("search") { SearchScreen(nav) }
             composable("settings") { SettingsScreen(nav) }
+            composable("watchlist") { WatchlistScreen(nav) }
             composable("detail/{id}") { entry -> DetailScreen(entry.arguments?.getString("id").orEmpty(), nav) }
         }
     }

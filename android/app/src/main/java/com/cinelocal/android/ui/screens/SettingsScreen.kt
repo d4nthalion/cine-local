@@ -1,6 +1,12 @@
 package com.cinelocal.android.ui.screens
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.size
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -42,12 +48,16 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import com.cinelocal.android.Nav
 import com.cinelocal.android.core.Languages
+import com.cinelocal.android.core.Letterboxd
+import com.cinelocal.android.core.Settings
 import com.cinelocal.android.repo
 import com.cinelocal.android.ui.components.BackTopBar
 import com.cinelocal.android.ui.components.GradientButton
 import com.cinelocal.android.ui.components.SecondaryButton
 import com.cinelocal.android.ui.theme.CL
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 private val META_LANGS = listOf("es-ES" to "Español (España)", "es-MX" to "Español (México)", "en-US" to "English", "ca-ES" to "Català", "fr-FR" to "Français", "de-DE" to "Deutsch", "it-IT" to "Italiano", "pt-PT" to "Português")
 private val SUB_MODES = listOf(
@@ -58,7 +68,8 @@ private val SUB_MODES = listOf(
 
 @Composable
 fun SettingsScreen(nav: Nav) {
-    val repo = LocalContext.current.repo
+    val ctx = LocalContext.current
+    val repo = ctx.repo
     val scope = rememberCoroutineScope()
     var s by remember { mutableStateOf(repo.settings.value) }
     var showPass by remember { mutableStateOf(false) }
@@ -135,14 +146,84 @@ fun SettingsScreen(nav: Nav) {
             }
 
             HorizontalDivider(color = CL.line)
+            LetterboxdSection(s, onChange = { s = it }, saveFirst = { if (s != repo.settings.value) repo.saveSettings(s) })
+
+            HorizontalDivider(color = CL.line)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 SecondaryButton("Volver a escanear") { repo.scan() }
                 SecondaryButton("Actualizar metadatos") { repo.fetchMissingMetadata(force = true) }
             }
             if (dirty) GradientButton("Guardar", Modifier.fillMaxWidth(), onClick = ::save)
-            Help("CineLocal para Android 0.1.0")
+            Help("CineLocal para Android " + runCatching { ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName }.getOrNull().orEmpty())
         }
     }
+}
+
+/** Usuario, sincronización, estado, importación del ZIP y "marcar como vistas" (como Ajustes → Letterboxd en escritorio) */
+@Composable
+private fun LetterboxdSection(s: Settings, onChange: (Settings) -> Unit, saveFirst: () -> Unit) {
+    val ctx = LocalContext.current
+    val repo = ctx.repo
+    val scope = rememberCoroutineScope()
+    val status by repo.letterboxd.status.collectAsStateWithLifecycle()
+    val data by repo.letterboxd.store.flow.collectAsStateWithLifecycle()
+    val entries by repo.lbEntries.collectAsStateWithLifecycle()
+    var confirmClear by remember { mutableStateOf(false) }
+    val pickZip = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) scope.launch {
+            val bytes = withContext(Dispatchers.IO) { runCatching { ctx.contentResolver.openInputStream(uri)?.use { it.readBytes() } }.getOrNull() }
+            if (bytes != null) { saveFirst(); repo.lbImport(bytes) }
+        }
+    }
+
+    Header("Letterboxd")
+    Help("Se lee tu perfil público: películas vistas, tus notas, los “me gusta” y la watchlist. Al abrir CineLocal se añade lo último que hayas visto.")
+    Field("Usuario de Letterboxd", s.lbUser, "tu_usuario") { onChange(s.copy(lbUser = it.trim())) }
+    SecondaryButton("Sincronizar ahora", enabled = s.lbUser.isNotBlank() && !status.running) {
+        val changed = Letterboxd.cleanUser(s.lbUser) != Letterboxd.cleanUser(repo.settings.value.lbUser)
+        saveFirst()                       // un usuario nuevo ya lanza la sincronización completa al guardarse
+        if (!changed) repo.lbSync(full = true)
+    }
+
+    Text("Estado", style = MaterialTheme.typography.titleMedium)
+    when {
+        status.running -> Row(verticalAlignment = Alignment.CenterVertically) {
+            CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = CL.lbGreen)
+            Text(status.text.ifEmpty { "Sincronizando…" }, Modifier.padding(start = 10.dp), style = MaterialTheme.typography.bodyMedium, color = CL.text2)
+        }
+        status.error != null -> Text(status.error!!, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
+        data.syncedAt == 0L -> Help(if (s.lbUser.isNotBlank()) "Aún no se ha sincronizado." else "Sin conectar.")
+        else -> {
+            val n = { f: (com.cinelocal.android.core.LbEntry) -> Boolean -> entries.count(f) }
+            val noId = n { it.tmdbId == null }
+            val date = java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.MEDIUM, java.text.DateFormat.SHORT, java.util.Locale("es", "ES")).format(java.util.Date(data.syncedAt))
+            Help("${n { it.film.watched }} vistas · ${n { it.film.rating != null }} con nota · ${n { it.film.watchlist }} en la watchlist · " +
+                "${if (data.source == "export") "importado" else "sincronizado"} el $date" + (if (noId > 0) " · $noId sin identificar" else ""))
+        }
+    }
+    if (data.syncedAt > 0) TextButton(onClick = { confirmClear = true }) { Text("Borrar datos de Letterboxd") }
+
+    Text("Importar la exportación de Letterboxd", style = MaterialTheme.typography.titleMedium)
+    Help("Alternativa si la lectura del perfil falla: en Letterboxd, Settings → Data → Export your data, y elige aquí el .zip descargado.")
+    SecondaryButton("Elegir .zip", enabled = !status.running) {
+        pickZip.launch(arrayOf("application/zip", "application/x-zip-compressed", "application/octet-stream"))
+    }
+
+    Row(Modifier.fillMaxWidth().clickable { onChange(s.copy(lbMarkWatched = !s.lbMarkWatched)) }, verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text("Marcar como vistas las que ya has visto en Letterboxd")
+            Help("Sólo películas de tu biblioteca que aún no hayas empezado en CineLocal.")
+        }
+        Switch(checked = s.lbMarkWatched, onCheckedChange = { onChange(s.copy(lbMarkWatched = it)) })
+    }
+
+    if (confirmClear) AlertDialog(
+        onDismissRequest = { confirmClear = false },
+        title = { Text("¿Borrar los datos de Letterboxd?") },
+        text = { Text("Se quitan tus notas y la watchlist de CineLocal. Las películas ya marcadas como vistas siguen vistas. Puedes volver a sincronizar cuando quieras.") },
+        confirmButton = { TextButton(onClick = { confirmClear = false; repo.letterboxd.reset() }) { Text("Borrar") } },
+        dismissButton = { TextButton(onClick = { confirmClear = false }) { Text("Cancelar") } }
+    )
 }
 
 @Composable private fun Header(text: String) = Text(text, style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(top = 8.dp))

@@ -61,12 +61,18 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import com.cinelocal.android.Nav
 import com.cinelocal.android.core.Episode
+import com.cinelocal.android.core.LbEntry
+import com.cinelocal.android.core.Letterboxd
 import com.cinelocal.android.core.Progress
 import com.cinelocal.android.core.Title
 import com.cinelocal.android.data.Tmdb
@@ -75,7 +81,9 @@ import com.cinelocal.android.ui.SeriesMode
 import com.cinelocal.android.ui.epMeta
 import com.cinelocal.android.ui.fmtLeft
 import com.cinelocal.android.ui.fmtRuntime
+import com.cinelocal.android.ui.fmtDate
 import com.cinelocal.android.ui.fraction
+import com.cinelocal.android.ui.lbOf
 import com.cinelocal.android.ui.isWatched
 import com.cinelocal.android.ui.metaLine
 import com.cinelocal.android.ui.seriesState
@@ -93,6 +101,7 @@ fun DetailScreen(id: String, nav: Nav) {
     val titles by repo.titles.collectAsStateWithLifecycle()
     val progress by repo.progress.flow.collectAsStateWithLifecycle()
     val user by repo.userState.flow.collectAsStateWithLifecycle()
+    val lbById by repo.lbById.collectAsStateWithLifecycle()
     val t = titles.firstOrNull { it.id == id }
     if (t == null) {
         EmptyState("No encontrado", "Este título ya no está en la biblioteca.", "Volver") { nav.back() }
@@ -122,6 +131,7 @@ fun DetailScreen(id: String, nav: Nav) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text(metaLine(t), color = CL.text2, style = MaterialTheme.typography.bodyMedium)
                     if (m?.genres?.isNotEmpty() == true) Text(m.genres.joinToString(" · "), color = CL.text3, style = MaterialTheme.typography.bodyMedium)
+                    lbOf(t, lbById)?.let { LbLine(it, nav) }
 
                     PlayButtons(t, progress, st, nav)
 
@@ -231,6 +241,28 @@ private fun PlayButtons(t: Title, progress: Map<String, Progress>, st: com.cinel
             }
             if (st.mode == SeriesMode.RESUME && st.p != null) ProgressBar(fraction(st.p), Modifier.fillMaxWidth().clip(RoundedCornerShape(2.dp)))
         }
+    }
+}
+
+/** "Tu nota ★★★★ · ♥ Te gustó · Vista el 28 de enero de 2024 · En tu watchlist"; al tocarla abre la película en Letterboxd */
+@Composable
+private fun LbLine(lb: LbEntry, nav: Nav) {
+    val f = lb.film
+    val text = buildAnnotatedString {
+        fun sep() { if (length > 0) append("  ·  ") }
+        if (f.rating != null) { append("Tu nota "); withStyle(SpanStyle(color = CL.lbGreen, fontWeight = FontWeight.Bold)) { append(Letterboxd.stars(f.rating)) } }
+        if (f.liked) { sep(); withStyle(SpanStyle(color = CL.lbOrange)) { append("♥") }; append(" Te gustó") }
+        if (f.watched) { sep(); append(if (f.date != null) "Vista el ${fmtDate(f.date)}" else "Vista") }
+        if (f.watchlist) { sep(); append("En tu watchlist") }
+    }
+    if (text.isEmpty()) return
+    Row(
+        Modifier.clip(RoundedCornerShape(6.dp)).then(if (f.url != null) Modifier.clickable { nav.open(f.url!!) } else Modifier).padding(vertical = 2.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        // los tres puntos del logotipo de Letterboxd
+        for (c in listOf(CL.lbOrange, CL.lbGreen, CL.lbBlue)) Box(Modifier.padding(end = 2.dp).size(8.dp).clip(CircleShape).background(c))
+        Text(text, Modifier.padding(start = 6.dp), style = MaterialTheme.typography.bodyMedium, color = CL.text2)
     }
 }
 

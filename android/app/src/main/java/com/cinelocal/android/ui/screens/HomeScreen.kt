@@ -46,6 +46,9 @@ import com.cinelocal.android.ui.epMeta
 import com.cinelocal.android.ui.fmtLeft
 import com.cinelocal.android.ui.fraction
 import com.cinelocal.android.ui.isWatched
+import com.cinelocal.android.ui.lbOf
+import com.cinelocal.android.ui.watchlistEntries
+import com.cinelocal.android.ui.components.MissingCard
 import com.cinelocal.android.ui.metaLine
 import com.cinelocal.android.ui.seriesState
 import com.cinelocal.android.ui.sortTitles
@@ -70,6 +73,8 @@ fun HomeScreen(nav: Nav) {
     val settings by repo.settings.flow.collectAsStateWithLifecycle()
     val library by repo.library.flow.collectAsStateWithLifecycle()
     val status by repo.status.collectAsStateWithLifecycle()
+    val lbById by repo.lbById.collectAsStateWithLifecycle()
+    val lbEntries by repo.lbEntries.collectAsStateWithLifecycle()
 
     if (!settings.configured) {
         Column {
@@ -118,8 +123,10 @@ fun HomeScreen(nav: Nav) {
     fun poster(t: Title) = PosterCard(
         t, isWatched(t, progress),
         if (t.isMovie) fraction(progress[t.item.path]?.takeIf { !it.watched }) else 0f,
-        CARD_W
+        CARD_W, lbOf(t, lbById)
     ) { nav.detail(t.id) }
+    // watchlist de Letterboxd: primero las que ya puedes ver
+    val wl = watchlistEntries(lbEntries, titles).let { l -> (l.filter { it.second != null } + l.filter { it.second == null }).take(30) }
 
     Box(Modifier.fillMaxSize()) {
         LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 24.dp)) {
@@ -144,6 +151,11 @@ fun HomeScreen(nav: Nav) {
             }
             section("Añadido recientemente") { items(recent, key = { "rec-" + it.id }) { poster(it) } }
             if (favs.isNotEmpty()) section("Mi lista", { nav.tab("list") }) { items(favs, key = { "fav-" + it.id }) { poster(it) } }
+            if (wl.isNotEmpty()) section("Tu watchlist de Letterboxd", nav::watchlist) {
+                items(wl, key = { "wl-" + it.first.key }) { (e, t) ->
+                    if (t != null) poster(t) else MissingCard(e, CARD_W) { e.film.url?.let(nav::open) }
+                }
+            }
             if (series.isNotEmpty()) section("Series", { nav.tab("series") }) { items(series, key = { "s-" + it.id }) { poster(it) } }
             if (movies.isNotEmpty()) section("Películas", { nav.tab("movies") }) { items(movies, key = { "m-" + it.id }) { poster(it) } }
             if (topRated.size >= 4) section("Las mejor valoradas") { items(topRated, key = { "top-" + it.id }) { poster(it) } }
