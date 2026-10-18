@@ -1,6 +1,22 @@
 package com.cinelocal.android
 
 import android.os.Bundle
+import android.view.ViewGroup
+import android.webkit.WebView
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.TextButton
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
@@ -107,6 +123,10 @@ private fun App() {
         }
     }
 
+    // Letterboxd: comprobación de Cloudflare que no pasa sola en segundo plano
+    val challenge by repo.letterboxd.challenge.collectAsStateWithLifecycle()
+    challenge?.let { CloudflareDialog(it) { repo.letterboxd.cancel() } }
+
     Scaffold(
         containerColor = CL.bg,
         snackbarHost = { SnackbarHost(snackbar) },
@@ -139,6 +159,28 @@ private fun App() {
             composable("settings") { SettingsScreen(nav) }
             composable("watchlist") { WatchlistScreen(nav) }
             composable("detail/{id}") { entry -> DetailScreen(entry.arguments?.getString("id").orEmpty(), nav) }
+        }
+    }
+}
+
+/** Muestra la página de Letterboxd mientras Cloudflare la comprueba; se cierra sola al pasar */
+@Composable
+private fun CloudflareDialog(web: WebView, onCancel: () -> Unit) {
+    // sólo se cancela con el botón: un toque fuera sin querer no debe cortar la sincronización
+    Dialog(onDismissRequest = {}, properties = DialogProperties(usePlatformDefaultWidth = false, dismissOnClickOutside = false, dismissOnBackPress = false)) {
+        Column(
+            Modifier.fillMaxWidth(0.94f).clip(RoundedCornerShape(14.dp)).background(CL.bg2).padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Text("Comprobando la conexión con Letterboxd", style = MaterialTheme.typography.titleLarge, color = CL.text)
+            Text("Letterboxd verifica que la conexión viene de un navegador. Suele pasar sola en unos segundos; si aparece una casilla, márcala.",
+                style = MaterialTheme.typography.bodyMedium, color = CL.text2)
+            AndroidView(
+                factory = { web.also { (it.parent as? ViewGroup)?.removeView(it) } },
+                onRelease = { (it.parent as? ViewGroup)?.removeView(it) },
+                modifier = Modifier.fillMaxWidth().height(560.dp).clip(RoundedCornerShape(8.dp))
+            )
+            TextButton(onClick = onCancel, modifier = Modifier.align(Alignment.End)) { Text("Cancelar") }
         }
     }
 }

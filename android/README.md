@@ -21,7 +21,9 @@ En *Ajustes → Letterboxd* escribe tu usuario y el móvil lee tu perfil públic
 * **Orden:** *Mi nota (Letterboxd)* en Películas.
 * **Vistas:** opcionalmente, marca como vistas las películas de la biblioteca que ya viste, sin tocar las que tienen progreso.
 * **Sincronización:** la primera vez es completa; un perfil de 3.000 películas tarda unos minutos y la app debe seguir abierta. Al abrir la app se añade lo último del RSS, y cada 3 días se repite la sincronización completa.
-* **Cómo lee el perfil:** Letterboxd no tiene API, así que `data/LetterboxdFetcher.kt` lee las páginas desde una WebView oculta que supera la comprobación de Cloudflare, como mucho una cada 1,5 s y con reintentos.
+* **Cómo lee el perfil:** Letterboxd no tiene API, así que `data/LetterboxdFetcher.kt` lee las páginas desde una WebView oculta, como mucho una cada 1,5 s y con reintentos.
+  * Si Cloudflare pide una comprobación que no pasa sola, la app la muestra en un recuadro para que termine o marques la casilla, y se cierra sola al pasar.
+  * La WebView usa su user-agent y sus imágenes normales: si se cambia el user-agent, Cloudflare no da por buena la comprobación y pide la casilla una y otra vez.
 * **Emparejado:** con TMDB igual que en escritorio (`data/LetterboxdService.kt`). Los lectores de páginas, RSS y ZIP están en `core/Letterboxd.kt`, con pruebas.
 * **Alternativa:** importar el ZIP de *Letterboxd → Settings → Data → Export your data*.
 

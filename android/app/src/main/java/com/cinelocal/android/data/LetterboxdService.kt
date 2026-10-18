@@ -50,6 +50,15 @@ class LetterboxdService(
     private var job: Job? = null
     val busy get() = job?.isActive == true
 
+    /** Comprobación de Cloudflare que hay que enseñar (ver LetterboxdFetcher.challenge) */
+    val challenge get() = fetcher.challenge.asStateFlow()
+
+    /** Cancela la sincronización en curso */
+    fun cancel() {
+        job?.cancel()
+        _status.value = LbStatus(error = "Sincronización cancelada")
+    }
+
     private fun setStatus(running: Boolean = _status.value.running, text: String = _status.value.text, error: String? = _status.value.error) =
         _status.update { LbStatus(running, text, error) }
 

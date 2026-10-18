@@ -12,6 +12,7 @@ import com.cinelocal.android.core.Letterboxd
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -36,6 +37,9 @@ class LetterboxdFetcher(private val context: Context) {
     private val pending = ConcurrentHashMap<Int, CompletableDeferred<Pair<Int, String>>>()
     private val seq = AtomicInteger()
 
+    /** WebView con la comprobación de Cloudflare cuando no pasa sola: la app la muestra para que termine (o la marques tú) */
+    val challenge = MutableStateFlow<WebView?>(null)
+
     /** Aviso al esperar porque Letterboxd pide ir más despacio (segundos) */
     var onWait: ((Int) -> Unit)? = null
 
@@ -52,11 +56,9 @@ class LetterboxdFetcher(private val context: Context) {
         w.settings.apply {
             javaScriptEnabled = true
             domStorageEnabled = true
-            blockNetworkImage = true
-            loadsImagesAutomatically = false
             mediaPlaybackRequiresUserGesture = true
-            // sin la marca "; wv" de WebView: Cloudflare desconfía de ella
-            userAgentString = userAgentString.replace("; wv)", ")").replace(Regex(" Version/\\d+(\\.\\d+)*"), "")
+            // Ni se cambia el user-agent ni se bloquean las imágenes: con cualquiera de las dos cosas la
+            // comprobación de Cloudflare no se da por buena y vuelve a pedir la casilla una y otra vez
         }
         w.webViewClient = object : WebViewClient() {
             // sólo letterboxd.com (y la comprobación de Cloudflare dentro de ella)
@@ -78,11 +80,18 @@ class LetterboxdFetcher(private val context: Context) {
     private suspend fun open(url: String) {
         withContext(Dispatchers.Main) { ensureView().loadUrl(url) }
         val t0 = System.currentTimeMillis()
-        while (System.currentTimeMillis() - t0 < 30_000) {
-            delay(700)
-            val title = js("document.title")?.trim('"').orEmpty()
-            val host = withContext(Dispatchers.Main) { web?.url?.let { Uri.parse(it).host } }
-            if (title.isNotEmpty() && !CHALLENGE.containsMatchIn(title) && host?.endsWith("letterboxd.com") == true) return
+        try {
+            // oculta, la comprobación no siempre termina (la página no se llega a pintar):
+            // a los pocos segundos se muestra en la app (challenge) y se espera más
+            while (System.currentTimeMillis() - t0 < (if (challenge.value != null) 120_000 else 30_000)) {
+                delay(700)
+                val title = js("document.title")?.trim('"').orEmpty()
+                val host = withContext(Dispatchers.Main) { web?.url?.let { Uri.parse(it).host } }
+                if (title.isNotEmpty() && !CHALLENGE.containsMatchIn(title) && host?.endsWith("letterboxd.com") == true) return
+                if (challenge.value == null && System.currentTimeMillis() - t0 > 4_000 && CHALLENGE.containsMatchIn(title)) challenge.value = web
+            }
+        } finally {
+            challenge.value = null
         }
         throw IOException("Letterboxd no ha dejado pasar la comprobación de seguridad (Cloudflare). Prueba más tarde o importa la exportación en ZIP.")
     }
@@ -124,6 +133,8 @@ class LetterboxdFetcher(private val context: Context) {
     }
 
     suspend fun close() = withContext(Dispatchers.Main) {
+        challenge.value = null
+        web?.apply { (parent as? android.view.ViewGroup)?.removeView(this) }
         web?.apply { stopLoading(); removeJavascriptInterface("CineLocalLb"); destroy() }
         web = null
         ready = false
