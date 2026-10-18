@@ -4,6 +4,7 @@
 const fs = require('fs');
 const path = require('path');
 const http = require('http');
+const zlib = require('zlib');
 const { execFile, spawn } = require('child_process');
 
 const TEMPLATE = path.join(__dirname, 'CineLocal.tmpl');
@@ -221,7 +222,14 @@ class EmuleClient {
       const req = http.get({ host: '127.0.0.1', port: this.port, path: '/?' + qs, timeout: 8000, headers: { Connection: 'close' } }, res => {
         const chunks = [];
         res.on('data', c => chunks.push(c));
-        res.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+        res.on('end', () => {
+          // Con "Usar compresión gzip" (UseGzip=1) eMule comprime las páginas aunque no se pida
+          let buf = Buffer.concat(chunks);
+          if (/gzip/i.test(res.headers['content-encoding'] || '') || (buf[0] === 0x1f && buf[1] === 0x8b)) {
+            try { buf = zlib.gunzipSync(buf); } catch (e) { return reject(e); }
+          }
+          resolve(buf.toString('utf8'));
+        });
         res.on('error', reject);
       });
       req.on('timeout', () => req.destroy(err('eMule no responde', 'offline')));

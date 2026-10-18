@@ -26,9 +26,7 @@ D:\Películas y Series\
 
 ## Primer uso
 
-1. **Instala mpv** (el motor de reproducción):
-   `winget install --id=shinchiro.mpv -e`
-   o descárgalo desde https://mpv.io/installation/ y selecciona `mpv.exe` en *Ajustes*. También puedes poner una carpeta `mpv\` con `mpv.exe` junto a `CineLocal.exe`.
+1. **mpv** (el motor de reproducción) viene incluido en el instalador y en la versión portable; no hay que instalar nada. Si prefieres otro, selecciona su `mpv.exe` en *Ajustes*. Ejecutando desde el código (`npm start`) se usa el de `mpv\` (lo descarga `npm run fetch-mpv`) o uno instalado en el sistema (`winget install --id=shinchiro.mpv -e`).
 2. **API key de TMDB** (gratis): https://www.themoviedb.org/settings/api → pégala en *Ajustes → Metadatos*. Sirve la clave v3 o el token de lectura v4.
 3. Elige **idioma de audio** y **subtítulos** por defecto en *Ajustes*. Al reproducir se seleccionan automáticamente esas pistas si existen (incluidos `.srt`/`.ass` junto al vídeo). Con el modo *“Sólo si el audio está en otro idioma”* no verás subtítulos en español cuando el audio ya sea español.
 
@@ -104,6 +102,9 @@ Pruebas:
 npm install
 npm start          # ejecutar
 npm run dist       # en Windows: genera instalador NSIS + versión portable en dist/
+npm run fetch-mpv -- --update   # actualiza el mpv que se incluye
 ```
+
+`npm run dist` descarga mpv en `mpv\` la primera vez (compilación x86_64 de [shinchiro](https://github.com/shinchiro/mpv-winbuild-cmake), GPL) y luego reutiliza esa copia; la carpeta no se sube a git.
 
 Los datos (ajustes, caché de metadatos, progreso) se guardan en `%APPDATA%\CineLocal`.

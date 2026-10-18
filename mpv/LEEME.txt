@@ -1,1 +1,10 @@
-Copia aquí mpv.exe (y sus archivos) para incluirlo en el instalador.
+Aquí va mpv, el motor de reproducción que se incluye en el instalador (resources\mpv).
+
+No hay que copiarlo a mano: "npm run dist" lo descarga la primera vez con
+scripts/fetch-mpv.js y después reutiliza esta copia. Para bajar la última versión:
+    npm run fetch-mpv -- --update
+VERSION indica qué compilación hay descargada.
+
+mpv (https://mpv.io) es software libre con licencia GPL. La compilación para Windows es
+de https://github.com/shinchiro/mpv-winbuild-cmake, donde está el código fuente de mpv
+y de las bibliotecas que incluye (FFmpeg, libass, libplacebo…).
