@@ -96,6 +96,12 @@ Pruebas:
 * Perfil: `npx electron test/letterboxd-test.js <copiaDeDatos> <carpetaCapturas> profile <usuario>`.
 * ZIP: `npx electron test/letterboxd-test.js <copiaDeDatos> <carpetaCapturas> export <zip>`.
 
+## Android
+
+En [`android/`](android/README.md) está **CineLocal para Android** (móvil): lee la biblioteca directamente de la carpeta compartida del PC (`\\MI-PC\Peliculas`), con la misma forma de reconocer películas y series, metadatos de TMDB y reproductor propio (LibVLC). Se descarga como `CineLocal-android-<versión>.apk` desde las releases `android-v…`.
+
+Para que el móvil vea la biblioteca, comparte la carpeta en Windows (clic derecho → *Propiedades → Compartir*, solo lectura) con la red configurada como **Privada**. El PC puede estar encendido sin haber iniciado sesión.
+
 ## Desarrollo
 
 ```bash
