@@ -1,6 +1,7 @@
 package com.cinelocal.android.data
 
 import android.content.Context
+import android.net.ConnectivityManager
 import android.net.Uri
 import com.cinelocal.android.core.LbEntry
 import com.cinelocal.android.core.Letterboxd
@@ -31,6 +32,8 @@ import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.builtins.serializer
 import java.io.File
 import java.io.IOException
+import java.net.InetSocketAddress
+import java.net.Socket
 
 data class Status(
     val scanning: Boolean = false,
@@ -168,6 +171,23 @@ class Repository(private val context: Context) {
     }
 
     suspend fun testTmdb(key: String) = withContext(Dispatchers.IO) { Tmdb(key).test() }
+
+    /**
+     * Si ahora mismo se llega al PC de la carpeta compartida (no depende del último escaneo, que puede ser
+     * de antes de quitar el Wi-Fi): sin red no hay nada que probar; con red, se intenta abrir una conexión
+     * al puerto SMB. Hace red: nunca desde el hilo principal.
+     */
+    fun pcReachable(timeoutMs: Int = 2000): Boolean {
+        val loc = SmbLocation.parse(settings.value.libraryPath) ?: return false
+        val cm = context.getSystemService(ConnectivityManager::class.java)
+        if (cm != null && cm.activeNetwork == null) return false
+        return try {
+            Socket().use { it.connect(InetSocketAddress(loc.host, loc.port ?: 445), timeoutMs) }
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
 
     /** Dirección por SMB para LibVLC. Lanza IOException si la ruta de red de Ajustes no es válida. */
     fun playbackUri(relPath: String): Uri = SmbLibrary.playbackUri(location(), credentials(), relPath)

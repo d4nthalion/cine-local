@@ -17,6 +17,7 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import com.cinelocal.android.core.Languages
+import com.cinelocal.android.core.PlayQueue
 import com.cinelocal.android.core.SubFile
 import com.cinelocal.android.repo
 import com.cinelocal.android.ui.epMeta
@@ -28,6 +29,7 @@ import org.videolan.libvlc.MediaPlayer
 import org.videolan.libvlc.interfaces.IMedia
 import org.videolan.libvlc.util.VLCVideoLayout
 import java.io.IOException
+import java.util.concurrent.Executors
 
 /** Un elemento de la lista de reproducción (película o episodio) */
 data class PlayItem(val path: String, val title: String, val subtitle: String?, val start: Double, val subs: List<SubFile>)
@@ -50,6 +52,19 @@ class PlayerActivity : ComponentActivity() {
     private var pendingStartMs = 0L
     private var currentLocal = false
 
+    /** Rutas de [playlist], para [PlayQueue] */
+    private var paths: List<String> = emptyList()
+    private var isMovie = false
+    private var autoplay = false
+    /** Ya se sabe por dónde empezar */
+    private var ready = false
+    /** Entre onStart y onStop */
+    private var started = false
+    /** Último resultado de la comprobación de conexión con el PC (null: aún no se ha comprobado) */
+    @Volatile private var lastReachable: Boolean? = null
+    /** Comprobaciones de red y de archivos descargados, fuera del hilo principal */
+    private val io = Executors.newSingleThreadExecutor()
+
     // estado que pinta la interfaz
     val state = PlayerUiState()
 
@@ -62,12 +77,9 @@ class PlayerActivity : ComponentActivity() {
             systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         }
 
-        playlist = buildPlaylist(
-            intent.getStringExtra(EXTRA_ITEM).orEmpty(),
-            intent.getStringExtra(EXTRA_EPISODE),
-            intent.getBooleanExtra(EXTRA_FROM_START, false)
-        )
-        if (playlist.isEmpty()) { finish(); return }
+        val fromStart = intent.getBooleanExtra(EXTRA_FROM_START, false)
+        val requested = buildPlaylist(intent.getStringExtra(EXTRA_ITEM).orEmpty(), intent.getStringExtra(EXTRA_EPISODE))
+        if (playlist.isEmpty() || requested < 0) { finish(); return }
 
         libVlc = LibVLC(this, arrayListOf(
             "--network-caching=3000",     // por Wi-Fi conviene más margen que en local
@@ -83,12 +95,12 @@ class PlayerActivity : ComponentActivity() {
                 PlayerScreen(
                     state = state,
                     videoLayout = videoLayout,
-                    hasNext = { index < playlist.size - 1 },
+                    hasNext = { ready && autoplay && PlayQueue.next(paths, index, ::isLocal) { lastReachable ?: true } != null },
                     onBack = { finish() },
                     onTogglePlay = { if (player.isPlaying) player.pause() else player.play() },
                     onSeekTo = { ms -> player.time = ms.coerceIn(0, maxOf(0, player.length - 1000)); state.time = player.time },
                     onSeekBy = { d -> player.time = (player.time + d).coerceIn(0, maxOf(0, player.length - 1000)); state.time = player.time },
-                    onNext = { saveProgress(); playIndex(index + 1) },
+                    onNext = { saveProgress(); advance() },
                     audioTracks = { player.audioTracks?.map { Track(it.id, it.name) }.orEmpty() },
                     subTracks = { player.spuTracks?.map { Track(it.id, it.name) }.orEmpty() },
                     currentAudio = { player.audioTrack },
@@ -102,17 +114,44 @@ class PlayerActivity : ComponentActivity() {
                 )
             }
         }
+
+        // Por dónde empezar: lo descargado se reproduce siempre desde el móvil; si lo pedido no lo está,
+        // se comprueba si se llega al PC (puede tardar un par de segundos, por eso fuera del hilo principal)
+        val explicit = intent.getBooleanExtra(EXTRA_EXPLICIT, false)
+        state.buffering = true
+        io.execute {
+            val pick = PlayQueue.start(paths, requested, explicit, isMovie, ::isLocal, ::probe)
+            // empezando por algo descargado, se mira ya si hay conexión para saber si hay "siguiente"
+            if (pick.index != null && autoplay && lastReachable == null && pick.index < paths.size - 1) probe()
+            handler.post {
+                if (isDestroyed) return@post
+                val i = pick.index
+                if (i == null) {
+                    state.buffering = false
+                    state.error = pick.message ?: "No se pudo reproducir el archivo."
+                    return@post
+                }
+                // el pedido conserva "desde el principio"; si se cambió por otro descargado, se sigue donde se quedó
+                val start = repo.startOf(paths[i], fromStart && !pick.switched(requested))
+                playlist = playlist.toMutableList().also { it[i] = it[i].copy(start = start) }
+                index = i
+                ready = true
+                if (started) playIndex(i)
+            }
+        }
     }
 
     override fun onStart() {
         super.onStart()
+        started = true
         player.attachViews(videoLayout, null, true, false)
-        if (player.media == null) playIndex(index) else player.play()
+        if (player.media == null) { if (ready) playIndex(index) } else player.play()
         handler.post(ticker)
     }
 
     override fun onStop() {
         super.onStop()
+        started = false
         handler.removeCallbacks(ticker)
         saveProgress()
         player.pause()
@@ -122,6 +161,8 @@ class PlayerActivity : ComponentActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        io.shutdownNow()
+        handler.removeCallbacksAndMessages(null)
         if (::player.isInitialized) {
             player.setEventListener(null)
             player.stop()
@@ -132,30 +173,49 @@ class PlayerActivity : ComponentActivity() {
 
     // ---------------------------------------------------------------- lista de reproducción
 
-    /** Como buildPlaylist() en main.js: la película, o el episodio y los siguientes si está activado */
-    private fun buildPlaylist(itemId: String, episodeId: String?, fromStart: Boolean): List<PlayItem> {
-        val t = repo.title(itemId) ?: return emptyList()
+    /**
+     * Como buildPlaylist() en main.js, pero con todos los episodios de la serie (o la película) en [playlist];
+     * devuelve el índice del pedido. Qué se reproduce de verdad (y qué sigue) lo decide [PlayQueue] según
+     * lo descargado y si se llega al PC.
+     */
+    private fun buildPlaylist(itemId: String, episodeId: String?): Int {
+        val t = repo.title(itemId) ?: return -1
+        autoplay = repo.settings.value.autoplayNext
         if (t.isMovie) {
-            return listOf(PlayItem(t.item.path, t.name, null, repo.startOf(t.item.path, fromStart), t.item.subs))
+            isMovie = true
+            autoplay = false
+            playlist = listOf(PlayItem(t.item.path, t.name, null, 0.0, t.item.subs))
+            paths = playlist.map { it.path }
+            return 0
         }
         val eps = t.item.episodes
-        if (eps.isEmpty()) return emptyList()
-        val chosen = episodeId?.let { id -> eps.indexOfFirst { it.id == id } }?.takeIf { it >= 0 }
-            ?: eps.indexOf(seriesState(t, repo.progress.value).ep)
-        val dl = repo.downloads
-        // sin conexión con el PC, después del episodio elegido solo se encadenan los descargados
-        val offline = repo.offline.value
-        val list = if (repo.settings.value.autoplayNext) {
-            eps.drop(chosen).filterIndexed { i, e -> i == 0 || !offline || dl.localIfDone(e.path) != null }
-        } else listOf(eps[chosen])
-        return list.mapIndexed { i, e ->
+        if (eps.isEmpty()) return -1
+        playlist = eps.map { e ->
             val em = epMeta(t, e)
-            PlayItem(
-                e.path, t.name,
-                e.label + (em?.name?.let { " · $it" } ?: ""),
-                if (i == 0) repo.startOf(e.path, fromStart) else 0.0,
-                e.subs
-            )
+            PlayItem(e.path, t.name, e.label + (em?.name?.let { " · $it" } ?: ""), 0.0, e.subs)
+        }
+        paths = playlist.map { it.path }
+        return episodeId?.let { id -> eps.indexOfFirst { it.id == id } }?.takeIf { it >= 0 }
+            ?: eps.indexOf(seriesState(t, repo.progress.value).ep)
+    }
+
+    /** Descargado y en el móvil */
+    private fun isLocal(path: String) = repo.downloads.localIfDone(path) != null
+
+    /** ¿Se llega ahora al PC? Hace red: solo desde [io] */
+    private fun probe(): Boolean = repo.pcReachable().also { lastReachable = it }
+
+    /** Al terminar un episodio o con "Siguiente": el siguiente que se pueda reproducir (sin conexión, el siguiente descargado) */
+    private fun advance() {
+        if (!autoplay) { finish(); return }
+        val cur = index
+        state.buffering = true
+        io.execute {
+            val n = PlayQueue.next(paths, cur, ::isLocal, ::probe)
+            handler.post {
+                if (isDestroyed) return@post
+                if (n == null) finish() else playIndex(n)
+            }
         }
     }
 
@@ -222,12 +282,24 @@ class PlayerActivity : ComponentActivity() {
                 val item = playlist[index]
                 val dur = player.length / 1000.0
                 if (dur > 0) repo.saveProgress(item.path, dur, dur)
-                if (index < playlist.size - 1) playIndex(index + 1) else finish()
+                advance()
             }
             MediaPlayer.Event.EncounteredError -> {
                 state.buffering = false
-                state.error = if (currentLocal) "No se pudo reproducir el archivo descargado.\nPrueba a borrar la descarga y a descargarlo otra vez."
-                else "No se pudo reproducir el archivo.\nComprueba que el PC está encendido y la carpeta compartida accesible."
+                if (currentLocal) {
+                    state.error = "No se pudo reproducir el archivo descargado.\nPrueba a borrar la descarga y a descargarlo otra vez."
+                    return
+                }
+                val generic = "No se pudo reproducir el archivo.\nComprueba que el PC está encendido y la carpeta compartida accesible."
+                state.error = generic
+                // si es que se ha perdido la conexión, se dice así
+                io.execute {
+                    if (!probe()) handler.post {
+                        if (!isDestroyed && state.error == generic) state.error =
+                            (if (isMovie) PlayQueue.MOVIE_NOT_DOWNLOADED else PlayQueue.EPISODE_NOT_DOWNLOADED) +
+                                "\nSolo puedes ver lo descargado."
+                    }
+                }
             }
         }
     }
@@ -297,12 +369,18 @@ class PlayerActivity : ComponentActivity() {
         private const val EXTRA_ITEM = "item"
         private const val EXTRA_EPISODE = "episode"
         private const val EXTRA_FROM_START = "fromStart"
+        private const val EXTRA_EXPLICIT = "explicit"
 
-        fun intent(ctx: Context, itemId: String, episodeId: String?, fromStart: Boolean) =
+        /**
+         * [explicit]: se tocó ese episodio en concreto (sin conexión y sin descargar, se avisa); si no
+         * (Reproducir, Continuar…), sin conexión se reproduce el siguiente episodio descargado.
+         */
+        fun intent(ctx: Context, itemId: String, episodeId: String?, fromStart: Boolean, explicit: Boolean = false) =
             Intent(ctx, PlayerActivity::class.java)
                 .putExtra(EXTRA_ITEM, itemId)
                 .putExtra(EXTRA_EPISODE, episodeId)
                 .putExtra(EXTRA_FROM_START, fromStart)
+                .putExtra(EXTRA_EXPLICIT, explicit)
     }
 }
 

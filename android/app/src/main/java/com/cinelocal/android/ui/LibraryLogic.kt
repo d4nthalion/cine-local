@@ -4,6 +4,7 @@ import com.cinelocal.android.core.Episode
 import com.cinelocal.android.core.EpisodeMeta
 import com.cinelocal.android.core.LbEntry
 import com.cinelocal.android.core.NameParser
+import com.cinelocal.android.core.PlayQueue
 import com.cinelocal.android.core.Progress
 import com.cinelocal.android.core.Title
 
@@ -28,6 +29,20 @@ fun seriesState(t: Title, progress: Map<String, Progress>): SeriesState {
     val next = eps.drop(idx + 1).firstOrNull { progress[it.path]?.watched != true }
     if (next != null) return SeriesState(next, SeriesMode.NEXT, lastAt)
     return SeriesState(eps.first(), SeriesMode.DONE, lastAt)
+}
+
+/**
+ * Sin conexión con el PC, el episodio que de verdad reproducirá el botón principal (el mismo criterio que
+ * [PlayQueue.start] en el reproductor): si el de [st] no está descargado, el siguiente descargado.
+ */
+fun offlineSeriesState(t: Title, st: SeriesState, progress: Map<String, Progress>, isLocal: (String) -> Boolean): SeriesState {
+    val eps = t.item.episodes
+    val req = eps.indexOf(st.ep)
+    val i = PlayQueue.start(eps.map { it.path }, req, explicit = false, isMovie = false, isLocal = isLocal, reachable = { false }).index
+    if (i == null || i == req) return st
+    val p = progress[eps[i].path]
+    return if (p != null && !p.watched && p.pos > 0) SeriesState(eps[i], SeriesMode.RESUME, st.at, p)
+    else SeriesState(eps[i], SeriesMode.START, st.at)
 }
 
 data class ContinueEntry(val title: Title, val at: Long, val p: Progress?, val ep: Episode?)

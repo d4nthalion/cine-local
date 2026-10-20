@@ -137,8 +137,9 @@ class Nav(private val nav: NavHostController, private val ctx: android.content.C
         restoreState = true
     }
     fun back() = nav.popBackStack()
-    fun play(itemId: String, episodeId: String? = null, fromStart: Boolean = false) =
-        ctx.startActivity(PlayerActivity.intent(ctx, itemId, episodeId, fromStart))
+    /** [explicit]: se tocó ese episodio en concreto (ver [PlayerActivity.intent]) */
+    fun play(itemId: String, episodeId: String? = null, fromStart: Boolean = false, explicit: Boolean = false) =
+        ctx.startActivity(PlayerActivity.intent(ctx, itemId, episodeId, fromStart, explicit))
 }
 
 private val tabs = listOf(

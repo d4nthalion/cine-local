@@ -97,6 +97,7 @@ import com.cinelocal.android.core.Title
 import com.cinelocal.android.data.Tmdb
 import com.cinelocal.android.repo
 import com.cinelocal.android.ui.SeriesMode
+import com.cinelocal.android.core.DlState
 import com.cinelocal.android.ui.SeriesState
 import com.cinelocal.android.ui.epMeta
 import com.cinelocal.android.ui.fmtDateShort
@@ -106,6 +107,7 @@ import com.cinelocal.android.ui.fraction
 import com.cinelocal.android.ui.isWatched
 import com.cinelocal.android.ui.lbOf
 import com.cinelocal.android.ui.seriesState
+import com.cinelocal.android.ui.offlineSeriesState
 import com.cinelocal.android.ui.components.ActionIcon
 import com.cinelocal.android.ui.components.DlActions
 import com.cinelocal.android.ui.components.DlMenuItems
@@ -159,12 +161,16 @@ fun DetailScreen(id: String, nav: Nav) {
     val watched = isWatched(t, progress)
     var identifying by remember { mutableStateOf(false) }
 
-    val st = if (t.isMovie) null else seriesState(t, progress)
+    val dlIndex by rememberDlIndex()
+    val offline by repo.offline.collectAsStateWithLifecycle()
+    // sin conexión con el PC, el botón principal ofrece el episodio descargado que de verdad se reproducirá
+    val st = if (t.isMovie) null else seriesState(t, progress).let { s ->
+        if (offline) offlineSeriesState(t, s, progress) { dlIndex.get(it)?.state == DlState.DONE } else s
+    }
     var season by rememberSaveable(id) { mutableStateOf(st?.ep?.season ?: t.item.seasons.firstOrNull() ?: 1) }
     val canPlayFromStart = t.isMovie || t.item.episodes.isNotEmpty()
     val playFromStart = { nav.play(t.id, st?.ep?.id, fromStart = true) }
 
-    val dlIndex by rememberDlIndex()
     val dla = rememberDlActions()
 
     val listState = rememberLazyListState()
@@ -241,7 +247,7 @@ fun DetailScreen(id: String, nav: Nav) {
                 itemsIndexed(eps, key = { _, e -> e.id }) { i, e ->
                     if (i > 0) Box(Modifier.padding(start = 16.dp).fillMaxWidth().height(1.dp).background(CL.line))
                     EpisodeRow(
-                        t, e, progress[e.path], onPlay = { nav.play(t.id, e.id) },
+                        t, e, progress[e.path], onPlay = { nav.play(t.id, e.id, explicit = true) },
                         onToggleWatched = { repo.markWatched(listOf(e.path), progress[e.path]?.watched != true) }
                     ) {
                         val target = remember(t, e) { DlTarget(t, listOf(e), "${e.label} de «${t.name}»") }
