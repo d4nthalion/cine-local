@@ -124,7 +124,8 @@ data class Settings(
     val ntfyServer: String = "",         // vacío: https://ntfy.sh
     val ntfyTopic: String = "",          // tema de ntfy al que llegan las peticiones de descarga
     val ntfyToken: String = "",          // token de acceso, sólo si el tema está protegido
-    val autoUpdate: Boolean = true       // buscar actualizaciones en GitHub al abrir la app
+    val autoUpdate: Boolean = true,      // buscar actualizaciones en GitHub al abrir la app
+    val downloadWifiOnly: Boolean = true // descargar para ver sin conexión solo con Wi-Fi
 ) {
     val configured get() = libraryPath.isNotBlank()
     val ntfyReady get() = ntfyTopic.isNotBlank()

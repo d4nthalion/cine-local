@@ -49,6 +49,8 @@ import com.cinelocal.android.core.Updates
 import com.cinelocal.android.core.Updates.NoteLine
 import com.cinelocal.android.data.UpdatePhase
 import com.cinelocal.android.data.Updater
+import com.cinelocal.android.ui.theme.BrandGradient
+import com.cinelocal.android.ui.theme.BrandGradientH
 import com.cinelocal.android.ui.theme.CL
 import com.cinelocal.android.ui.theme.Dur
 import com.cinelocal.android.ui.theme.TNUM
@@ -82,7 +84,7 @@ fun UpdateDialog(phase: UpdatePhase, updater: Updater) {
                 .padding(start = 20.dp, end = 20.dp, top = 20.dp, bottom = 8.dp)
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.size(6.dp).clip(CircleShape).background(CL.accent))
+                Box(Modifier.size(6.dp).clip(CircleShape).background(BrandGradient))
                 Text("ACTUALIZACIÓN", Modifier.padding(start = 8.dp), style = MaterialTheme.typography.labelSmall, color = CL.text3)
             }
             Text("Nueva versión ${release.version}", Modifier.padding(top = 8.dp), style = MaterialTheme.typography.headlineSmall, color = CL.text)
@@ -105,11 +107,11 @@ fun UpdateDialog(phase: UpdatePhase, updater: Updater) {
                         is UpdatePhase.Installing -> Installing { updater.later() }
                         is UpdatePhase.Failed -> {
                             Text(p.message, Modifier.padding(bottom = 14.dp), style = MaterialTheme.typography.bodyMedium, color = CL.error)
-                            PrimaryButton("Reintentar", Modifier.fillMaxWidth(), Icons.Rounded.Refresh) { updater.update() }
+                            AccentButton("Reintentar", Modifier.fillMaxWidth(), Icons.Rounded.Refresh) { updater.update() }
                             Actions(onSkip = { updater.skip() }, onLater = { updater.later() })
                         }
                         else -> {
-                            PrimaryButton("Actualizar", Modifier.fillMaxWidth(), Icons.Rounded.Download) { updater.update() }
+                            AccentButton("Actualizar", Modifier.fillMaxWidth(), Icons.Rounded.Download) { updater.update() }
                             Actions(onSkip = { updater.skip() }, onLater = { updater.later() })
                         }
                     }
@@ -134,7 +136,7 @@ private fun androidx.compose.foundation.layout.ColumnScope.Downloading(p: Update
     val fraction = if (p.total > 0) (p.done.toFloat() / p.total).coerceIn(0f, 1f) else 0f
     val shown by animateFloatAsState(fraction, tween(Dur.base), label = "progreso")
     Box(Modifier.fillMaxWidth().height(3.dp).clip(RoundedCornerShape(2.dp)).background(CL.bg4)) {
-        Box(Modifier.fillMaxWidth(shown).fillMaxHeight().background(CL.accent))
+        Box(Modifier.fillMaxWidth(shown).fillMaxHeight().background(BrandGradientH))
     }
     Row(Modifier.fillMaxWidth().padding(top = 10.dp), verticalAlignment = Alignment.CenterVertically) {
         Text("Descargando…", Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium, color = CL.text2)
@@ -172,7 +174,7 @@ private fun androidx.compose.foundation.layout.ColumnScope.Installing(onClose: (
     TextAction("Cerrar", modifier = Modifier.align(Alignment.End).offset(x = 12.dp).padding(top = 6.dp), onClick = onClose)
 }
 
-/** Notas de la release, sin markdown: títulos en versalitas, viñetas ámbar */
+/** Notas de la release, sin markdown: títulos en versalitas, viñetas violeta */
 @Composable
 private fun ReleaseNotes(release: UpdateRelease, modifier: Modifier = Modifier) {
     val lines = remember(release.notes) { Updates.parseNotes(release.notes) }
@@ -189,7 +191,7 @@ private fun ReleaseNotes(release: UpdateRelease, modifier: Modifier = Modifier) 
                     NoteLine.Kind.BULLET -> Row(Modifier.padding(start = (l.level * 14).dp, bottom = 4.dp)) {
                         Text(
                             l.marker, Modifier.width(if (l.marker == "•") 14.dp else 22.dp),
-                            style = MaterialTheme.typography.bodyMedium, color = if (l.level == 0) CL.accent else CL.text3
+                            style = MaterialTheme.typography.bodyMedium, color = if (l.level == 0) CL.accentText else CL.text3
                         )
                         Text(l.text, style = MaterialTheme.typography.bodyMedium, color = CL.text2)
                     }

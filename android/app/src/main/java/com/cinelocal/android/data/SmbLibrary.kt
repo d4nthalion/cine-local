@@ -3,7 +3,11 @@ package com.cinelocal.android.data
 import android.net.Uri
 import com.cinelocal.android.core.FsEntry
 import com.cinelocal.android.core.LibraryFs
+import com.hierynomus.msdtyp.AccessMask
 import com.hierynomus.msfscc.FileAttributes
+import com.hierynomus.msfscc.fileinformation.FileStandardInformation
+import com.hierynomus.mssmb2.SMB2CreateDisposition
+import com.hierynomus.mssmb2.SMB2ShareAccess
 import com.hierynomus.mssmb2.SMBApiException
 import com.hierynomus.protocol.commons.EnumWithValue
 import com.hierynomus.security.bc.BCSecurityProvider
@@ -11,13 +15,24 @@ import com.hierynomus.smbj.SMBClient
 import com.hierynomus.smbj.SmbConfig
 import com.hierynomus.smbj.auth.AuthenticationContext
 import com.hierynomus.smbj.share.DiskShare
+import java.io.File
+import java.io.FileOutputStream
 import java.io.IOException
 import java.net.UnknownHostException
+import java.util.EnumSet
 import java.util.concurrent.TimeUnit
 
-/** Carpeta de red: \\EQUIPO\Compartida\subcarpeta  o  smb://equipo/compartida/subcarpeta */
-data class SmbLocation(val host: String, val share: String, val subPath: String) {
+/**
+ * Carpeta de red: \\EQUIPO\Compartida\subcarpeta  o  smb://equipo/compartida/subcarpeta.
+ * Admite un puerto distinto del 445: \\EQUIPO:4445\Compartida  o  smb://equipo:4445/compartida.
+ */
+data class SmbLocation(val host: String, val share: String, val subPath: String, val port: Int? = null) {
+    /** "equipo" o "equipo:4445", como va en una URL */
+    val authority get() = if (port != null) "$host:$port" else host
+
     companion object {
+        private val HOST_PORT = Regex("^([^:]+):(\\d{1,5})$")
+
         fun parse(input: String): SmbLocation? {
             val parts = input.trim()
                 .replace('\\', '/')
@@ -25,7 +40,9 @@ data class SmbLocation(val host: String, val share: String, val subPath: String)
                 .split('/')
                 .filter { it.isNotBlank() }
             if (parts.size < 2) return null
-            return SmbLocation(parts[0], parts[1], parts.drop(2).joinToString("/"))
+            val hp = HOST_PORT.find(parts[0]) ?: return SmbLocation(parts[0], parts[1], parts.drop(2).joinToString("/"))
+            val port = hp.groupValues[2].toInt().takeIf { it in 1..65535 } ?: return null
+            return SmbLocation(hp.groupValues[1], parts[1], parts.drop(2).joinToString("/"), port)
         }
     }
 }
@@ -55,7 +72,7 @@ class SmbLibrary(private val location: SmbLocation, private val credentials: Smb
     /** Abre la conexión, ejecuta [block] con acceso a la biblioteca y la cierra */
     fun <T> use(block: (LibraryFs) -> T): T {
         try {
-            client.connect(location.host).use { conn ->
+            connect().forceClosing { conn ->
                 val session = conn.authenticate(credentials.toAuth())
                 (session.connectShare(location.share) as DiskShare).use { share ->
                     val root = location.subPath.replace('/', '\\')
@@ -73,6 +90,58 @@ class SmbLibrary(private val location: SmbLocation, private val credentials: Smb
             client.close()
         }
     }
+
+    private fun connect() = if (location.port != null) client.connect(location.host, location.port) else client.connect(location.host)
+
+    /**
+     * Copia [relPath] (relativa a la biblioteca) al final de [dest] desde el byte [offset]: así se reanuda un .part.
+     * [onChunk] recibe los bytes escritos en total y devuelve false para parar (pausa o cancelación).
+     * Devuelve el tamaño del archivo en el PC si se copió entero, o null si se paró.
+     * Se lee justo hasta ese tamaño: algunos servidores no contestan a una lectura más allá del final.
+     */
+    fun download(relPath: String, dest: File, offset: Long, onChunk: (Long) -> Boolean): Long? {
+        try {
+            connect().forceClosing { conn ->
+                val session = conn.authenticate(credentials.toAuth())
+                (session.connectShare(location.share) as DiskShare).use { share ->
+                    val path = join(location.subPath.replace('/', '\\'), relPath)
+                    share.openFile(path, EnumSet.of(AccessMask.GENERIC_READ), null, SMB2ShareAccess.ALL, SMB2CreateDisposition.FILE_OPEN, null).use { file ->
+                        val size = file.getFileInformation(FileStandardInformation::class.java).endOfFile
+                        if (offset >= size) return size.also { if (offset > size) throw IOException("El archivo del PC ha cambiado") }
+                        // lecturas una a una y nunca más allá del final (sin la lectura anticipada de file.inputStream,
+                        // que pide un bloque de más que algunos servidores no contestan y deja colgado el cierre)
+                        val chunk = conn.connectionContext.negotiatedProtocol.maxReadSize.coerceIn(64 * 1024, 4 shl 20)
+                        val buf = ByteArray(chunk)
+                        FileOutputStream(dest, offset > 0).use { out ->
+                            var total = offset
+                            while (total < size) {
+                                val n = file.read(buf, total, 0, minOf(chunk.toLong(), size - total).toInt())
+                                if (n <= 0) break
+                                out.write(buf, 0, n)
+                                total += n
+                                if (!onChunk(total)) return null
+                            }
+                            out.fd.sync()
+                            return size
+                        }
+                    }
+                }
+            }
+        } catch (e: UnknownHostException) {
+            throw IOException("No se encuentra el equipo \"${location.host}\" en la red.")
+        } catch (e: SMBApiException) {
+            throw IOException(explain(e), e)
+        } finally {
+            client.close()
+        }
+    }
+
+    /**
+     * Al terminar se corta la conexión sin despedirse (logoff): hay servidores SMB que no contestan
+     * a la despedida y el escaneo o la descarga se quedarían esperando hasta que venza el tiempo.
+     */
+    private inline fun <T> com.hierynomus.smbj.connection.Connection.forceClosing(block: (com.hierynomus.smbj.connection.Connection) -> T): T =
+        try { block(this) } finally { runCatching { close(true) } }
 
     private fun join(root: String, rel: String): String {
         val r = rel.replace('/', '\\')
@@ -101,6 +170,8 @@ class SmbLibrary(private val location: SmbLocation, private val credentials: Smb
                 "Usuario o contraseña incorrectos, o sin permiso para entrar en \"${location.share}\""
             status.contains("BAD_NETWORK_NAME") -> "El equipo no comparte ninguna carpeta llamada \"${location.share}\""
             status.contains("ACCOUNT") -> "La cuenta de Windows no puede entrar por red ($status)"
+            status.contains("OBJECT_NAME_NOT_FOUND") || status.contains("OBJECT_PATH_NOT_FOUND") ->
+                "El archivo ya no está en la carpeta compartida del PC"
             else -> "Error de red: $status"
         }
     }
@@ -118,7 +189,7 @@ class SmbLibrary(private val location: SmbLocation, private val credentials: Smb
             val segments = (listOf(location.share) + location.subPath.split('/') + relPath.split('/'))
                 .filter { it.isNotEmpty() }
                 .joinToString("/") { Uri.encode(it) }
-            return Uri.parse("smb://$auth${location.host}/$segments")
+            return Uri.parse("smb://$auth${location.authority}/$segments")
         }
     }
 }

@@ -63,7 +63,9 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import com.cinelocal.android.Nav
+import com.cinelocal.android.core.DlSummary
 import com.cinelocal.android.core.LbEntry
+import com.cinelocal.android.core.videoPaths
 import com.cinelocal.android.core.Title
 import com.cinelocal.android.repo
 import com.cinelocal.android.ui.Sort
@@ -80,6 +82,7 @@ import com.cinelocal.android.ui.watchlistEntries
 import com.cinelocal.android.ui.seriesState
 import com.cinelocal.android.ui.sortTitles
 import com.cinelocal.android.ui.components.ActionIcon
+import com.cinelocal.android.ui.components.rememberDlIndex
 import com.cinelocal.android.ui.components.Artwork
 import com.cinelocal.android.ui.components.EmptyState
 import com.cinelocal.android.ui.components.HomeSkeleton
@@ -92,6 +95,7 @@ import com.cinelocal.android.ui.components.RankedPosterCard
 import com.cinelocal.android.ui.components.ScanRefreshBox
 import com.cinelocal.android.ui.components.WideCard
 import com.cinelocal.android.ui.components.section
+import com.cinelocal.android.ui.theme.BrandGradientV
 import com.cinelocal.android.ui.theme.CL
 import com.cinelocal.android.ui.theme.Dur
 import com.cinelocal.android.ui.theme.rememberMotionEnabled
@@ -102,10 +106,14 @@ private const val HERO_RATIO = 0.72f
 @Composable
 fun HomeScreen(nav: Nav) {
     val repo = LocalContext.current.repo
-    val titles by repo.titles.collectAsStateWithLifecycle()
+    val allTitles by repo.titles.collectAsStateWithLifecycle()
     val progress by repo.progress.flow.collectAsStateWithLifecycle()
     val user by repo.userState.flow.collectAsStateWithLifecycle()
     val settings by repo.settings.flow.collectAsStateWithLifecycle()
+    // sin conexión con el PC se puede filtrar a lo descargado (aviso de la cabecera)
+    val onlyDownloaded by repo.onlyDownloaded.collectAsStateWithLifecycle()
+    val dlIndex by rememberDlIndex()
+    val titles = if (onlyDownloaded) allTitles.filter { DlSummary.of(videoPaths(it.item), dlIndex).done > 0 } else allTitles
     val library by repo.library.flow.collectAsStateWithLifecycle()
     val status by repo.status.collectAsStateWithLifecycle()
     val lbById by repo.lbById.collectAsStateWithLifecycle()
@@ -120,6 +128,17 @@ fun HomeScreen(nav: Nav) {
                 "Escribe la ruta de la carpeta compartida del PC con tus películas y series, por ejemplo \\\\MI-PC\\Peliculas.",
                 "Ir a Ajustes", onAction = nav::settings
             )
+        }
+        return
+    }
+    if (titles.isEmpty() && onlyDownloaded) {
+        Column {
+            MainTopBar(nav)
+            EmptyState(
+                "Nada descargado",
+                "Descarga películas o episodios desde su ficha cuando estés conectado al PC para verlos sin conexión.",
+                "Ver toda la biblioteca"
+            ) { repo.onlyDownloaded.value = false }
         }
         return
     }
@@ -257,9 +276,9 @@ private fun Hero(t: Title, fav: Boolean, listState: LazyListState, nav: Nav, onT
                 scaleX = kb; scaleY = kb
             }
         ) { Artwork(m?.backdrop, t.name, null, Modifier.fillMaxSize()) }
-        Box(Modifier.fillMaxSize().background(Brush.verticalGradient(0f to Color(0x990B0A09), 0.22f to Color.Transparent)))
-        Box(Modifier.fillMaxSize().background(Brush.verticalGradient(0.42f to Color.Transparent, 0.78f to Color(0xB30B0A09), 1f to CL.bg)))
-        Box(Modifier.fillMaxSize().background(Brush.horizontalGradient(0f to Color(0x400B0A09), 0.5f to Color.Transparent, 1f to Color(0x400B0A09))))
+        Box(Modifier.fillMaxSize().background(Brush.verticalGradient(0f to CL.veil(0.6f), 0.22f to Color.Transparent)))
+        Box(Modifier.fillMaxSize().background(Brush.verticalGradient(0.42f to Color.Transparent, 0.78f to CL.veil(0.7f), 1f to CL.bg)))
+        Box(Modifier.fillMaxSize().background(Brush.horizontalGradient(0f to CL.veil(0.25f), 0.5f to Color.Transparent, 1f to CL.veil(0.25f))))
 
         Column(
             Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(start = 24.dp, end = 24.dp, bottom = 24.dp)
@@ -268,7 +287,7 @@ private fun Hero(t: Title, fav: Boolean, listState: LazyListState, nav: Nav, onT
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.width(2.dp).height(10.dp).background(CL.accent))
+                Box(Modifier.width(2.dp).height(10.dp).background(BrandGradientV))
                 val kind = if (t.isMovie) listOfNotNull("PELÍCULA", t.year?.toString())
                 else listOf("SERIE", t.item.seasons.size.let { if (it == 1) "1 TEMPORADA" else "$it TEMPORADAS" })
                 Text(kind.joinToString(" · "), Modifier.padding(start = 8.dp), style = MaterialTheme.typography.labelSmall, color = CL.text2)

@@ -30,13 +30,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
+import com.cinelocal.android.ui.theme.BrandGradientH
 import com.cinelocal.android.ui.theme.CL
 import com.cinelocal.android.ui.theme.Dur
 import com.cinelocal.android.ui.theme.EaseEmphasized
 
 data class NavTab(val route: String, val label: String, val icon: ImageVector, val iconSelected: ImageVector)
 
-/** Barra inferior propia: iconos contorneados/rellenos y una barra ámbar de 16×2 dp que se desliza */
+/** Barra inferior propia: iconos contorneados/rellenos y una barra de 16×2 dp con el degradado de la marca que se desliza */
 @Composable
 fun BottomNav(tabs: List<NavTab>, selected: String?, onSelect: (NavTab) -> Unit) {
     Column(Modifier.fillMaxWidth().background(CL.bg.copy(alpha = .96f)).windowInsetsPadding(WindowInsets.navigationBars)) {
@@ -61,7 +62,7 @@ fun BottomNav(tabs: List<NavTab>, selected: String?, onSelect: (NavTab) -> Unit)
                     }
                 }
             }
-            Box(Modifier.offset(x = x).width(16.dp).height(2.dp).background(CL.accent))
+            Box(Modifier.offset(x = x).width(16.dp).height(2.dp).background(BrandGradientH))
         }
     }
 }

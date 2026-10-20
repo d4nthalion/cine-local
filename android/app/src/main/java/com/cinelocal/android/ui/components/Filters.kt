@@ -42,12 +42,13 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import com.cinelocal.android.ui.theme.BrandGradientH
 import com.cinelocal.android.ui.theme.CL
 import com.cinelocal.android.ui.theme.Dur
 import com.cinelocal.android.ui.theme.EaseEmphasized
 import com.cinelocal.android.ui.theme.TNUM
 
-/** Pestañas de texto con una barra ámbar de 2 dp que se desliza bajo la elegida */
+/** Pestañas de texto con una barra de 2 dp con el degradado de la marca que se desliza bajo la elegida */
 @Composable
 fun TextTabs(options: List<String>, selected: Int, onSelect: (Int) -> Unit, modifier: Modifier = Modifier, counts: List<Int>? = null) {
     val density = LocalDensity.current
@@ -80,7 +81,7 @@ fun TextTabs(options: List<String>, selected: Int, onSelect: (Int) -> Unit, modi
             }
         }
         if (target != null) Box(
-            Modifier.align(Alignment.BottomStart).padding(bottom = 6.dp).offset(x = x).width(w).height(2.dp).background(CL.accent)
+            Modifier.align(Alignment.BottomStart).padding(bottom = 6.dp).offset(x = x).width(w).height(2.dp).background(BrandGradientH)
         )
     }
 }
@@ -100,7 +101,7 @@ fun AppMenu(expanded: Boolean, onDismiss: () -> Unit, content: @Composable Colum
     }
 }
 
-/** Opción de menú: texto en bodyMedium y ✓ ámbar en la elegida */
+/** Opción de menú: texto en bodyMedium y ✓ violeta en la elegida */
 @Composable
 fun AppMenuItem(text: String, selected: Boolean? = null, onClick: () -> Unit) {
     Row(

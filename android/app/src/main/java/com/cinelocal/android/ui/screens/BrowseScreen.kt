@@ -33,7 +33,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.cinelocal.android.Nav
+import com.cinelocal.android.core.DlSummary
 import com.cinelocal.android.core.Progress
+import com.cinelocal.android.core.videoPaths
 import com.cinelocal.android.core.Title
 import com.cinelocal.android.repo
 import com.cinelocal.android.ui.Sort
@@ -43,13 +45,14 @@ import com.cinelocal.android.ui.isWatched
 import com.cinelocal.android.ui.lbOf
 import com.cinelocal.android.ui.sortTitles
 import com.cinelocal.android.ui.components.EmptyState
+import com.cinelocal.android.ui.components.rememberDlIndex
 import com.cinelocal.android.ui.components.MainTopBar
 import com.cinelocal.android.ui.components.PosterCard
 import com.cinelocal.android.ui.theme.CL
 
 enum class BrowseKind(val title: String) { MOVIES("Películas"), SERIES("Series"), LIST("Mi lista") }
 
-private enum class Seen(val label: String) { ALL("Todas"), UNSEEN("Sin ver"), SEEN("Vistas") }
+private enum class Seen(val label: String) { ALL("Todas"), UNSEEN("Sin ver"), SEEN("Vistas"), DOWNLOADED("Descargadas") }
 
 @Composable
 fun BrowseScreen(kind: BrowseKind, nav: Nav) {
@@ -58,6 +61,9 @@ fun BrowseScreen(kind: BrowseKind, nav: Nav) {
     val progress by repo.progress.flow.collectAsStateWithLifecycle()
     val user by repo.userState.flow.collectAsStateWithLifecycle()
     val lbById by repo.lbById.collectAsStateWithLifecycle()
+    val onlyDownloaded by repo.onlyDownloaded.collectAsStateWithLifecycle()
+    val dlIndex by rememberDlIndex()
+    fun downloaded(t: Title) = DlSummary.of(videoPaths(t.item), dlIndex).done > 0
 
     // En Mi lista, "Añadido recientemente" respeta el orden en que se añadieron a la lista
     var sort by rememberSaveable { mutableStateOf(Sort.ADDED) }
@@ -68,7 +74,9 @@ fun BrowseScreen(kind: BrowseKind, nav: Nav) {
         BrowseKind.MOVIES -> titles.filter { it.isMovie }
         BrowseKind.SERIES -> titles.filter { !it.isMovie }
         BrowseKind.LIST -> user.favorites.mapNotNull { id -> titles.firstOrNull { it.id == id } }
-    }
+    }.let { l -> if (onlyDownloaded) l.filter(::downloaded) else l }
+    // "Descargadas" solo aparece si hay algo descargado (o si ya está elegida)
+    val seenTabs = Seen.entries.filter { it != Seen.DOWNLOADED || seen == it || base.any(::downloaded) }
     val genres = allGenres(base).map { it.first }
     val shown = base
         .filter { genre == null || genre in it.meta?.genres.orEmpty() }
@@ -77,6 +85,7 @@ fun BrowseScreen(kind: BrowseKind, nav: Nav) {
                 Seen.ALL -> true
                 Seen.SEEN -> isWatched(it, progress)
                 Seen.UNSEEN -> !isWatched(it, progress)
+                Seen.DOWNLOADED -> downloaded(it)
             }
         }
         .let { if (kind == BrowseKind.LIST && sort == Sort.ADDED) it else sortTitles(it, sort, lbById) }
@@ -87,12 +96,14 @@ fun BrowseScreen(kind: BrowseKind, nav: Nav) {
         MainTopBar(nav, compactLogo = true)
         ScreenTitle(kind.title, base.size)
         if (base.isEmpty()) {
-            if (kind == BrowseKind.LIST) EmptyState("Mi lista está vacía", "Añade películas y series desde su ficha con el botón «Mi lista».")
+            if (onlyDownloaded) EmptyState("Nada descargado", "No tienes ${kind.title.lowercase()} descargadas para ver sin conexión.", "Ver todo") {
+                repo.onlyDownloaded.value = false
+            } else if (kind == BrowseKind.LIST) EmptyState("Mi lista está vacía", "Añade películas y series desde su ficha con el botón «Mi lista».")
             else EmptyState("Nada por aquí", "No hay ${kind.title.lowercase()} en la biblioteca.")
             return
         }
         TextTabs(
-            Seen.entries.map { it.label }, seen.ordinal, { seen = Seen.entries[it] },
+            seenTabs.map { it.label }, seenTabs.indexOf(seen).coerceAtLeast(0), { seen = seenTabs[it] },
             Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp)
         )
         Row(

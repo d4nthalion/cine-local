@@ -68,6 +68,7 @@ import com.cinelocal.android.ui.theme.EaseExit
 import com.cinelocal.android.ui.screens.BrowseKind
 import com.cinelocal.android.ui.screens.BrowseScreen
 import com.cinelocal.android.ui.screens.DetailScreen
+import com.cinelocal.android.ui.screens.DownloadsScreen
 import com.cinelocal.android.ui.screens.HomeScreen
 import com.cinelocal.android.ui.screens.SearchScreen
 import com.cinelocal.android.ui.screens.SettingsScreen
@@ -84,9 +85,30 @@ class MainActivity : ComponentActivity() {
             navigationBarStyle = SystemBarStyle.dark(CL.bg.toArgb())
         )
         // Al abrir: mostrar lo conocido y volver a escanear la carpeta de red
-        if (savedInstanceState == null) { repo.scan(); repo.autoSyncLetterboxd() }
+        if (savedInstanceState == null) {
+            repo.scan()
+            repo.autoSyncLetterboxd()
+            repo.downloads.resumeOnLaunch()   // descargas que quedaron a medias al cerrarse la app
+            route(intent)
+        }
         repo.updater.autoCheck()   // actualizaciones en GitHub: una vez por proceso, como mucho cada 6 h
         setContent { CineLocalTheme { App() } }
+    }
+
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        route(intent)
+    }
+
+    /** La notificación de descargas abre la pantalla de Descargas */
+    private fun route(intent: android.content.Intent?) {
+        intent?.getStringExtra(EXTRA_ROUTE)?.let { pendingRoute.value = it }
+        intent?.removeExtra(EXTRA_ROUTE)
+    }
+
+    companion object {
+        const val EXTRA_ROUTE = "route"
+        val pendingRoute = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
     }
 
     override fun onResume() {
@@ -107,6 +129,7 @@ class Nav(private val nav: NavHostController, private val ctx: android.content.C
     fun search() = nav.navigate("search")
     fun settings() = nav.navigate("settings")
     fun watchlist() = nav.navigate("watchlist")
+    fun downloads() = nav.navigate("downloads") { launchSingleTop = true }
     fun open(url: String) = ctx.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url)))
     fun tab(route: String) = nav.navigate(route) {
         popUpTo(nav.graph.findStartDestination().id) { saveState = true }
@@ -138,6 +161,13 @@ private fun App() {
     val backStack by navController.currentBackStackEntryAsState()
     val route = backStack?.destination?.route
 
+    // abrir una pantalla pedida desde fuera (notificación de descargas)
+    val pending by MainActivity.pendingRoute.collectAsStateWithLifecycle()
+    LaunchedEffect(pending) {
+        if (pending == "downloads") nav.downloads()
+        MainActivity.pendingRoute.value = null
+    }
+
     LaunchedEffect(status.message) {
         status.message?.let {
             snackbar.showSnackbar(it)
@@ -165,7 +195,7 @@ private fun App() {
             SnackbarHost(snackbar) { data ->
                 Snackbar(
                     data, shape = RoundedCornerShape(4.dp), containerColor = CL.bg4, contentColor = CL.text,
-                    actionColor = CL.accent, dismissActionContentColor = CL.text2
+                    actionColor = CL.accentText, dismissActionContentColor = CL.text2
                 )
             }
         },
@@ -201,6 +231,7 @@ private fun App() {
             composable("search") { SearchScreen(nav) }
             composable("settings") { SettingsScreen(nav) }
             composable("watchlist") { WatchlistScreen(nav) }
+            composable("downloads") { DownloadsScreen(nav) }
             composable("detail/{id}") { entry -> DetailScreen(entry.arguments?.getString("id").orEmpty(), nav) }
         }
     }

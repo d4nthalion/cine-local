@@ -66,6 +66,18 @@ class Repository(private val context: Context) {
 
     fun title(id: String): Title? = titles.value.firstOrNull { it.id == id }
 
+    // ---------------------------------------------------------------- descargas y modo sin conexión
+
+    /** Descargas para ver sin el PC (cola, servicio y archivos locales) */
+    val downloads = DownloadManager(context, scope, dir, { settings.value }) { SmbLibrary(location(), credentials()) }
+
+    /** El último escaneo no pudo leer la carpeta compartida: solo se puede ver lo descargado */
+    val offline: StateFlow<Boolean> = library.flow.map { it.error != null && it.items.isNotEmpty() }
+        .stateIn(scope, SharingStarted.Eagerly, false)
+
+    /** Filtro rápido "solo lo descargado" de Inicio, Películas, Series y Mi lista */
+    val onlyDownloaded = MutableStateFlow(false)
+
     // ---------------------------------------------------------------- Letterboxd
 
     val letterboxd = LetterboxdService(
@@ -157,6 +169,7 @@ class Repository(private val context: Context) {
 
     suspend fun testTmdb(key: String) = withContext(Dispatchers.IO) { Tmdb(key).test() }
 
+    /** Dirección por SMB para LibVLC. Lanza IOException si la ruta de red de Ajustes no es válida. */
     fun playbackUri(relPath: String): Uri = SmbLibrary.playbackUri(location(), credentials(), relPath)
 
     // ---------------------------------------------------------------- escaneo
@@ -172,9 +185,11 @@ class Repository(private val context: Context) {
                     SmbLibrary(location(), credentials()).use { LibraryScanner.scan(it) }
                 }
                 library.set(LibraryData(items, System.currentTimeMillis(), null))
+                onlyDownloaded.value = false
             } catch (e: Exception) {
                 // Si el equipo no está encendido, se conserva la biblioteca conocida
-                val msg = e.message ?: e.javaClass.simpleName
+                // errores de red en español ("failed to connect … ENETUNREACH" no le dice nada a nadie)
+                val msg = DownloadManager.friendly(e)
                 library.update { it.copy(error = msg) }
                 _status.update { it.copy(message = msg) }
             } finally {
@@ -307,6 +322,6 @@ class Repository(private val context: Context) {
     }
 
     fun flushAll() {
-        for (s in listOf(settings, library, metadata, progress, userState, letterboxd.store, updater.memory)) s.flush()
+        for (s in listOf(settings, library, metadata, progress, userState, letterboxd.store, updater.memory, downloads.index)) s.flush()
     }
 }

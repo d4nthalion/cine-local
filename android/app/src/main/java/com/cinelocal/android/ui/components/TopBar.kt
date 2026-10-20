@@ -18,10 +18,13 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.ArrowDownward
+import androidx.compose.material.icons.rounded.DownloadDone
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -31,15 +34,19 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.cinelocal.android.Nav
 import com.cinelocal.android.repo
+import com.cinelocal.android.ui.theme.BrandGradientH
 import com.cinelocal.android.ui.theme.CL
 
 /**
- * Cabecera de las pantallas principales: logotipo, escanear, buscar y ajustes.
+ * Cabecera de las pantallas principales: logotipo, escanear, buscar, descargas (si hay alguna) y ajustes.
+ * Debajo, el aviso de "sin conexión con el PC" cuando no se pudo leer la carpeta compartida.
  * bgAlpha: 0 = transparente sobre el destacado, 1 = fondo bg al 94 %.
  */
 @Composable
@@ -62,8 +69,10 @@ fun MainTopBar(nav: Nav, bgAlpha: Float = 1f, compactLogo: Boolean = false) {
                 BarIcon(Icons.Rounded.Refresh, "Volver a escanear") { repo.scan() }
             }
             BarIcon(Icons.Rounded.Search, "Buscar", onClick = nav::search)
+            DownloadsIcon(nav)
             BarIcon(Icons.Rounded.Settings, "Ajustes", onClick = nav::settings)
         }
+        OfflineBanner()
         if (status.metaTotal > 0) {
             LinearProgressIndicator(
                 progress = { status.metaDone.toFloat() / status.metaTotal },
@@ -71,6 +80,24 @@ fun MainTopBar(nav: Nav, bgAlpha: Float = 1f, compactLogo: Boolean = false) {
                 color = CL.accent, trackColor = Color.Transparent, gapSize = 0.dp, drawStopIndicator = {}
             )
         }
+    }
+}
+
+/** Acceso a Descargas: solo si hay alguna; con un anillo de progreso mientras se descarga */
+@Composable
+private fun DownloadsIcon(nav: Nav) {
+    val index by rememberDlIndex()
+    if (index.files.isEmpty()) return
+    val pending = index.pending
+    if (pending.isEmpty()) {
+        BarIcon(Icons.Rounded.DownloadDone, "Descargas", onClick = nav::downloads)
+        return
+    }
+    val total = pending.sumOf { it.size }
+    val frac = if (total > 0) (pending.sumOf { it.done }.toFloat() / total) else 0f
+    Box(Modifier.size(48.dp).tapFade(onClick = nav::downloads).semantics { contentDescription = "Descargas en curso" }, contentAlignment = Alignment.Center) {
+        DownloadRing(frac, 26.dp)
+        Icon(Icons.Rounded.ArrowDownward, null, Modifier.size(14.dp), tint = CL.text)
     }
 }
 
@@ -104,7 +131,7 @@ fun EmptyState(
 ) {
     Column(Modifier.fillMaxSize().padding(horizontal = 24.dp)) {
         Spacer(Modifier.weight(0.38f))
-        Box(Modifier.width(24.dp).height(2.dp).background(if (error) CL.error else CL.accent))
+        Box(Modifier.width(24.dp).height(2.dp).then(if (error) Modifier.background(CL.error) else Modifier.background(BrandGradientH)))
         Spacer(Modifier.height(16.dp))
         Text(title, style = MaterialTheme.typography.headlineMedium, color = CL.text)
         if (text.isNotEmpty()) Text(

@@ -33,7 +33,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import com.cinelocal.android.ui.theme.CL
 
-/** Campo de búsqueda propio: bg3, lupa, ✕ para borrar y línea ámbar de foco que crece en 200 ms */
+/** Campo de búsqueda propio: bg3, lupa, ✕ para borrar y línea violeta de foco que crece en 200 ms */
 @Composable
 fun SearchField(
     value: String, onChange: (String) -> Unit, modifier: Modifier = Modifier,

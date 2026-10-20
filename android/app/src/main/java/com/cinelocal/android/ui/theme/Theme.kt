@@ -6,6 +6,7 @@ import androidx.compose.material3.Shapes
 import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.ExperimentalTextApi
 import androidx.compose.ui.text.PlatformTextStyle
@@ -21,37 +22,67 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.cinelocal.android.R
 
-/** "Sala oscura": negro cálido, un único acento ámbar de tungsteno y el botón principal "papel" */
+/**
+ * "Sala oscura" con la paleta del escritorio: negro frío, acento violeta y el degradado
+ * violeta→rosa de la marca (el mismo --grad de styles.css) en logotipo, progreso y botones de acción.
+ * El botón principal (Reproducir) es blanco, como el .btn-primary del escritorio.
+ */
 object CL {
-    // capas (negro cálido, nada azulado)
-    val bg = Color(0xFF0B0A09)
-    val bg2 = Color(0xFF141312)
-    val bg3 = Color(0xFF1D1B19)
-    val bg4 = Color(0xFF282523)
-    val scrim = Color(0xFF0B0A09)
+    // capas (negro frío, el --bg/--bg-2/--bg-3 del escritorio; bg4 sigue la progresión)
+    val bg = Color(0xFF08080C)
+    val bg2 = Color(0xFF101018)
+    val bg3 = Color(0xFF191924)
+    val bg4 = Color(0xFF23232F)
+    val scrim = Color(0xFF08080C)
     // líneas
-    val line = Color(0x14FFFFFF)
+    val line = Color(0x17FFFFFF)
     val lineStrong = Color(0x29FFFFFF)
     // texto
-    val text = Color(0xFFF3EFE8)
-    val text2 = Color(0xFFB9B2A8)
-    val text3 = Color(0xFF857E75)
-    val text4 = Color(0xFF55504A)
-    // el acento
-    val accent = Color(0xFFE8A13A)
-    val accentDim = Color(0x33E8A13A)
-    val onAccent = Color(0xFF1A1206)
-    // botón principal
-    val paper = Color(0xFFF3EFE8)
-    val onPaper = Color(0xFF0B0A09)
+    val text = Color(0xFFF4F4F7)
+    val text2 = Color(0xFFB4B4C3)
+    val text3 = Color(0xFF7A7A8C)
+    val text4 = Color(0xFF4E4E5E)
+    // el acento: violeta plano para indicadores, foco, selección y relleno de controles
+    val accent = Color(0xFFA855F7)
+    val accentDim = Color(0x33A855F7)
+    val onAccent = Color(0xFFFFFFFF)
+    // violeta más claro para texto en acento (contraste AA también sobre bg4)
+    val accentText = Color(0xFFC084FC)
+    // segundo color de la marca
+    val accent2 = Color(0xFFEC4899)
+    // extremos del degradado de la marca (--grad: #8b5cf6 → #ec4899)
+    val gradStart = Color(0xFF8B5CF6)
+    val gradEnd = Color(0xFFEC4899)
+    // versión más honda del degradado para rellenos con texto blanco encima (AA ≥ 4.5:1 en todo el recorrido)
+    val gradStrongStart = Color(0xFF7C3AED)
+    val gradStrongEnd = Color(0xFFDB2777)
+    // botón principal: blanco con texto tinta (.btn-primary del escritorio)
+    val paper = Color(0xFFFFFFFF)
+    val paperPressed = Color(0xFFE4E4EA)
+    val onPaper = Color(0xFF0A0A0F)
+    // nota de TMDB (la estrella amarilla del .rating del escritorio)
+    val star = Color(0xFFFDE047)
     // estados
-    val error = Color(0xFFE5584F)
-    val ok = Color(0xFF8FBF8A)
+    val error = Color(0xFFF87171)
+    val ok = Color(0xFF22C55E)
+    // velos sobre imágenes (el bg con alfa)
+    fun veil(alpha: Float) = bg.copy(alpha = alpha)
+    // tonos de los carteles de relleno (sin imagen): oscuros, fríos, con un punto de color
+    val inks = listOf(Color(0xFF1C1A2B), Color(0xFF17202B), Color(0xFF261A28), Color(0xFF1A2224), Color(0xFF221C2E))
     // Letterboxd (colores de marca)
     val lbGreen = Color(0xFF00E054)
     val lbOrange = Color(0xFFFF8000)
     val lbBlue = Color(0xFF40BCF4)
 }
+
+/** El degradado de la marca, en diagonal como el linear-gradient(135deg) del escritorio */
+val BrandGradient: Brush = Brush.linearGradient(listOf(CL.gradStart, CL.gradEnd))
+/** El degradado en horizontal, para barras finas (progreso, indicadores) */
+val BrandGradientH: Brush = Brush.horizontalGradient(listOf(CL.gradStart, CL.gradEnd))
+/** El degradado en vertical, para filetes verticales */
+val BrandGradientV: Brush = Brush.verticalGradient(listOf(CL.gradStart, CL.gradEnd))
+/** Degradado hondo para botones con texto blanco */
+val BrandGradientStrong: Brush = Brush.linearGradient(listOf(CL.gradStrongStart, CL.gradStrongEnd))
 
 // Archivo es una fuente variable (ejes wght y wdth): cada familia fija la anchura
 // ExtraCondensed = 62, SemiCondensed = 87.5, normal = 100

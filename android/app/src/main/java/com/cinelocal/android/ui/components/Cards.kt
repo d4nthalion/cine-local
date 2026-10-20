@@ -58,6 +58,8 @@ import coil.request.ImageRequest
 import com.cinelocal.android.core.LbEntry
 import com.cinelocal.android.core.Letterboxd
 import com.cinelocal.android.core.Title
+import com.cinelocal.android.ui.theme.BrandGradient
+import com.cinelocal.android.ui.theme.BrandGradientH
 import com.cinelocal.android.ui.theme.CL
 import com.cinelocal.android.ui.theme.Display
 import com.cinelocal.android.ui.theme.TNUM
@@ -71,7 +73,7 @@ fun hue(s: String): Float {
     return (h % 360).toFloat()
 }
 
-private val INKS = listOf(Color(0xFF1E1B18), Color(0xFF1A1D1F), Color(0xFF201A1C), Color(0xFF1B1E1A), Color(0xFF1F1D17))
+private val INKS = CL.inks
 
 /** Portada provisional tipo cartel, para lo que aún no tiene imagen */
 @Composable
@@ -118,11 +120,11 @@ fun Artwork(
     }
 }
 
-/** Barra de progreso de 3 dp en ámbar */
+/** Barra de progreso de 3 dp con el degradado de la marca (.progress del escritorio) */
 @Composable
 fun ProgressBar(fraction: Float, modifier: Modifier = Modifier) {
     Box(modifier.height(3.dp).background(Color(0x33FFFFFF))) {
-        Box(Modifier.fillMaxWidth(fraction).height(3.dp).background(CL.accent))
+        Box(Modifier.fillMaxWidth(fraction).height(3.dp).background(BrandGradientH))
     }
 }
 
@@ -136,12 +138,12 @@ fun LbDots(size: Dp = 6.dp, gap: Dp = 2.dp, modifier: Modifier = Modifier) {
 
 private fun hasLb(lb: LbEntry?) = lb != null && (lb.film.rating != null || lb.film.liked)
 
-private val lbVeil = Brush.verticalGradient(0.55f to Color.Transparent, 0.8f to Color(0xA60B0A09), 1f to Color(0xF20B0A09))
+private val lbVeil = Brush.verticalGradient(0.55f to Color.Transparent, 0.8f to CL.veil(0.65f), 1f to CL.veil(0.95f))
 
 /** Insignia de "vista": círculo oscuro con ✓, nada de verde */
 @Composable
 private fun WatchedBadge(modifier: Modifier) {
-    Box(modifier.size(20.dp).clip(CircleShape).background(Color(0xB80B0A09)), contentAlignment = Alignment.Center) {
+    Box(modifier.size(20.dp).clip(CircleShape).background(CL.veil(0.72f)), contentAlignment = Alignment.Center) {
         Icon(Icons.Rounded.Check, null, Modifier.size(13.dp), tint = CL.text)
     }
 }
@@ -161,6 +163,7 @@ fun PosterCard(t: Title, watched: Boolean, progress: Float, width: Dp?, lb: LbEn
         Artwork(t.meta?.poster, t.name, listOfNotNull(t.year?.toString(), if (t.isMovie) "Película" else "Serie").joinToString(" · "), Modifier.fillMaxSize())
         if (hasLb(lb)) Box(Modifier.fillMaxSize().background(lbVeil))
         if (watched) WatchedBadge(Modifier.align(Alignment.TopEnd).padding(6.dp))
+        PosterDownloadBadge(t, Modifier.align(Alignment.TopStart).padding(6.dp))
         LbBadge(lb, Modifier.align(Alignment.BottomStart).padding(start = 6.dp, bottom = if (progress > 0f) 11.dp else 6.dp))
         if (progress > 0f) ProgressBar(progress, Modifier.align(Alignment.BottomStart).fillMaxWidth())
     }
@@ -196,8 +199,8 @@ fun MissingCard(e: LbEntry, width: Dp?, requested: Boolean = false, onClick: () 
         if (e.film.watchlist) LbDots(5.dp, 2.dp, Modifier.align(Alignment.TopStart).padding(7.dp))
         Column(Modifier.align(Alignment.BottomStart).fillMaxWidth()) {
             LbBadge(e, Modifier.padding(start = 6.dp, bottom = 5.dp))
-            Box(Modifier.fillMaxWidth().height(22.dp).background(Color(0xE60B0A09)), contentAlignment = Alignment.Center) {
-                Text(if (requested) "PEDIDA" else "NO LA TIENES", style = MaterialTheme.typography.labelSmall, color = if (requested) CL.accent else CL.text2)
+            Box(Modifier.fillMaxWidth().height(22.dp).background(CL.veil(0.9f)), contentAlignment = Alignment.Center) {
+                Text(if (requested) "PEDIDA" else "NO LA TIENES", style = MaterialTheme.typography.labelSmall, color = if (requested) CL.accentText else CL.text2)
             }
         }
     }
@@ -226,7 +229,7 @@ fun WideCard(image: String?, title: String, subtitle: String, badge: String?, pr
     Column(Modifier.width(248.dp).tapScale(0.96f, onClick = onClick).semantics(mergeDescendants = true) {}) {
         Box(Modifier.fillMaxWidth().aspectRatio(16f / 9f).clip(cardShape).posterHairline()) {
             Artwork(image, title, null, Modifier.fillMaxSize(), placeholderSize = 18)
-            Box(Modifier.fillMaxSize().background(Brush.verticalGradient(0.55f to Color.Transparent, 1f to Color(0xCC0B0A09))))
+            Box(Modifier.fillMaxSize().background(Brush.verticalGradient(0.55f to Color.Transparent, 1f to CL.veil(0.8f))))
             Row(
                 Modifier.align(Alignment.BottomStart).fillMaxWidth().padding(start = 10.dp, end = 10.dp, bottom = 12.dp),
                 verticalAlignment = Alignment.CenterVertically
@@ -249,7 +252,7 @@ fun WideCard(image: String?, title: String, subtitle: String, badge: String?, pr
 @Composable
 fun PlayRing(size: Dp, icon: Dp, modifier: Modifier = Modifier) {
     Box(
-        modifier.size(size).clip(CircleShape).background(Color(0x660B0A09)).border(1.5.dp, Color(0xE6F3EFE8), CircleShape),
+        modifier.size(size).clip(CircleShape).background(CL.veil(0.4f)).border(1.5.dp, CL.text.copy(alpha = .9f), CircleShape),
         contentAlignment = Alignment.Center
     ) { Icon(Icons.Rounded.PlayArrow, null, Modifier.size(icon), tint = CL.text) }
 }
@@ -283,12 +286,13 @@ fun LazyListScope.section(
     }
 }
 
-/** Logotipo "CINELOCAL": CINE en hueso y LOCAL en ámbar */
+/** Logotipo "CINELOCAL": CINE en blanco y LOCAL con el degradado de la marca, como en el escritorio */
 @Composable
 fun BrandLogo(modifier: Modifier = Modifier, small: Boolean = false) {
     Row(modifier.semantics(mergeDescendants = true) { contentDescription = "CineLocal" }) {
         val st = if (small) MaterialTheme.typography.labelSmall else MaterialTheme.typography.headlineSmall
         Text("CINE", style = st, color = if (small) CL.text3 else CL.text)
-        Text("LOCAL", style = st, color = if (small) CL.text3 else CL.accent)
+        if (small) Text("LOCAL", style = st, color = CL.text3)
+        else Text("LOCAL", style = st.copy(brush = BrandGradient))
     }
 }

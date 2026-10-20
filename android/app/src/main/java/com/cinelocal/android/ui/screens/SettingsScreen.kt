@@ -45,6 +45,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -66,6 +67,7 @@ import com.cinelocal.android.Nav
 import com.cinelocal.android.core.Languages
 import com.cinelocal.android.core.Letterboxd
 import com.cinelocal.android.core.Settings
+import com.cinelocal.android.core.Space
 import com.cinelocal.android.data.Ntfy
 import com.cinelocal.android.data.UpdatePhase
 import com.cinelocal.android.repo
@@ -162,6 +164,8 @@ fun SettingsScreen(nav: Nav) {
                 }
             }
 
+            DownloadsSection(s, onChange = { s = it }, open = nav::downloads)
+
             LetterboxdSection(s, onChange = { s = it }, saveFirst = { if (s != repo.settings.value) repo.saveSettings(s) })
 
             Header("Peticiones de descarga · ntfy")
@@ -213,6 +217,43 @@ fun SettingsScreen(nav: Nav) {
             }
         }
     }
+}
+
+/** Descargas para ver sin conexión: solo con Wi-Fi y acceso a la pantalla de Descargas con lo que ocupan */
+@Composable
+private fun DownloadsSection(s: Settings, onChange: (Settings) -> Unit, open: () -> Unit) {
+    val dl = LocalContext.current.repo.downloads
+    val index by dl.index.flow.collectAsStateWithLifecycle()
+    val space by produceState("", index.files.size, index.finished.size) {
+        value = withContext(Dispatchers.IO) { "${Space.fmt(dl.usedBytes())} usados · ${Space.fmt(dl.freeBytes())} libres" }
+    }
+    Header("Descargas")
+    Group {
+        SwitchRow("Descargar solo con Wi-Fi", "Con datos móviles, las descargas esperan a que haya Wi-Fi.", s.downloadWifiOnly) {
+            onChange(s.copy(downloadWifiOnly = it))
+        }
+        Sep()
+        Row(
+            Modifier.fillMaxWidth().heightIn(min = 56.dp).tapRow(onClick = open).padding(start = 16.dp, end = 12.dp, top = 10.dp, bottom = 10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text("Ver descargas", style = MaterialTheme.typography.bodyLarge, color = CL.text)
+                val n = index.finished.size
+                val pending = index.unfinished.size
+                Text(
+                    listOfNotNull(
+                        if (n == 0) "Nada descargado" else if (n == 1) "1 vídeo" else "$n vídeos",
+                        if (pending > 0) "$pending en curso" else null,
+                        space.ifEmpty { null }
+                    ).joinToString(" · "),
+                    Modifier.padding(top = 2.dp), style = MaterialTheme.typography.bodySmall.copy(fontFeatureSettings = TNUM), color = CL.text3
+                )
+            }
+            Icon(Icons.Rounded.ChevronRight, null, Modifier.padding(start = 4.dp).size(18.dp), tint = CL.text3)
+        }
+    }
+    Help("Desde la ficha de una película o serie puedes descargarla al móvil para verla aunque no haya conexión con el PC.")
 }
 
 /** Usuario, sincronización, estado, importación del ZIP y "marcar como vistas" (como Ajustes → Letterboxd en escritorio) */
@@ -351,7 +392,7 @@ private fun UpdatesSection(s: Settings, onChange: (Settings) -> Unit) {
                     val r = release!!
                     Text(
                         "Disponible la ${r.version}" + (if (memory.skipped == r.version) " (omitida)" else ""),
-                        Modifier.weight(1f), style = body, color = CL.accent
+                        Modifier.weight(1f), style = body, color = CL.accentText
                     )
                     Icon(Icons.Rounded.ChevronRight, null, Modifier.size(18.dp), tint = CL.text3)
                 }
@@ -391,7 +432,7 @@ private fun Group(content: @Composable ColumnScope.() -> Unit) {
 @Composable
 private fun Sep() = Box(Modifier.padding(start = 16.dp).fillMaxWidth().height(1.dp).background(CL.line))
 
-/** Campo propio: etiqueta arriba, valor con BasicTextField y línea ámbar con foco */
+/** Campo propio: etiqueta arriba, valor con BasicTextField y línea violeta con foco */
 @Composable
 private fun Field(
     label: String, value: String, placeholder: String,
@@ -446,7 +487,7 @@ private fun Picker(label: String, options: List<Pair<String, String>>, value: St
     }
 }
 
-/** Opción única con ✓ ámbar en la elegida */
+/** Opción única con ✓ violeta en la elegida */
 @Composable
 private fun ChoiceRow(label: String, selected: Boolean, onClick: () -> Unit) {
     Row(
@@ -478,10 +519,10 @@ private fun SwitchRow(title: String, desc: String?, checked: Boolean, onChange: 
     }
 }
 
-/** Fila de acción con aspecto de enlace ámbar; el resultado aparece a la derecha */
+/** Fila de acción con aspecto de enlace violeta; el resultado aparece a la derecha */
 @Composable
 private fun ActionRow(
-    text: String, enabled: Boolean = true, color: Color = CL.accent,
+    text: String, enabled: Boolean = true, color: Color = CL.accentText,
     result: Pair<Boolean, String>? = null, onClick: () -> Unit
 ) {
     Row(

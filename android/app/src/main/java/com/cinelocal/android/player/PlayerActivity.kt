@@ -2,6 +2,7 @@ package com.cinelocal.android.player
 
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -26,9 +27,13 @@ import org.videolan.libvlc.Media
 import org.videolan.libvlc.MediaPlayer
 import org.videolan.libvlc.interfaces.IMedia
 import org.videolan.libvlc.util.VLCVideoLayout
+import java.io.IOException
 
 /** Un elemento de la lista de reproducción (película o episodio) */
 data class PlayItem(val path: String, val title: String, val subtitle: String?, val start: Double, val subs: List<SubFile>)
+
+/** De dónde se reproduce: el archivo descargado (y sus subtítulos descargados) o la carpeta compartida por SMB */
+private class Source(val video: Uri, val subs: List<Uri>, val local: Boolean)
 
 data class Track(val id: Int, val name: String)
 
@@ -43,6 +48,7 @@ class PlayerActivity : ComponentActivity() {
     private var index = 0
     private var tracksApplied = false
     private var pendingStartMs = 0L
+    private var currentLocal = false
 
     // estado que pinta la interfaz
     val state = PlayerUiState()
@@ -136,7 +142,12 @@ class PlayerActivity : ComponentActivity() {
         if (eps.isEmpty()) return emptyList()
         val chosen = episodeId?.let { id -> eps.indexOfFirst { it.id == id } }?.takeIf { it >= 0 }
             ?: eps.indexOf(seriesState(t, repo.progress.value).ep)
-        val list = if (repo.settings.value.autoplayNext) eps.drop(chosen) else listOf(eps[chosen])
+        val dl = repo.downloads
+        // sin conexión con el PC, después del episodio elegido solo se encadenan los descargados
+        val offline = repo.offline.value
+        val list = if (repo.settings.value.autoplayNext) {
+            eps.drop(chosen).filterIndexed { i, e -> i == 0 || !offline || dl.localIfDone(e.path) != null }
+        } else listOf(eps[chosen])
         return list.mapIndexed { i, e ->
             val em = epMeta(t, e)
             PlayItem(
@@ -161,16 +172,37 @@ class PlayerActivity : ComponentActivity() {
         state.buffering = true
         pendingStartMs = (item.start * 1000).toLong()
 
+        val src = try {
+            source(item)
+        } catch (e: IOException) {
+            // p. ej. la ruta de red de Ajustes no es válida: se explica aquí en vez de cerrar la app
+            state.buffering = false
+            state.error = "No se puede abrir el archivo.\n" + (e.message ?: "Revisa la carpeta de red en Ajustes.")
+            player.stop()
+            return
+        }
+        currentLocal = src.local
         val s = repo.settings.value
-        val media = Media(libVlc, repo.playbackUri(item.path)).apply {
+        val media = Media(libVlc, src.video).apply {
             setHWDecoderEnabled(true, false)
             Languages.vlcList(s.audioLang).takeIf { it.isNotEmpty() }?.let { addOption(":audio-language=$it") }
             if (pendingStartMs > 0) addOption(":start-time=${pendingStartMs / 1000.0}")
         }
         player.media = media
         media.release()
-        for (sub in item.subs) player.addSlave(IMedia.Slave.Type.Subtitle, repo.playbackUri(sub.path), false)
+        for (sub in src.subs) player.addSlave(IMedia.Slave.Type.Subtitle, sub, false)
         player.play()
+    }
+
+    /** El archivo descargado si lo está (sin tocar la red); si no, por SMB */
+    private fun source(item: PlayItem): Source {
+        val dl = repo.downloads
+        val local = dl.localIfDone(item.path)
+        if (local != null) {
+            val subs = item.subs.mapNotNull { s -> dl.localFile(s.path).takeIf { it.isFile }?.let(Uri::fromFile) }
+            return Source(Uri.fromFile(local), subs, true)
+        }
+        return Source(repo.playbackUri(item.path), item.subs.map { repo.playbackUri(it.path) }, false)
     }
 
     // ---------------------------------------------------------------- eventos de VLC
@@ -194,7 +226,8 @@ class PlayerActivity : ComponentActivity() {
             }
             MediaPlayer.Event.EncounteredError -> {
                 state.buffering = false
-                state.error = "No se pudo reproducir el archivo.\nComprueba que el PC está encendido y la carpeta compartida accesible."
+                state.error = if (currentLocal) "No se pudo reproducir el archivo descargado.\nPrueba a borrar la descarga y a descargarlo otra vez."
+                else "No se pudo reproducir el archivo.\nComprueba que el PC está encendido y la carpeta compartida accesible."
             }
         }
     }
@@ -221,10 +254,16 @@ class PlayerActivity : ComponentActivity() {
 
         val external = playlist[index].subs
         data class Cand(val id: Int, val pref: Boolean, val forced: Boolean)
+        // los externos aparecen con su nombre de archivo (en local) o como "Track N" (por SMB);
+        // los que no se reconocen por el nombre son las últimas pistas, en el orden en que se añadieron
+        fun byName(d: MediaPlayer.TrackDescription) =
+            external.firstOrNull { d.name?.contains(it.path.substringAfterLast('/').substringBeforeLast('.'), true) == true }
+        val named = subs.mapNotNull(::byName).toSet()
+        val restExt = external.filter { it !in named }
+        val restTracks = subs.filter { byName(it) == null }.takeLast(restExt.size)
         val cands = subs.map { d ->
             val text = langOf(d.id, IMedia.Track.Type.Text, d.name)
-            // los externos aparecen con su nombre de archivo: se usa lo detectado al escanear
-            val ext = external.firstOrNull { d.name?.contains(it.path.substringAfterLast('/').substringBeforeLast('.'), true) == true }
+            val ext = byName(d) ?: restTracks.indexOf(d).takeIf { it >= 0 }?.let { restExt.getOrNull(it + restExt.size - restTracks.size) }
             val pref = if (ext != null) ext.lang == s.subLang else Languages.matches(text, s.subLang)
             Cand(d.id, pref, ext?.forced ?: Languages.isForced(d.name))
         }

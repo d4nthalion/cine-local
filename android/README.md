@@ -10,9 +10,27 @@ Versión para móvil de [CineLocal](../README.md): tus películas y series de la
 * Reproduce con **LibVLC**: MKV, AC3, DTS, subtítulos `.srt`/`.ass` internos o junto al vídeo, audio y subtítulos según el idioma elegido (con el modo *“Sólo si el audio está en otro idioma”*), reanuda donde lo dejaste y pasa al siguiente episodio.
 * Portada con *Continuar viendo*, *Añadido recientemente*, Mi lista, mejor valoradas y filas por género; Películas y Series con orden, filtro vistas/sin ver y géneros; búsqueda por título, reparto, director o género.
 * Si la búsqueda no encuentra nada en la biblioteca, busca la película en **TMDB** (un año al final afina: `dune 2021`) y cada resultado tiene **Pedir descarga** por ntfy, como en la watchlist (`core/OnlineSearch.kt`, con pruebas).
+* **Descargas para ver sin conexión** con el PC: películas, temporadas, series o episodios sueltos (ver abajo).
 * El progreso, Mi lista y las vistas son de cada móvil.
 * **Letterboxd**, igual que en escritorio (ver abajo).
 * **Se actualiza sola** desde las releases de GitHub (ver abajo).
+
+## Ver sin conexión (descargas)
+
+Para ver algo cuando el PC está apagado o fuera de casa, descárgalo antes al móvil desde su ficha:
+
+* **Película:** botón **Descargar · 1,2 GB** bajo *Reproducir*. Mientras baja muestra *Descargando 42 %* y, al terminar, *Descargada*; tocándolo se puede pausar, cancelar o **Eliminar descarga**.
+* **Serie:** *Descargar serie* bajo *Reproducir*, *Descargar temporada* bajo las temporadas y un icono en cada episodio (descargar, anillo de progreso, descargado).
+* **Espacio:** antes de empezar se compara el tamaño (conocido del escaneo) con el espacio libre. Si no cabe, se avisa con *«Necesitas X GB, hay Y GB libres»* y no se descarga; si cabe pero quedaría menos de 1 GB libre, se pide confirmación. El tamaño se muestra siempre.
+* **Cómo descarga:** un servicio en primer plano (`data/DownloadService.kt`) copia por SMB los archivos de uno en uno, con notificación de progreso (*Pausar*, *Cancelar*), aunque se cierre la app. Cada vídeo se copia a `<archivo>.part` y se renombra al terminar; si se corta (PC apagado, app cerrada a la fuerza…), al volver a abrir CineLocal sigue desde donde iba. Los subtítulos externos (`.srt`, `.ass`…) se descargan junto al vídeo. Los cortes de red se reintentan solos (3 veces); si no, queda con el error en español y *Reintentar*.
+* **Solo con Wi-Fi** (por defecto, en *Ajustes → Descargas*): con datos móviles la descarga espera a que haya Wi-Fi.
+* **Notificaciones:** en Android 13 o superior, la primera vez se pide permiso para mostrar el progreso. Si se deniega, las descargas funcionan igual.
+* **Dónde se guardan:** en la carpeta de la app (`Android/data/com.cinelocal.android/files/Movies`), con la misma estructura de carpetas que la biblioteca. No hace falta ningún permiso de almacenamiento y se borran al desinstalar. El estado de cada archivo (en cola, descargando, en pausa, error, descargado) está en `downloads.json`.
+* **Reproducción:** si el vídeo está descargado, el reproductor usa el archivo local y sus subtítulos locales, sin tocar la red; si no, lo lee por SMB como siempre. El progreso y *Continuar viendo* funcionan igual.
+* **Sin conexión con el PC:** si el escaneo no puede leer la carpeta compartida, aparece el aviso *«Sin conexión con el PC · solo puedes ver lo descargado»* con el filtro **Descargadas** (Inicio, Películas, Series y Mi lista). Las tarjetas de lo descargado llevan la insignia *Descargada*; en Películas y Series también hay una pestaña *Descargadas*.
+* **Pantalla Descargas:** desde el icono de la cabecera (aparece cuando hay alguna) o *Ajustes → Descargas → Ver descargas*. Muestra lo que está en curso (pausar, reanudar, cancelar), lo descargado agrupado por título con su tamaño (eliminar) y el espacio usado y libre.
+* **Carátulas:** al pedir una descarga se guardan en la caché de imágenes el póster, el fondo, el logotipo y las imágenes de los episodios, para que se vean sin conexión.
+* La lógica pura (índice y estados, comprobación de espacio, rutas locales, resúmenes) está en `core/Downloads.kt`, con pruebas.
 
 ## Letterboxd
 
@@ -49,6 +67,7 @@ Al abrir, la app mira en GitHub si hay una versión nueva (como mucho una vez ca
 1. En el PC, comparte la carpeta de la biblioteca (clic derecho → *Propiedades → Compartir*, solo lectura basta). La red debe ser **Privada**.
 2. En la app: *Ajustes* → **Carpeta de red** `\\NOMBRE-DEL-PC\Carpeta` (o con la IP, `\\192.168.1.20\Carpeta`), usuario y contraseña de Windows del PC → **Probar conexión**.
    * Cuenta de Microsoft: usuario = correo, contraseña = la de Microsoft (no el PIN).
+   * Si el servidor SMB no usa el puerto 445: `\\EQUIPO:4445\Carpeta` o `smb://equipo:4445/Carpeta`.
    * Sin usuario se entra como invitado (solo si el PC tiene desactivado el *uso compartido con protección por contraseña*).
 3. Pon tu **API key de TMDB** (gratis en themoviedb.org → Ajustes → API) y guarda.
 
@@ -59,7 +78,7 @@ Requisitos: JDK 17 o superior y Android SDK 36 (vale el de Android Studio). Todo
 ```bash
 gradlew assembleDebug        # app/build/outputs/apk/debug/CineLocal-android-<versión>-debug.apk
 gradlew assembleRelease      # app/build/outputs/apk/release/CineLocal-android-<versión>.apk (firmada)
-gradlew testDebugUnitTest    # pruebas del reconocimiento de nombres, del escáner, de Letterboxd y de las actualizaciones
+gradlew testDebugUnitTest    # pruebas del reconocimiento de nombres, de Letterboxd, de las actualizaciones, de las descargas y de las rutas SMB
 gradlew installDebug         # instalar en el móvil conectado por USB (depuración USB activada)
 ```
 
@@ -81,8 +100,8 @@ Para publicar: sube `versionCode` y `versionName` en `app/build.gradle.kts`, com
 | Carpeta | Contenido |
 |---|---|
 | `core/` | Modelos, reconocimiento de nombres, escáner, idiomas y elección de actualizaciones. Sin dependencias de Android (preparado para reutilizar en Android TV). |
-| `data/` | Acceso SMB (smbj), TMDB (OkHttp), Letterboxd (WebView), actualizaciones (`Updater`), almacenamiento JSON y `Repository` (equivale a `main.js`). |
-| `ui/` | Pantallas en Compose: Inicio, Películas/Series/Mi lista, Buscar, Ficha y Ajustes. |
+| `data/` | Acceso SMB (smbj), TMDB (OkHttp), Letterboxd (WebView), actualizaciones (`Updater`), descargas (`DownloadManager` y `DownloadService`), almacenamiento JSON y `Repository` (equivale a `main.js`). |
+| `ui/` | Pantallas en Compose: Inicio, Películas/Series/Mi lista, Buscar, Ficha, Descargas y Ajustes. |
 | `player/` | Reproductor con LibVLC y sus controles. |
 
 Bibliotecas: Compose (BOM 2026.06.01), LibVLC 3.6.5 (LGPL), smbj 0.14.0 + BouncyCastle (para NTLM), OkHttp, Coil y kotlinx.serialization. El APK incluye LibVLC para `arm64-v8a` (móviles) y `x86_64` (emulador).

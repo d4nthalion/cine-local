@@ -65,7 +65,7 @@ fun RequestSheet(e: LbEntry, nav: Nav, onDismiss: () -> Unit) {
         onDismissRequest = onDismiss,
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
         containerColor = CL.bg2,
-        scrimColor = Color(0x990B0A09),
+        scrimColor = CL.veil(0.6f),
         shape = RoundedCornerShape(topStart = 8.dp, topEnd = 8.dp),
         tonalElevation = 0.dp,
         dragHandle = { Box(Modifier.padding(top = 10.dp, bottom = 6.dp).size(32.dp, 3.dp).clip(RoundedCornerShape(2.dp)).background(CL.lineStrong)) }
@@ -126,7 +126,7 @@ fun RequestSheet(e: LbEntry, nav: Nav, onDismiss: () -> Unit) {
                         }
                         Unit
                     }
-                    if (requestedAt == null) PrimaryButton("Pedir descarga", Modifier.fillMaxWidth(), Icons.Rounded.Download, send)
+                    if (requestedAt == null) AccentButton("Pedir descarga", Modifier.fillMaxWidth(), Icons.Rounded.Download, send)
                     else SecondaryButton("Volver a pedirla", Modifier.fillMaxWidth(), Icons.Rounded.Download, onClick = send)
                 }
             }

@@ -41,6 +41,11 @@ import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.ArrowDropDown
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.Download
+import androidx.compose.material.icons.rounded.DownloadDone
+import androidx.compose.material.icons.rounded.Downloading
+import androidx.compose.material.icons.rounded.ErrorOutline
+import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Replay
@@ -81,7 +86,10 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import com.cinelocal.android.Nav
+import com.cinelocal.android.core.DlSummary
+import com.cinelocal.android.core.DownloadIndex
 import com.cinelocal.android.core.Episode
+import com.cinelocal.android.core.Space
 import com.cinelocal.android.core.LbEntry
 import com.cinelocal.android.core.Letterboxd
 import com.cinelocal.android.core.Progress
@@ -99,6 +107,14 @@ import com.cinelocal.android.ui.isWatched
 import com.cinelocal.android.ui.lbOf
 import com.cinelocal.android.ui.seriesState
 import com.cinelocal.android.ui.components.ActionIcon
+import com.cinelocal.android.ui.components.DlActions
+import com.cinelocal.android.ui.components.DlMenuItems
+import com.cinelocal.android.ui.components.DlTarget
+import com.cinelocal.android.ui.components.DownloadRing
+import com.cinelocal.android.ui.components.EpisodeDownloadIcon
+import com.cinelocal.android.ui.components.dlStatusText
+import com.cinelocal.android.ui.components.rememberDlActions
+import com.cinelocal.android.ui.components.rememberDlIndex
 import com.cinelocal.android.ui.components.AppMenu
 import com.cinelocal.android.ui.components.AppMenuItem
 import com.cinelocal.android.ui.components.Artwork
@@ -148,6 +164,9 @@ fun DetailScreen(id: String, nav: Nav) {
     val canPlayFromStart = t.isMovie || t.item.episodes.isNotEmpty()
     val playFromStart = { nav.play(t.id, st?.ep?.id, fromStart = true) }
 
+    val dlIndex by rememberDlIndex()
+    val dla = rememberDlActions()
+
     val listState = rememberLazyListState()
     val density = LocalDensity.current
     val headerPx = with(density) { (LocalConfiguration.current.screenWidthDp.dp / HEADER_RATIO).toPx() }
@@ -176,6 +195,7 @@ fun DetailScreen(id: String, nav: Nav) {
 
                     Spacer(Modifier.height(16.dp))
                     PlayButtons(t, progress, st, nav)
+                    DownloadButton(t, dlIndex, dla, Modifier.padding(top = 10.dp))
 
                     Row(Modifier.padding(top = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         ActionIcon(if (fav) Icons.Rounded.Check else Icons.Rounded.Add, "Mi lista") { repo.toggleFavorite(id) }
@@ -215,12 +235,17 @@ fun DetailScreen(id: String, nav: Nav) {
                 item(key = "epsH") {
                     BlockTitle("Episodios")
                     SeasonPicker(t, season) { season = it }
+                    SeasonDownloadRow(t, season, dlIndex, dla)
                 }
                 val eps = t.item.episodes.filter { it.season == season }
                 itemsIndexed(eps, key = { _, e -> e.id }) { i, e ->
                     if (i > 0) Box(Modifier.padding(start = 16.dp).fillMaxWidth().height(1.dp).background(CL.line))
-                    EpisodeRow(t, e, progress[e.path], onPlay = { nav.play(t.id, e.id) }) {
-                        repo.markWatched(listOf(e.path), progress[e.path]?.watched != true)
+                    EpisodeRow(
+                        t, e, progress[e.path], onPlay = { nav.play(t.id, e.id) },
+                        onToggleWatched = { repo.markWatched(listOf(e.path), progress[e.path]?.watched != true) }
+                    ) {
+                        val target = remember(t, e) { DlTarget(t, listOf(e), "${e.label} de «${t.name}»") }
+                        EpisodeDownloadIcon(target, DlSummary.of(target.paths, dlIndex), dla)
                     }
                 }
             }
@@ -261,7 +286,7 @@ private fun FloatingIcon(icon: androidx.compose.ui.graphics.vector.ImageVector, 
         Modifier.size(48.dp).tapFade(onClick = onClick),
         contentAlignment = Alignment.Center
     ) {
-        Box(Modifier.size(40.dp).clip(CircleShape).background(Color(0x730B0A09).copy(alpha = 0.45f * (1 - bar))), contentAlignment = Alignment.Center) {
+        Box(Modifier.size(40.dp).clip(CircleShape).background(CL.veil(0.45f * (1 - bar))), contentAlignment = Alignment.Center) {
             Icon(icon, desc, Modifier.size(24.dp), tint = CL.text)
         }
     }
@@ -279,7 +304,7 @@ private fun Header(t: Title, listState: LazyListState, bar: Float) {
             if (motion) translationY = o * 0.45f
             alpha = 1f - (o / h).coerceIn(0f, 1f) * 0.6f
         }) { Artwork(m?.backdrop ?: m?.poster, t.name, null, Modifier.fillMaxSize(), placeholderSize = 28) }
-        Box(Modifier.fillMaxSize().background(Brush.verticalGradient(0f to Color(0x8C0B0A09), 0.25f to Color.Transparent)))
+        Box(Modifier.fillMaxSize().background(Brush.verticalGradient(0f to CL.veil(0.55f), 0.25f to Color.Transparent)))
         Box(Modifier.fillMaxSize().background(Brush.verticalGradient(0.45f to Color.Transparent, 1f to CL.bg)))
         Box(Modifier.align(Alignment.BottomStart).padding(horizontal = 16.dp).graphicsLayer { alpha = 1f - bar }) {
             if (m?.logo != null) AsyncImage(
@@ -291,7 +316,7 @@ private fun Header(t: Title, listState: LazyListState, bar: Float) {
     }
 }
 
-/** "2001  2 h 27 min  [18]  ★ 7.8" con la edad en caja y la estrella en ámbar (mismas partes que metaLine) */
+/** "2001  2 h 27 min  [18]  ★ 7.8" con la edad en caja y la estrella en amarillo, como el escritorio (mismas partes que metaLine) */
 @Composable
 private fun MetaRow(t: Title, modifier: Modifier = Modifier) {
     val m = t.meta
@@ -313,7 +338,7 @@ private fun MetaRow(t: Title, modifier: Modifier = Modifier) {
         }
         m?.rating?.let {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("★ ", style = body, color = CL.accent)
+                Text("★ ", style = body, color = CL.star)
                 Text("$it", style = body, color = CL.text2)
             }
         }
@@ -338,6 +363,82 @@ private fun PlayButtons(t: Title, progress: Map<String, Progress>, st: SeriesSta
             nav.play(t.id, st.ep.id, fromStart = st.mode == SeriesMode.DONE)
         }
         if (st.mode == SeriesMode.RESUME && st.p != null) ResumeBar(fraction(st.p), fmtLeft(st.p.dur - st.p.pos))
+    }
+}
+
+/** Descargar la película o la serie entera para verla sin conexión; con algo descargado, abre un menú */
+@Composable
+private fun DownloadButton(t: Title, index: DownloadIndex, a: DlActions, modifier: Modifier = Modifier) {
+    if (!t.isMovie && t.item.episodes.isEmpty()) return
+    val target = remember(t) { if (t.isMovie) DlTarget(t, null, "«${t.name}»") else DlTarget(t, t.item.episodes, "«${t.name}» completa") }
+    val s = DlSummary.of(target.paths, index)
+    val size = if (t.isMovie) t.item.size else t.item.episodes.sumOf { it.size }
+    var menu by remember { mutableStateOf(false) }
+    val label = when {
+        s.none -> (if (t.isMovie) "Descargar" else "Descargar serie") + " · " + Space.fmt(size)
+        else -> dlStatusText(s, if (t.isMovie) "Descargada" else "Serie descargada").ifEmpty {
+            "${s.done} de ${s.total} episodios descargados"
+        }
+    }
+    val icon = when {
+        s.failed > 0 && s.active == 0 -> Icons.Rounded.ErrorOutline
+        s.downloading -> Icons.Rounded.Downloading
+        s.paused > 0 -> Icons.Rounded.Pause
+        s.done > 0 -> Icons.Rounded.DownloadDone
+        else -> Icons.Rounded.Download
+    }
+    Column(modifier.fillMaxWidth()) {
+        Box {
+            SecondaryButton(label, Modifier.fillMaxWidth(), icon = icon) { if (s.none) a.start(target) else menu = true }
+            AppMenu(menu, { menu = false }) { DlMenuItems(target, s, a) { menu = false } }
+        }
+        if (s.downloading || s.paused > 0) ProgressBar(s.fraction, Modifier.fillMaxWidth().padding(top = 8.dp).clip(RoundedCornerShape(2.dp)))
+        val err = target.paths.firstNotNullOfOrNull { index.get(it)?.error }
+        if (err != null && s.active == 0) Text(err, Modifier.padding(top = 6.dp), style = MaterialTheme.typography.bodySmall, color = CL.error)
+        // "Esperando Wi-Fi", "Sin conexión con el PC · reintento 1 de 3"…
+        val activity by LocalContext.current.repo.downloads.activity.collectAsStateWithLifecycle()
+        val waiting = activity.waiting?.takeIf { s.active > 0 && activity.file?.path in target.paths }
+        if (waiting != null) Text(waiting, Modifier.padding(top = 6.dp), style = MaterialTheme.typography.bodySmall, color = CL.text3)
+    }
+}
+
+/** Debajo de las temporadas: "8 episodios · 3,2 GB" y descargar la temporada (o su estado) */
+@Composable
+private fun SeasonDownloadRow(t: Title, season: Int, index: DownloadIndex, a: DlActions) {
+    val eps = t.item.episodes.filter { it.season == season }
+    if (eps.isEmpty()) return
+    val sname = t.meta?.seasons?.get(season)?.name ?: if (season == 0) "Especiales" else "Temporada $season"
+    val target = remember(t, season) { DlTarget(t, eps, "$sname de «${t.name}»") }
+    val s = DlSummary.of(target.paths, index)
+    var menu by remember { mutableStateOf(false) }
+    Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp, top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            (if (eps.size == 1) "1 episodio" else "${eps.size} episodios") + " · " + Space.fmt(eps.sumOf { it.size }),
+            Modifier.weight(1f), style = MaterialTheme.typography.bodySmall.copy(fontFeatureSettings = TNUM), color = CL.text3
+        )
+        Box {
+            Row(
+                Modifier.heightIn(min = 48.dp).tapFade { if (s.none) a.start(target) else menu = true }.padding(horizontal = 12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                when {
+                    s.downloading || s.paused > 0 -> DownloadRing(s.fraction, 18.dp, dim = !s.downloading)
+                    s.complete -> Icon(Icons.Rounded.DownloadDone, null, Modifier.size(18.dp), tint = CL.accentText)
+                    else -> Icon(Icons.Rounded.Download, null, Modifier.size(18.dp), tint = CL.accentText)
+                }
+                Text(
+                    when {
+                        s.none -> "Descargar temporada"
+                        s.complete -> "Temporada descargada"
+                        else -> dlStatusText(s).ifEmpty { "${s.done} de ${s.total} descargados" }
+                    },
+                    Modifier.padding(start = 8.dp),
+                    style = MaterialTheme.typography.labelLarge.copy(fontFeatureSettings = TNUM),
+                    color = if (s.complete) CL.text2 else CL.accentText
+                )
+            }
+            AppMenu(menu, { menu = false }) { DlMenuItems(target, s, a) { menu = false } }
+        }
     }
 }
 
@@ -456,7 +557,10 @@ private fun SeasonPicker(t: Title, season: Int, onPick: (Int) -> Unit) {
 }
 
 @Composable
-private fun EpisodeRow(t: Title, e: Episode, p: Progress?, onPlay: () -> Unit, onToggleWatched: () -> Unit) {
+private fun EpisodeRow(
+    t: Title, e: Episode, p: Progress?, onPlay: () -> Unit, onToggleWatched: () -> Unit,
+    download: @Composable () -> Unit
+) {
     val em = epMeta(t, e)
     Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -475,6 +579,7 @@ private fun EpisodeRow(t: Title, e: Episode, p: Progress?, onPlay: () -> Unit, o
                     Modifier.padding(top = 2.dp), style = MaterialTheme.typography.bodySmall, color = CL.text3
                 )
             }
+            download()
             val w = p?.watched == true
             Box(
                 Modifier.size(48.dp).tapFade(role = Role.Checkbox, onClick = onToggleWatched),
@@ -517,7 +622,7 @@ private fun IdentifyDialog(t: Title, onClose: () -> Unit) {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     SearchField(query, { query = it }, Modifier.weight(1f), placeholder = "Título", onSearch = { search() })
-                    TextAction("Buscar", CL.accent) { search() }
+                    TextAction("Buscar", CL.accentText) { search() }
                 }
                 if (busy) LinearProgressIndicator(
                     modifier = Modifier.fillMaxWidth().height(2.dp), color = CL.accent, trackColor = Color.Transparent, gapSize = 0.dp

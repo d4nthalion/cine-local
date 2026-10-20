@@ -88,6 +88,7 @@ import com.cinelocal.android.ui.components.PrimaryButton
 import com.cinelocal.android.ui.components.tapFade
 import com.cinelocal.android.ui.components.tapRow
 import com.cinelocal.android.ui.fmtClock
+import com.cinelocal.android.ui.theme.BrandGradientH
 import com.cinelocal.android.ui.theme.CL
 import com.cinelocal.android.ui.theme.Display
 import com.cinelocal.android.ui.theme.TNUM
@@ -167,8 +168,8 @@ fun PlayerScreen(
 
         AnimatedVisibility(controls && state.error == null, enter = fadeIn(), exit = fadeOut()) {
             Box(Modifier.fillMaxSize()) {
-                Box(Modifier.fillMaxSize().background(Brush.verticalGradient(0f to Color(0xB30B0A09), 0.22f to Color.Transparent)))
-                Box(Modifier.fillMaxSize().background(Brush.verticalGradient(0.6f to Color.Transparent, 1f to Color(0xD90B0A09))))
+                Box(Modifier.fillMaxSize().background(Brush.verticalGradient(0f to CL.veil(0.7f), 0.22f to Color.Transparent)))
+                Box(Modifier.fillMaxSize().background(Brush.verticalGradient(0.6f to Color.Transparent, 1f to CL.veil(0.85f))))
                 Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing).padding(horizontal = 16.dp, vertical = 8.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         BarIcon(Icons.AutoMirrored.Rounded.ArrowBack, "Volver", onClick = onBack)
@@ -222,7 +223,7 @@ fun PlayerScreen(
             enter = fadeIn(tween(240)),
             exit = fadeOut(tween(200))
         ) {
-            Box(Modifier.fillMaxSize().background(Color(0x400B0A09)).clickable(remember { MutableInteractionSource() }, indication = null) { dialog = null })
+            Box(Modifier.fillMaxSize().background(CL.veil(0.25f)).clickable(remember { MutableInteractionSource() }, indication = null) { dialog = null })
         }
         AnimatedVisibility(
             dialog != null,
@@ -269,7 +270,7 @@ private fun PlayPause(playing: Boolean, onClick: () -> Unit) {
     }
 }
 
-/** Barra de tiempo propia: pista de 3 dp, avance en ámbar y pulgar que crece al arrastrar */
+/** Barra de tiempo propia: pista de 3 dp, avance con el degradado de la marca y pulgar blanco que crece al arrastrar */
 @Composable
 private fun SeekBar(time: Long, length: Long, dragging: Float?, onDrag: (Float) -> Unit, onSeek: (Float) -> Unit) {
     val len = length.coerceAtLeast(1)
@@ -299,8 +300,8 @@ private fun SeekBar(time: Long, length: Long, dragging: Float?, onDrag: (Float) 
         ) {
             val w = maxWidth
             Box(Modifier.fillMaxWidth().height(3.dp).background(Color(0x40FFFFFF)))
-            Box(Modifier.fillMaxWidth(frac).height(3.dp).background(CL.accent))
-            Box(Modifier.offset(x = w * frac - thumb / 2).size(thumb).background(CL.accent, CircleShape))
+            Box(Modifier.fillMaxWidth(frac).height(3.dp).background(BrandGradientH))
+            Box(Modifier.offset(x = w * frac - thumb / 2).size(thumb).background(CL.text, CircleShape))
             if (dragging != null) {
                 val label = fmtClock((dragging * len).toLong())
                 Text(
@@ -333,7 +334,7 @@ private fun ControlButton(icon: ImageVector, label: String, onClick: () -> Unit)
 @Composable
 private fun NextButton(onClick: () -> Unit) {
     Row(
-        Modifier.height(40.dp).background(Color(0x8C1D1B19), RoundedCornerShape(4.dp))
+        Modifier.height(40.dp).background(CL.bg3.copy(alpha = .55f), RoundedCornerShape(4.dp))
             .border(1.dp, CL.lineStrong, RoundedCornerShape(4.dp))
             .tapFade(onClick = onClick).padding(horizontal = 14.dp),
         verticalAlignment = Alignment.CenterVertically
@@ -358,8 +359,8 @@ private fun SeekHint(side: Int, secs: Int) {
                     .width(w).fillMaxHeight()
                     .background(
                         Brush.horizontalGradient(
-                            if (left) listOf(Color(0x33FFFFFF), Color(0x260B0A09).copy(alpha = 0f))
-                            else listOf(Color(0x260B0A09).copy(alpha = 0f), Color(0x33FFFFFF))
+                            if (left) listOf(Color(0x33FFFFFF), CL.veil(0f))
+                            else listOf(CL.veil(0f), Color(0x33FFFFFF))
                         ),
                         if (left) RoundedCornerShape(topEndPercent = 50, bottomEndPercent = 50)
                         else RoundedCornerShape(topStartPercent = 50, bottomStartPercent = 50)
@@ -372,11 +373,11 @@ private fun SeekHint(side: Int, secs: Int) {
     }
 }
 
-/** Panel lateral derecho de 320 dp con las pistas; la activa con ✓ ámbar */
+/** Panel lateral derecho de 320 dp con las pistas; la activa con ✓ violeta */
 @Composable
 private fun TrackPanel(title: String, tracks: List<Track>, current: Int, onPick: (Int) -> Unit) {
     Column(
-        Modifier.width(320.dp).fillMaxHeight().background(Color(0xF2141312))
+        Modifier.width(320.dp).fillMaxHeight().background(CL.bg2.copy(alpha = .95f))
             .clickable(remember { MutableInteractionSource() }, indication = null) {}
             .windowInsetsPadding(WindowInsets.safeDrawing).padding(vertical = 16.dp)
     ) {
