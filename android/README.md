@@ -9,6 +9,7 @@ Versión para móvil de [CineLocal](../README.md): tus películas y series de la
 * Carátulas, sinopsis, reparto y episodios desde **TMDB** (misma búsqueda que en escritorio, con *Corregir coincidencia*).
 * Reproduce con **LibVLC**: MKV, AC3, DTS, subtítulos `.srt`/`.ass` internos o junto al vídeo, audio y subtítulos según el idioma elegido (con el modo *“Sólo si el audio está en otro idioma”*), reanuda donde lo dejaste y pasa al siguiente episodio.
 * Portada con *Continuar viendo*, *Añadido recientemente*, Mi lista, mejor valoradas y filas por género; Películas y Series con orden, filtro vistas/sin ver y géneros; búsqueda por título, reparto, director o género.
+* Si la búsqueda no encuentra nada en la biblioteca, busca la película en **TMDB** (un año al final afina: `dune 2021`) y cada resultado tiene **Pedir descarga** por ntfy, como en la watchlist (`core/OnlineSearch.kt`, con pruebas).
 * El progreso, Mi lista y las vistas son de cada móvil.
 * **Letterboxd**, igual que en escritorio (ver abajo).
 * **Se actualiza sola** desde las releases de GitHub (ver abajo).

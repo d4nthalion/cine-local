@@ -48,7 +48,7 @@ import java.text.DateFormat
 import java.util.Date
 import java.util.Locale
 
-/** Hoja de una película de la watchlist que no está en la biblioteca: pedir que la descarguen (ntfy) o verla en Letterboxd */
+/** Hoja de una película que no está en la biblioteca (de la watchlist o buscada en TMDB): pedir que la descarguen (ntfy) o verla en Letterboxd */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun RequestSheet(e: LbEntry, nav: Nav, onDismiss: () -> Unit) {
@@ -77,8 +77,11 @@ fun RequestSheet(e: LbEntry, nav: Nav, onDismiss: () -> Unit) {
                 }
                 Column(Modifier.padding(start = 14.dp).weight(1f)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        LbDots(5.dp, 2.dp)
-                        Text("EN TU WATCHLIST · NO LA TIENES", Modifier.padding(start = 6.dp), style = MaterialTheme.typography.labelSmall, color = CL.text3)
+                        if (e.film.watchlist) LbDots(5.dp, 2.dp, Modifier.padding(end = 6.dp))
+                        Text(
+                            if (e.film.watchlist) "EN TU WATCHLIST · NO LA TIENES" else "TMDB · NO LA TIENES",
+                            style = MaterialTheme.typography.labelSmall, color = CL.text3
+                        )
                     }
                     Text(
                         title, Modifier.padding(top = 6.dp), style = MaterialTheme.typography.headlineSmall, color = CL.text,

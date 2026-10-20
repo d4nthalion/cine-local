@@ -280,7 +280,7 @@ class Repository(private val context: Context) {
 
     // ---------------------------------------------------------------- peticiones de descarga (ntfy)
 
-    /** Avisa por ntfy de que quieres una película de la watchlist que no está en la biblioteca */
+    /** Avisa por ntfy de que quieres una película que no está en la biblioteca (de la watchlist o buscada en TMDB) */
     suspend fun requestDownload(e: LbEntry) = withContext(Dispatchers.IO) {
         val s = settings.value
         val f = e.film
@@ -292,7 +292,8 @@ class Repository(private val context: Context) {
             title = "Descargar: $name$year",
             message = listOfNotNull(
                 if (name != f.title) "${f.title}$year" else null,
-                "Pedida desde CineLocal: está en tu watchlist de Letterboxd y no en la biblioteca."
+                if (f.watchlist) "Pedida desde CineLocal: está en tu watchlist de Letterboxd y no en la biblioteca."
+                else "Pedida desde CineLocal: la buscaste en TMDB y no está en la biblioteca."
             ).joinToString("\n"),
             tags = listOf("movie_camera"),
             click = f.url ?: tmdb,

@@ -193,7 +193,7 @@ fun MissingCard(e: LbEntry, width: Dp?, requested: Boolean = false, onClick: () 
             .posterHairline()
     ) {
         Artwork(e.poster, title, e.film.year?.toString(), Modifier.fillMaxSize(), colorFilter = desaturate, alpha = 0.6f)
-        LbDots(5.dp, 2.dp, Modifier.align(Alignment.TopStart).padding(7.dp))
+        if (e.film.watchlist) LbDots(5.dp, 2.dp, Modifier.align(Alignment.TopStart).padding(7.dp))
         Column(Modifier.align(Alignment.BottomStart).fillMaxWidth()) {
             LbBadge(e, Modifier.padding(start = 6.dp, bottom = 5.dp))
             Box(Modifier.fillMaxWidth().height(22.dp).background(Color(0xE60B0A09)), contentAlignment = Alignment.Center) {

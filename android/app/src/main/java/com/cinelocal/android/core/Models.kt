@@ -104,7 +104,7 @@ data class Progress(val pos: Double = 0.0, val dur: Double = 0.0, val watched: B
 @Serializable
 data class UserState(
     val favorites: List<String> = emptyList(),
-    val requested: Map<String, Long> = emptyMap()   // películas de la watchlist pedidas por ntfy: clave de Letterboxd → cuándo
+    val requested: Map<String, Long> = emptyMap()   // películas pedidas por ntfy: clave de Letterboxd (o "tmdb:<id>" si se buscó en TMDB) → cuándo
 )
 
 @Serializable
