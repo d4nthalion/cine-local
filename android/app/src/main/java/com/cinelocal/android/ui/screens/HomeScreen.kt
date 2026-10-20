@@ -99,6 +99,7 @@ import com.cinelocal.android.ui.theme.BrandGradientV
 import com.cinelocal.android.ui.theme.CL
 import com.cinelocal.android.ui.theme.Dur
 import com.cinelocal.android.ui.theme.rememberMotionEnabled
+import com.cinelocal.android.ui.title
 
 private val CARD_W = 112.dp
 private const val HERO_RATIO = 0.72f
@@ -217,7 +218,7 @@ fun HomeScreen(nav: Nav) {
                         val st = seriesState(t, progress)
                         WideCard(
                             em?.still ?: t.meta?.backdrop, t.name,
-                            (if (st.mode == SeriesMode.NEXT) "Siguiente: " else "") + c.ep.label + (em?.name?.let { " · $it" } ?: ""),
+                            (if (st.mode == SeriesMode.NEXT) "Siguiente: " else "") + c.ep.label + (em.title?.let { " · $it" } ?: ""),
                             c.p?.let { fmtLeft(it.dur - it.pos) } ?: c.ep.label,
                             fraction(c.p)
                         ) { nav.play(t.id, c.ep.id) }

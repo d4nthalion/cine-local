@@ -42,6 +42,7 @@ import java.net.NoRouteToHostException
 import java.net.SocketException
 import java.net.SocketTimeoutException
 import java.util.concurrent.TimeoutException
+import com.cinelocal.android.ui.title
 
 /**
  * Descargas para ver sin conexión con el PC.
@@ -96,7 +97,7 @@ class DownloadManager(
         val all = if (t.isMovie || episodes == null) listOf(
             DlFile(t.item.path, t.id, null, t.name, null, t.item.size, t.item.subs.map { it.path })
         ) else episodes.map { e ->
-            val name = t.meta?.seasons?.get(e.season)?.episodes?.get(e.episode)?.name
+            val name = t.meta?.seasons?.get(e.season)?.episodes?.get(e.episode).title
             DlFile(e.path, t.id, e.id, t.name, e.label + (name?.let { " · $it" } ?: ""), e.size, e.subs.map { it.path })
         }
         // lo ya descargado o en cola no se vuelve a pedir

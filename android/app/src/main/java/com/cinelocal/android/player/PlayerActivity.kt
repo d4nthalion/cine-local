@@ -30,6 +30,7 @@ import org.videolan.libvlc.interfaces.IMedia
 import org.videolan.libvlc.util.VLCVideoLayout
 import java.io.IOException
 import java.util.concurrent.Executors
+import com.cinelocal.android.ui.title
 
 /** Un elemento de la lista de reproducción (película o episodio) */
 data class PlayItem(val path: String, val title: String, val subtitle: String?, val start: Double, val subs: List<SubFile>)
@@ -192,7 +193,7 @@ class PlayerActivity : ComponentActivity() {
         if (eps.isEmpty()) return -1
         playlist = eps.map { e ->
             val em = epMeta(t, e)
-            PlayItem(e.path, t.name, e.label + (em?.name?.let { " · $it" } ?: ""), 0.0, e.subs)
+            PlayItem(e.path, t.name, e.label + (em.title?.let { " · $it" } ?: ""), 0.0, e.subs)
         }
         paths = playlist.map { it.path }
         return episodeId?.let { id -> eps.indexOfFirst { it.id == id } }?.takeIf { it >= 0 }

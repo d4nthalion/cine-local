@@ -141,6 +141,8 @@ import com.cinelocal.android.ui.theme.TNUM
 import com.cinelocal.android.ui.theme.TextFont
 import com.cinelocal.android.ui.theme.rememberMotionEnabled
 import kotlinx.coroutines.launch
+import com.cinelocal.android.ui.title
+import com.cinelocal.android.ui.seasonLabel
 
 private const val HEADER_RATIO = 16f / 12f
 
@@ -413,7 +415,7 @@ private fun DownloadButton(t: Title, index: DownloadIndex, a: DlActions, modifie
 private fun SeasonDownloadRow(t: Title, season: Int, index: DownloadIndex, a: DlActions) {
     val eps = t.item.episodes.filter { it.season == season }
     if (eps.isEmpty()) return
-    val sname = t.meta?.seasons?.get(season)?.name ?: if (season == 0) "Especiales" else "Temporada $season"
+    val sname = seasonLabel(t, season)
     val target = remember(t, season) { DlTarget(t, eps, "$sname de «${t.name}»") }
     val s = DlSummary.of(target.paths, index)
     var menu by remember { mutableStateOf(false) }
@@ -545,7 +547,7 @@ private fun CastCard(name: String, character: String?, photo: String?) {
 @Composable
 private fun SeasonPicker(t: Title, season: Int, onPick: (Int) -> Unit) {
     val seasons = t.item.seasons
-    fun name(s: Int) = t.meta?.seasons?.get(s)?.name ?: if (s == 0) "Especiales" else "Temporada $s"
+    fun name(s: Int) = seasonLabel(t, s)
     if (seasons.size <= 6) {
         TextTabs(
             seasons.map(::name), seasons.indexOf(season).coerceAtLeast(0), { onPick(seasons[it]) },
@@ -577,7 +579,7 @@ private fun EpisodeRow(
             }
             Column(Modifier.weight(1f).padding(start = 12.dp).tapFade(onClick = onPlay)) {
                 Text(
-                    "${e.episode}. " + (em?.name ?: e.fileName),
+                    "${e.episode}. " + (em.title ?: e.fileName),
                     style = MaterialTheme.typography.titleMedium, color = CL.text, maxLines = 2, overflow = TextOverflow.Ellipsis
                 )
                 Text(

@@ -111,6 +111,19 @@ fun isWatched(t: Title, progress: Map<String, Progress>): Boolean =
 
 fun epMeta(t: Title, e: Episode): EpisodeMeta? = t.meta?.seasons?.get(e.season)?.episodes?.get(e.episode)
 
+// TMDB devuelve el nombre genérico en inglés ("Season 1", "Episode 3", "Specials") cuando no está traducido
+private val GENERIC_SEASON = Regex("""^(season|series|temporada|staffel|saison|stagione)\s*\d+$|^(specials|especiales)$""", RegexOption.IGNORE_CASE)
+private val GENERIC_EPISODE = Regex("""^(episode|episodio|cap[ií]tulo|folge|épisode)\s*\d+$""", RegexOption.IGNORE_CASE)
+
+/** "Temporada 2", o el nombre propio de la temporada si TMDB tiene uno de verdad */
+fun seasonLabel(t: Title, s: Int): String =
+    t.meta?.seasons?.get(s)?.name?.trim()?.takeIf { it.isNotEmpty() && !GENERIC_SEASON.matches(it) }
+        ?: if (s == 0) "Especiales" else "Temporada $s"
+
+/** Nombre del capítulo, o null si TMDB solo tiene el genérico ("Episode 3") */
+val EpisodeMeta?.title: String?
+    get() = this?.name?.trim()?.takeIf { it.isNotEmpty() && !GENERIC_EPISODE.matches(it) }
+
 fun fraction(p: Progress?): Float = if (p == null || p.dur <= 0) 0f else (p.pos / p.dur).toFloat().coerceIn(0f, 1f)
 
 fun fmtRuntime(min: Int?): String {
