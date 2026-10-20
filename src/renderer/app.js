@@ -57,6 +57,7 @@ const S = {
   people: {},
   season: {},
   query: '',
+  tmdbSearch: { q: '', busy: false, results: [], error: null },   // películas de TMDB cuando la biblioteca no tiene nada
   emule: {
     snap: { ok: false, code: 'disabled', downloads: [] },
     info: null,
@@ -699,10 +700,38 @@ function viewSearch() {
     return { it, score };
   }).filter(x => x.score > 0).sort((a, b) => b.score - a.score);
   const dmatch = allDirectors().filter(d => norm(d.name).includes(nq)).slice(0, 12);
+  // nada en la biblioteca: se busca la película en TMDB para poder ver dónde está o descargarla
+  const online = !scored.length && !dmatch.length ? tmdbSearchHTML(S.query.trim()) : '';
   return `<div class="page"><h1 class="page-title">Resultados para “${esc(S.query)}”<span class="count">${scored.length}</span></h1>
     ${dmatch.length ? `<h2 class="section-title" style="margin-top:0">Directores</h2><div class="dir-strip">${dmatch.map(directorChip).join('')}</div><h2 class="section-title">Títulos</h2>` : ''}
     ${scored.length ? `<div class="grid">${scored.map(x => card(x.it)).join('')}</div>`
-      : `<div class="empty"><div class="big-ico">${I.search}</div><h2>Sin resultados</h2><p>Prueba con otro título, un actor o un género.</p></div>`}</div>`;
+      : online || `<div class="empty"><div class="big-ico">${I.search}</div><h2>Sin resultados</h2><p>Prueba con otro título, un actor o un género.</p></div>`}</div>`;
+}
+
+/** Resultados de TMDB para una búsqueda sin coincidencias en la biblioteca ('' si no hay clave de TMDB) */
+function tmdbSearchHTML(q) {
+  if (!S.lib.hasKey || q.length < 2) return '';
+  const t = S.tmdbSearch;
+  if (t.q !== q) { searchTmdb(q); return `<p class="filmo-note">No está en tu biblioteca. Buscando en TMDB…</p>`; }
+  if (t.busy) return `<p class="filmo-note">No está en tu biblioteca. Buscando en TMDB…</p>`;
+  if (t.error) return `<div class="empty"><div class="big-ico">${I.search}</div><h2>Sin resultados</h2><p>No está en tu biblioteca y no se ha podido buscar en TMDB: ${esc(t.error)}</p></div>`;
+  if (!t.results.length) return `<div class="empty"><div class="big-ico">${I.search}</div><h2>Sin resultados</h2><p>Ni en tu biblioteca ni en TMDB. Prueba con otro título, un actor o un género.</p></div>`;
+  return `<p class="filmo-note" style="padding-left:0">No está en tu biblioteca. Películas de TMDB que coinciden: pulsa para ver dónde verla${S.settings.emuleEnabled ? ' o búscala en eMule' : ''}.</p>
+    <div class="grid filmo">${t.results.map(r => missingCard({ ...r, year: r.year ? +r.year : null })).join('')}</div>`;
+}
+
+async function searchTmdb(q) {
+  S.tmdbSearch = { q, busy: true, results: [], error: null };
+  // "dune 2021": el año del final afina la búsqueda (uno del futuro es parte del título: "Blade Runner 2049")
+  const y = q.match(/^(.*\S)\s+((?:19|20)\d{2})$/);
+  const m = y && +y[2] <= new Date().getFullYear() + 1 ? y : null;
+  try {
+    const res = await window.api.searchMeta({ type: 'movie', query: m ? m[1] : q, year: m ? m[2] : null });
+    if (S.tmdbSearch.q === q) S.tmdbSearch = { q, busy: false, results: res.slice(0, 20), error: null };
+  } catch (e) {
+    if (S.tmdbSearch.q === q) S.tmdbSearch = { q, busy: false, results: [], error: errText(e) };
+  }
+  if (S.route.name === 'search' && S.query.trim() === q) render(true);
 }
 
 function viewDetail(id) {
