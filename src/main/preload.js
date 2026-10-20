@@ -37,6 +37,11 @@ contextBridge.exposeInMainWorld('api', {
     launch: () => ipcRenderer.invoke('emule:launch'),
     refresh: () => ipcRenderer.invoke('emule:refresh'),
     connect: () => ipcRenderer.invoke('emule:connect'),
+    servers: () => ipcRenderer.invoke('emule:servers'),
+    connectServer: (ip, port) => ipcRenderer.invoke('emule:connectServer', { ip, port }),
+    disconnect: () => ipcRenderer.invoke('emule:disconnect'),
+    kad: (op, ip, port) => ipcRenderer.invoke('emule:kad', { op, ip, port }),
+    updateServerMet: (url) => ipcRenderer.invoke('emule:updateServerMet', url),
     search: (q) => ipcRenderer.invoke('emule:search', q),
     results: () => ipcRenderer.invoke('emule:results'),
     download: (hash) => ipcRenderer.invoke('emule:download', hash),
@@ -52,6 +57,13 @@ contextBridge.exposeInMainWorld('api', {
     clear: () => ipcRenderer.invoke('letterboxd:clear'),
     onUpdate: on('letterboxd:update'),
     onStatus: on('letterboxd:status')
+  },
+  update: {
+    status: () => ipcRenderer.invoke('update:status'),
+    check: () => ipcRenderer.invoke('update:check'),
+    install: () => ipcRenderer.invoke('update:install'),
+    openRelease: () => ipcRenderer.invoke('update:open'),
+    onStatus: on('update:status')
   },
   onLibrary: on('library:updated'),
   onMetaProgress: on('meta:progress'),

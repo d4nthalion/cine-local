@@ -51,6 +51,8 @@ const S = {
   heroList: [],
   filters: { movies: { genre: null, sort: 'added', seen: 'all', open: false }, series: { genre: null, sort: 'added', seen: 'all', open: false }, directors: { sort: 'count', q: '' }, filmo: 'all', filmoSort: 'year', watchlist: 'all' },
   lb: { films: [], status: {} },   // Letterboxd: películas vistas, notas y watchlist
+  update: { state: 'idle' },       // actualizaciones de CineLocal (estado que envía el proceso principal)
+  updDismissed: null,              // versión cuyo aviso se ha cerrado con «Más tarde»
   lbById: new Map(),
   people: {},
   season: {},
@@ -58,7 +60,9 @@ const S = {
   emule: {
     snap: { ok: false, code: 'disabled', downloads: [] },
     info: null,
-    search: { query: '', results: [], message: '', busy: false, error: null, run: 0 }
+    search: { query: '', results: [], message: '', busy: false, error: null, run: 0 },
+    // servidores: list null = sin cargar · open null = decidir según la conexión · busy: 'srv' | 'kad'
+    srv: { list: null, kad: null, outdated: false, error: null, at: 0, loading: false, open: null, sort: 'users', dir: -1, busy: null }
   }
 };
 
@@ -887,6 +891,10 @@ function viewSettings() {
       <div class="set-row"><div class="lbl"><div class="t">Iniciar en pantalla completa</div><div class="d">Pulsa F11 en cualquier momento para entrar o salir.</div></div><div class="ctl">${sw('startFullscreen', s.startFullscreen)}</div></div>
       <div class="set-row"><div class="lbl"><div class="t">Pantalla completa ahora</div></div><div class="ctl"><button class="btn btn-ghost btn-sm" data-action="fullscreen">Alternar (F11)</button></div></div>
     </div>
+
+    <div class="set-group" id="updates"><h3>Actualizaciones</h3>
+      ${updateSettingsHTML(s, sw)}
+    </div>
   </div>`;
 }
 
@@ -896,7 +904,7 @@ const DL_STATES = {
   complete: 'Completada', completing: 'Completando…', hashing: 'Comprobando…', waitinghash: 'Comprobando…', error: 'Error'
 };
 const EMULE_ERRORS = {
-  offline: ['eMule no está abierto', 'O su servidor web está desactivado (Opciones → Servidor Web).'],
+  offline: ['eMule no está abierto', 'O su servidor web está desactivado (Opciones → Servidor Web). Cuando responda, aquí podrás elegir servidor y conectar Kad.'],
   auth: ['eMule ha rechazado la contraseña', 'Escribe en Ajustes la misma contraseña que pusiste en eMule → Opciones → Servidor Web.'],
   template: ['eMule no está usando la plantilla de CineLocal', 'Indícala en eMule → Opciones → Servidor Web → Plantilla y pulsa «Recargar». La ruta está en Ajustes.'],
   unconfigured: ['Falta configurar eMule', 'Sigue los pasos de Ajustes → Descargas (eMule).']
@@ -940,15 +948,136 @@ function emuleStatusHTML() {
       <button class="btn btn-ghost btn-sm" data-nav="settings">Ajustes</button></div>`;
   }
   const st = sn.status;
+  const srv = S.emule.srv;
   const server = { high: ['ok', 'ID alta'], low: ['warn', 'ID baja'], connecting: ['', 'Conectando…'], off: ['bad', 'Desconectado'] }[st.server];
-  const kad = { ok: ['ok', 'Conectado'], firewalled: ['warn', 'Tras cortafuegos'], connecting: ['', 'Conectando…'], off: ['bad', 'Desconectado'] }[st.kad];
+  const kad = { ok: ['ok', 'Abierto'], firewalled: ['warn', 'Tras cortafuegos'], connecting: ['', 'Conectando…'], off: ['bad', 'Desconectado'] }[st.kad];
+  const busy = (k) => srv.busy === k ? ' disabled' : '';
+  const n = srv.list?.length;
   return `<div class="dl-status">
-    <span><small>Servidor</small><span class="status-pill ${server[0]}">${server[1]}</span>${st.server !== 'off' && st.serverName ? `<em>${esc(st.serverName)}</em>` : ''}</span>
-    <span><small>Kad</small><span class="status-pill ${kad[0]}">${kad[1]}</span></span>
+    <span><small>Servidor</small><span class="status-pill ${server[0]}">${server[1]}</span>${(st.server === 'high' || st.server === 'low') && st.serverName ? `<em title="${esc(st.serverName)}">${esc(st.serverName)}</em>` : ''}</span>
+    <span><small>Kad</small><span class="status-pill ${kad[0]}">${kad[1]}</span>${srv.kad && st.kad !== 'off' && !srvOutdated() ? `<em>${srv.kad.contacts} contactos</em>` : ''}</span>
     <span><small>Bajada</small><b>${fmtRate(st.down) || '0 KB/s'}</b></span>
     <span><small>Subida</small><b>${fmtRate(st.up) || '0 KB/s'}</b></span>
-    ${st.server === 'off' && st.kad === 'off' ? '<button class="btn btn-accent btn-sm" data-action="emule-connect">Conectar</button>' : ''}
+    <span class="dl-conn-btns">
+      ${st.server === 'off'
+        ? `<button class="btn btn-accent btn-sm" data-action="emule-srv-any"${busy('srv')}>Conectar</button>`
+        : `<button class="btn btn-ghost btn-sm" data-action="emule-srv-off"${busy('srv')}>${st.server === 'connecting' ? 'Cancelar' : 'Desconectar'}</button>`}
+      ${st.kad === 'off'
+        ? `<button class="btn btn-accent btn-sm" data-action="emule-kad" data-op="connect"${busy('kad')}>Conectar Kad</button>`
+        : `<button class="btn btn-ghost btn-sm" data-action="emule-kad" data-op="disconnect"${busy('kad')}>Desconectar Kad</button>`}
+      ${srvOutdated() ? '' : `<button class="btn btn-ghost btn-sm srv-toggle${srvOpen() ? ' on' : ''}" data-action="emule-srv-toggle" aria-expanded="${srvOpen()}">Servidores${n ? `<span class="srv-n">${n}</span>` : ''}${I.right}</button>`}
+    </span>
   </div>`;
+}
+
+// ---- conexión: lista de servidores y Kad
+/** eMule sigue con una plantilla anterior en memoria: no sabe devolver la lista de servidores */
+function srvOutdated() {
+  const sn = S.emule.snap;
+  return !!(sn.ok && ((sn.status?.template || 1) < 2 || S.emule.srv.outdated));
+}
+/** Abierta por defecto mientras no haya servidor conectado; después, lo que elija el usuario */
+function srvOpen() {
+  const srv = S.emule.srv, st = S.emule.snap.status;
+  if (srv.open === null && st) srv.open = st.server !== 'high' && st.server !== 'low';
+  return !!srv.open;
+}
+
+const fmtCount = (n) => n ? new Intl.NumberFormat('es-ES', { notation: 'compact', maximumFractionDigits: 1 }).format(n) : '—';
+const SRV_SORTS = { users: -1, files: -1, ping: 1, name: 1 };   // sentido inicial de cada columna
+
+function sortedServers() {
+  const { list, sort, dir } = S.emule.srv;
+  const val = (s) => sort === 'ping' ? (s.ping || Infinity) : sort === 'name' ? s.name.toLowerCase() : s[sort];
+  return [...list].sort((a, b) => (b.connected - a.connected)
+    || (val(a) < val(b) ? -dir : val(a) > val(b) ? dir : 0)
+    || b.users - a.users);
+}
+
+function serversHintHTML() {
+  if (!srvOutdated()) return '';
+  const p = S.emule.info?.templatePath;
+  return `<div class="banner warn"><div class="txt"><b>eMule sigue usando la versión anterior de la plantilla de CineLocal.</b>
+    Para ver y elegir servidores desde aquí, en eMule abre <b>Opciones → Servidor Web</b>, pulsa <b>Recargar</b> junto a la plantilla y después <b>Aplicar</b>. No hace falta cerrar eMule.${p ? `<br><small>Plantilla: <code>${esc(p)}</code></small>` : ''}</div>
+    <button class="btn btn-ghost btn-sm" data-action="emule-srv-refresh">Comprobar</button></div>`;
+}
+
+function serversBodyHTML() {
+  const srv = S.emule.srv;
+  if (srv.error) return `<p class="dl-empty err">${esc(srv.error)}</p>`;
+  if (!srv.list) return '<div class="srv-empty"><div class="spinner"></div>Cargando la lista de servidores de eMule…</div>';
+  if (!srv.list.length) return `<div class="srv-empty">eMule no tiene servidores en su lista. Añade los de un <b>server.met</b> aquí abajo o conéctate sólo a Kad.</div>`;
+  const st = S.emule.snap.status || {};
+  const arrow = (k) => srv.sort === k ? `<i class="srv-arrow">${srv.dir < 0 ? '▼' : '▲'}</i>` : '';
+  const th = (k, label, cls = '') => `<th class="sortable ${cls}${srv.sort === k ? ' on' : ''}" data-action="emule-srv-sort" data-k="${k}" title="Ordenar por ${label.toLowerCase()}">${label}${arrow(k)}</th>`;
+  const rows = sortedServers().map(s => {
+    const action = s.connected
+      ? `<span class="status-pill ${s.state === 'high' ? 'ok' : 'warn'}">Conectado · ID ${s.state === 'high' ? 'alta' : 'baja'}</span>`
+      : `<button class="btn btn-ghost btn-sm" data-action="emule-srv-connect" data-ip="${esc(s.ip)}" data-port="${s.port}" data-name="${esc(s.name)}"${srv.busy === 'srv' ? ' disabled' : ''}>Conectar</button>`;
+    return `<tr class="${s.connected ? 'on' : ''}${s.failed ? ' failed' : ''}">
+      <td class="srv-main"><div class="srv-name" title="${esc(s.name)}">${esc(s.name)}${s.static ? '<span class="badge">Estático</span>' : ''}${s.priority === 'high' ? '<span class="badge">Prioridad alta</span>' : ''}</div>
+        ${s.description ? `<div class="srv-desc" title="${esc(s.description)}">${esc(s.description)}</div>` : ''}</td>
+      <td class="srv-addr">${esc(s.ip)}:${s.port}</td>
+      <td class="num" title="${s.users ? `${s.users.toLocaleString('es-ES')} usuarios${s.maxUsers ? ` (máx. ${s.maxUsers.toLocaleString('es-ES')})` : ''}` : 'Sin datos'}">${fmtCount(s.users)}</td>
+      <td class="num">${fmtCount(s.files)}</td>
+      <td class="num">${s.ping ? `${s.ping} ms` : '—'}${s.failed ? `<small class="srv-fail">${s.failed} ${s.failed === 1 ? 'fallo' : 'fallos'}</small>` : ''}</td>
+      <td class="srv-act">${action}</td>
+    </tr>`;
+  }).join('');
+  return `<div class="srv-wrap"><table class="srv">
+    <thead><tr>${th('name', 'Servidor')}<th>Dirección</th>${th('users', 'Usuarios', 'num')}${th('files', 'Archivos', 'num')}${th('ping', 'Ping', 'num')}<th></th></tr></thead>
+    <tbody>${rows}</tbody></table></div>
+    ${st.server === 'connecting' ? '<p class="srv-note"><span class="spinner sm"></span>eMule está probando servidores. Si tarda, elige uno de la lista o pulsa Cancelar.</p>' : ''}`;
+}
+
+function serversPanelHTML() {
+  const kadIdle = S.emule.snap.status?.kad === 'off' || S.emule.snap.status?.kad === 'connecting';
+  return `<div id="dlSrvHint">${serversHintHTML()}</div>
+    <div class="srv-panel${S.emule.snap.ok && srvOpen() && !srvOutdated() ? '' : ' hidden'}" id="dlServers">
+      <div id="dlSrvBody">${serversBodyHTML()}</div>
+      <div class="srv-foot">
+        <form id="srvMet" class="srv-form"><label for="srvMetUrl">Añadir servidores de un server.met</label>
+          <input class="input" id="srvMetUrl" name="url" placeholder="http://…/server.met" spellcheck="false" autocomplete="off">
+          <button class="btn btn-ghost btn-sm">Añadir</button></form>
+        <form id="kadBoot" class="srv-form${kadIdle ? '' : ' hidden'}"><label for="kadBootAddr">Conectar Kad desde un nodo</label>
+          <input class="input" id="kadBootAddr" name="addr" placeholder="IP:puerto" spellcheck="false" autocomplete="off">
+          <button class="btn btn-ghost btn-sm">Conectar</button></form>
+      </div>
+    </div>`;
+}
+
+function paintServers() {
+  if (S.route.name !== 'downloads' || !$('#dlServers')) return;
+  $('#dlSrvHint').innerHTML = serversHintHTML();
+  $('#dlServers').classList.toggle('hidden', !(S.emule.snap.ok && srvOpen() && !srvOutdated()));
+  $('#dlSrvBody').innerHTML = serversBodyHTML();
+  const st = S.emule.snap.status;
+  $('#kadBoot').classList.toggle('hidden', !(st && (st.kad === 'off' || st.kad === 'connecting')));
+}
+
+/** Aplica la respuesta de servers()/connectServer()/disconnect()/updateServerMet() */
+function setServers(r) {
+  const srv = S.emule.srv;
+  srv.at = Date.now();
+  srv.error = null;
+  srv.outdated = r.outdated;
+  if (!r.outdated) srv.list = r.servers;
+  srv.kad = r.kad;
+}
+
+/** Se pide al abrir Descargas y, con la lista visible, cada 5 s como mucho (al ritmo del sondeo de eMule) */
+async function loadServers(force = false) {
+  const srv = S.emule.srv;
+  if (S.route.name !== 'downloads' || !S.settings.emuleEnabled || !S.emule.snap.ok || document.hidden) return;
+  // con la plantilla antigua sólo se vuelve a mirar si lo pide el usuario o si la cabecera ya trae la nueva
+  if (!force && ((S.emule.snap.status?.template || 1) < 2 || (!srvOpen() && srv.list))) return;
+  if (srv.loading || (!force && Date.now() - srv.at < 5000)) return;
+  srv.loading = true;
+  try { setServers(await window.api.emule.servers()); }
+  catch (e) { srv.error = errText(e); srv.at = Date.now(); }
+  finally { srv.loading = false; }
+  paintServers();
+  if ($('#dlStatus')) $('#dlStatus').innerHTML = emuleStatusHTML();
 }
 
 function downloadRow(d) {
@@ -1015,6 +1144,7 @@ function viewDownloads() {
   return `<div class="page downloads">
     <h1 class="page-title">Descargas<span class="count" id="dlCount"></span></h1>
     <div id="dlStatus">${emuleStatusHTML()}</div>
+    ${serversPanelHTML()}
     <form class="dl-search" id="dlSearch">
       <div class="search big">${I.search}<input name="q" value="${esc(s.query)}" placeholder="Buscar en eMule: título, año, calidad…" spellcheck="false" autocomplete="off"></div>
       <select class="select" name="method" data-set="emuleSearchMethod" title="Dónde buscar">
@@ -1044,6 +1174,9 @@ function paintEmule() {
     $('#dlStatus').innerHTML = emuleStatusHTML();
     $('#dlList').innerHTML = downloadsListHTML();
     $('#dlCount').textContent = S.emule.snap.downloads?.length || '';
+    if (!S.emule.snap.ok) S.emule.srv.list = S.emule.srv.kad = null;   // eMule cerrado: no enseñar datos viejos
+    paintServers();
+    loadServers();
   }
   if (S.route.name === 'settings' && $('#emuleState')) $('#emuleState').innerHTML = emuleStatePill();
 }
@@ -1178,6 +1311,73 @@ function paintLbStatus() {
   $$('[data-action="lb-sync"],[data-action="lb-import"]').forEach(b => { b.disabled = !!S.lb.status?.running || (b.dataset.action === 'lb-sync' && !S.settings.lbUser); });
 }
 
+// ---------------------------------------------------------------- actualizaciones
+const updTime = t => t ? new Date(t).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' }) : '';
+function updStatusHTML() {
+  const u = S.update, v = esc(u.version || '');
+  const when = u.checkedAt ? ` · comprobado a las ${updTime(u.checkedAt)}` : '';
+  switch (u.state) {
+    case 'disabled': return 'Sólo funcionan en la versión instalada (ahora se está ejecutando desde el código).';
+    case 'checking': return '<span class="status-pill"><span class="spinner sm"></span>Buscando actualizaciones…</span>';
+    case 'not-available': return `<span class="status-pill ok">Tienes la última versión</span>${when}`;
+    case 'available': return u.mode === 'portable'
+      ? `<span class="status-pill warn">CineLocal ${v} disponible</span> · la versión portable no se actualiza sola: descárgala desde GitHub`
+      : `<span class="status-pill"><span class="spinner sm"></span>CineLocal ${v} disponible · preparando la descarga…</span>`;
+    case 'downloading': return `<span class="status-pill"><span class="spinner sm"></span>Descargando CineLocal ${v} · ${u.percent || 0} %</span>
+      <div class="upd-bar"><i style="width:${u.percent || 0}%"></i></div>`;
+    case 'downloaded': return `<span class="status-pill ok">CineLocal ${v} lista</span> · se instalará al cerrar CineLocal`;
+    case 'error': return `<span class="status-pill bad">${esc(u.error || 'No se pudo comprobar')}</span>${when}`;
+    default: return S.settings.autoUpdate !== false ? 'Se comprueba al abrir CineLocal.' : 'Aún no se ha comprobado.';
+  }
+}
+function updInfoHTML() {
+  const u = S.update;
+  const busy = u.state === 'checking' || u.state === 'disabled' || (['available', 'downloading'].includes(u.state) && u.mode !== 'portable');
+  const ctl = u.state === 'downloaded' ? '<button class="btn btn-primary btn-sm" data-action="upd-install">Reiniciar ahora</button>'
+    : u.state === 'available' && u.mode === 'portable' ? `<button class="btn btn-accent btn-sm" data-action="upd-open">Descargar</button>`
+    : `<button class="btn btn-ghost btn-sm" data-action="upd-check" ${busy ? 'disabled' : ''}>Comprobar ahora</button>`;
+  const notes = u.notes && ['available', 'downloading', 'downloaded'].includes(u.state)
+    ? `<div class="upd-notes"><b>Novedades de la ${esc(u.version)}</b>${esc(u.notes)}</div>` : '';
+  return `<div class="set-row"><div class="lbl"><div class="t">Versión ${esc(u.current || '')}${u.mode === 'portable' ? ' · portable' : ''}</div>
+      <div class="d" id="updStatus">${updStatusHTML()}</div>${notes}</div>
+      <div class="ctl">${ctl}</div></div>`;
+}
+function updateSettingsHTML(s, sw) {
+  const portable = S.update.mode === 'portable';
+  return `<div class="set-row"><div class="lbl"><div class="t">Buscar actualizaciones al abrir</div>
+      <div class="d">${portable ? 'La versión portable no se actualiza sola: avisa cuando hay una nueva y abre la página de descarga.'
+        : 'Las versiones nuevas se descargan de GitHub en segundo plano y se instalan al cerrar CineLocal.'}</div></div>
+      <div class="ctl">${sw('autoUpdate', s.autoUpdate !== false)}</div></div>
+    <div id="updInfo">${updInfoHTML()}</div>`;
+}
+/** Aviso discreto abajo a la derecha: versión descargada (o, en la portable, disponible) */
+function paintUpdToast() {
+  const u = S.update;
+  const show = (u.state === 'downloaded' || (u.state === 'available' && u.mode === 'portable')) && S.updDismissed !== u.version;
+  let el = $('#updToast');
+  if (!show) { el?.remove(); return; }
+  const ready = u.state === 'downloaded';
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'updToast';
+    el.className = 'toast new-item upd-toast';
+    $('#toasts').appendChild(el);
+  }
+  if (el.dataset.key === u.state + u.version) return;
+  el.dataset.key = u.state + u.version;
+  el.innerHTML = `<div class="ni-poster">${I.download}</div>
+    <div class="ni-txt"><small>Actualización</small><b>CineLocal ${esc(u.version)} ${ready ? 'está lista' : 'disponible'}</b>
+      <span>${ready ? 'Se instalará al cerrar' : 'Descárgala desde GitHub'}</span></div>
+    ${ready ? '<button class="btn btn-primary btn-sm" data-action="upd-install">Reiniciar ahora</button>' : '<button class="btn btn-accent btn-sm" data-action="upd-open">Descargar</button>'}
+    <button class="icon-btn sm" data-action="upd-dismiss" title="Más tarde">${I.close}</button>`;
+}
+function paintUpdate() {
+  paintUpdToast();
+  if (S.route.name !== 'settings') return;
+  const el = $('#updInfo');
+  if (el) el.innerHTML = updInfoHTML();
+}
+
 async function loadProviderList() {
   if (S.providerListLoading) return;
   S.providerListLoading = true;
@@ -1217,6 +1417,7 @@ function render(keepScroll = false) {
   view.innerHTML = html;
   $$('#nav a').forEach(a => a.classList.toggle('active', a.dataset.nav === r.name || (r.name === 'director' && a.dataset.nav === 'directors')));
   if (r.name === 'director') loadPerson(r.id);
+  if (r.name === 'downloads') loadServers(true);
   if (r.name !== 'director') S.filters.filmo = 'all';
 
   view.style.scrollBehavior = 'auto';
@@ -1383,6 +1584,33 @@ async function emuleAction(a, el) {
       const r = await window.api.emule.launch();
       toast(r.ok ? 'Abriendo eMule…' : r.error, r.ok ? '' : 'error');
     } else if (a === 'emule-connect') { await window.api.emule.connect(); toast('Conectando a la red eD2k y Kad…'); }
+    else if (a === 'emule-srv-any' || a === 'emule-srv-connect' || a === 'emule-srv-off') {
+      S.emule.srv.busy = 'srv'; paintEmule();
+      try {
+        if (a === 'emule-srv-off') setServers(await window.api.emule.disconnect());
+        else setServers(await window.api.emule.connectServer(d.ip, d.port));
+      } finally { S.emule.srv.busy = null; }
+      toast(a === 'emule-srv-off' ? 'Desconectado del servidor' : a === 'emule-srv-any' ? 'Conectando al primer servidor disponible…' : `Conectando a ${d.name}…`);
+      paintEmule();
+    } else if (a === 'emule-kad') {
+      S.emule.srv.busy = 'kad'; paintEmule();
+      try { const r = await window.api.emule.kad(d.op); if (r.kad) S.emule.srv.kad = r.kad; }
+      finally { S.emule.srv.busy = null; }
+      toast(d.op === 'connect' ? 'Conectando a Kad…' : 'Kad desconectado');
+      paintEmule();
+    } else if (a === 'emule-srv-toggle') {
+      S.emule.srv.open = !srvOpen();
+      paintEmule();
+      loadServers(true);
+    } else if (a === 'emule-srv-sort') {
+      const srv = S.emule.srv;
+      srv.dir = srv.sort === d.k ? -srv.dir : SRV_SORTS[d.k];
+      srv.sort = d.k;
+      paintServers();
+    } else if (a === 'emule-srv-refresh') {
+      await loadServers(true);
+      if (srvOutdated()) toast('eMule todavía no ha recargado la plantilla', 'error');
+    }
     else if (a === 'emule-test') {
       const password = $('[data-set-text="emulePassword"]').value;
       const port = +$('[data-set-text="emulePort"]').value || 4711;
@@ -1427,6 +1655,29 @@ async function emuleAction(a, el) {
 document.addEventListener('submit', async (e) => {
   const f = e.target;
   if (f.id === 'dlSearch') { e.preventDefault(); emuleSearch(f.q.value); }
+  else if (f.id === 'srvMet' || f.id === 'kadBoot') {
+    e.preventDefault();
+    const btn = $('button', f);
+    btn.disabled = true;
+    try {
+      if (f.id === 'srvMet') {
+        toast('eMule está descargando el server.met…');
+        const r = await window.api.emule.updateServerMet(f.url.value.trim());
+        setServers(r);
+        f.url.value = '';
+        toast(r.message || 'Lista de servidores actualizada', 'ok');
+      } else {
+        const m = /^\s*([^\s:]+):(\d+)\s*$/.exec(f.addr.value);
+        if (!m) throw new Error('Escribe la IP y el puerto del nodo, p. ej. 1.2.3.4:4672');
+        const r = await window.api.emule.kad('bootstrap', m[1], +m[2]);
+        if (r.kad) S.emule.srv.kad = r.kad;
+        f.addr.value = '';
+        toast('Conectando a Kad desde el nodo…');
+      }
+      paintEmule();
+    } catch (err) { toast(errText(err), 'error'); }
+    finally { btn.disabled = false; }
+  }
   else if (f.id === 'dlLink') {
     e.preventDefault();
     try {
@@ -1527,6 +1778,12 @@ document.addEventListener('click', async (e) => {
         setLb(await window.api.letterboxd.clear()); render(true);
       }
     }
+    else if (a === 'upd-check') { S.update = { ...S.update, state: 'checking' }; paintUpdate(); S.update = await window.api.update.check(); paintUpdate(); }
+    else if (a === 'upd-install') {
+      action.disabled = true;
+      if (!(await window.api.update.install())) { action.disabled = false; toast('La actualización aún no está lista', 'error'); }
+    } else if (a === 'upd-open') window.api.update.openRelease();
+    else if (a === 'upd-dismiss') { S.updDismissed = S.update.version; paintUpdToast(); }
     else if (a.startsWith('emule-') || a.startsWith('dl-') || a === 'pick-emule' || a === 'copy') emuleAction(a, action);
     return;
   }
@@ -1670,6 +1927,7 @@ window.api.onNewItems((list) => {
   }
   if (list.length > 4) toast(`…y ${list.length - 4} novedades más`);
 });
+window.api.update.onStatus((st) => { S.update = st; paintUpdate(); });
 window.api.onOpenItem((id) => { closeModal(); go('detail', { id }); });
 window.api.onMetaProgress((p) => {
   const el = $('#metaStatus');
@@ -1686,7 +1944,9 @@ window.api.onMetaProgress((p) => {
   S.lib = await window.api.getLibrary();
   S.emule.snap = await window.api.emule.get();
   setLb(await window.api.letterboxd.get());
+  S.update = await window.api.update.status();
   render();
+  paintUpdToast();
   paintEmule();
   if (S.settings.emuleEnabled) loadEmuleInfo();
   // escaneo en segundo plano al abrir (detecta archivos nuevos)

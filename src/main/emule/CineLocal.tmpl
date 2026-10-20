@@ -12,6 +12,7 @@
 
 <--TMPL_HEADER-->
 #HEADER
+tmpl	2
 ses	[Session]
 con	[ConState]
 context	[ConText]
@@ -78,3 +79,48 @@ s8	%s
 s9	%s
 #/R
 <--TMPL_SEARCH_RESULT_LINE_END-->
+
+<-- Revision 2 de la plantilla: lista de servidores y estado de Kad.        -->
+<-- "tmpl" en la cabecera dice a CineLocal que eMule ya la ha recargado.     -->
+
+<--TMPL_SERVER_LIST-->
+#SERVERS
+[AddServerBox]
+[ServersList]
+#/SERVERS
+<--TMPL_SERVER_LIST_END-->
+
+<--TMPL_SERVER_LINE-->
+#S
+name	[Servername]
+ip	[ip]
+port	[port]
+desc	[Description]
+ping	[Ping]
+users	[Users]
+files	[Files]
+failed	[Failed]
+prio	[server-priority]
+type	[ServerType]
+state	[ServerState]
+version	[Version]
+#/S
+<--TMPL_SERVER_LINE_END-->
+
+<--TMPL_ADDSERVERBOX-->
+#SRVMSG
+msg	[Message]
+#/SRVMSG
+<--TMPL_ADDSERVERBOX_END-->
+
+<--TMPL_KADDLG-->
+#KAD
+status	[KADSTATUS]
+stats	[KADSTATSDATA]
+bootstrap	[BOOTSTRAPLINE]
+#/KAD
+<--TMPL_KADDLG_END-->
+
+<--TMPL_BOOTSTRAPLINE-->
+yes
+<--TMPL_BOOTSTRAPLINE_END-->

@@ -10,6 +10,7 @@ const { LibraryWatcher, isStable } = require('./watcher');
 const emule = require('./emule');
 const { EmuleService } = require('./emule/service');
 const { LetterboxdService, keyOf: lbKey } = require('./letterboxd');
+const { Updater } = require('./updater');
 
 app.setAppUserModelId('com.cinelocal.app');
 if (!app.requestSingleInstanceLock()) { app.quit(); process.exit(0); }
@@ -44,7 +45,8 @@ const DEFAULT_SETTINGS = {
   myProviders: [],               // plataformas contratadas: [{ id, name }] (ids de TMDB)
   region: 'ES',                   // país de las plataformas (independiente del idioma de los metadatos)
   lbUser: '',                    // usuario de Letterboxd
-  lbMarkWatched: true            // marcar como vistas las películas que ya has visto en Letterboxd
+  lbMarkWatched: true,           // marcar como vistas las películas que ya has visto en Letterboxd
+  autoUpdate: true               // buscar actualizaciones al abrir (se descargan solas y se instalan al cerrar)
 };
 
 // ---------- persistencia sencilla en JSON ----------
@@ -142,7 +144,7 @@ function send(ch, payload) {
 }
 
 app.on('second-instance', () => { if (win) { if (win.isMinimized()) win.restore(); win.focus(); } });
-app.whenReady().then(() => { createWindow(); restartWatcher(); emuleService.restart(); if (embeddedMode()) winEmbed.start(); setTimeout(autoSyncLetterboxd, 15000); });
+app.whenReady().then(() => { createWindow(); restartWatcher(); emuleService.restart(); if (embeddedMode()) winEmbed.start(); setTimeout(autoSyncLetterboxd, 15000); setTimeout(() => updater.start(), 10000); });
 app.on('window-all-closed', () => {
   player.stop();
   winEmbed.stop();
@@ -573,6 +575,15 @@ function emuleTemplatePath() {
   try { return emule.installTemplate(DATA); } catch (e) { console.error('Plantilla de eMule:', e); return null; }
 }
 
+// ---------- actualizaciones ----------
+const updater = new Updater({
+  getSettings: () => settings.data,
+  send,
+  getWindow: () => win,
+  icon: path.join(__dirname, '..', '..', 'build', 'icon.png'),
+  dataDir: DATA
+});
+
 // ---------- IPC ----------
 ipcMain.handle('settings:get', () => ({ ...settings.data, defaults: DEFAULT_SETTINGS }));
 ipcMain.handle('settings:set', async (_e, patch) => {
@@ -709,6 +720,11 @@ ipcMain.handle('shell:open', (_e, url) => {
 ipcMain.handle('shell:showItem', (_e, p) => shell.showItemInFolder(p));
 ipcMain.handle('clipboard:write', (_e, text) => clipboard.writeText(String(text)));
 
+ipcMain.handle('update:status', () => updater.status());
+ipcMain.handle('update:check', () => updater.check());
+ipcMain.handle('update:install', () => updater.install());
+ipcMain.handle('update:open', () => updater.openRelease());
+
 ipcMain.handle('letterboxd:get', () => letterboxd.snapshot());
 ipcMain.handle('letterboxd:sync', async (_e, full = true) => {
   try { await letterboxd.sync(settings.data.lbUser, { full }); return { ok: true }; }
@@ -737,6 +753,11 @@ ipcMain.handle('emule:launch', async () => {
 });
 ipcMain.handle('emule:refresh', () => emuleService.refresh().catch(() => emuleService.snapshot));
 ipcMain.handle('emule:connect', () => emuleService.run(c => c.connect()).then(() => true));
+ipcMain.handle('emule:servers', () => emuleService.query(c => c.servers()));
+ipcMain.handle('emule:connectServer', (_e, a = {}) => emuleService.run(c => c.connectServer(a.ip, a.port)));
+ipcMain.handle('emule:disconnect', () => emuleService.run(c => c.disconnectServer()));
+ipcMain.handle('emule:kad', (_e, a = {}) => emuleService.run(c => c.kad(a.op, a.ip, a.port)));
+ipcMain.handle('emule:updateServerMet', (_e, url) => emuleService.run(c => c.updateServerMet(url)));
 ipcMain.handle('emule:search', (_e, q) => emuleService.run(c => c.search({ method: settings.data.emuleSearchMethod, ...q })));
 ipcMain.handle('emule:results', () => emuleService.run(c => c.searchResults()));
 ipcMain.handle('emule:download', (_e, hash) => emuleService.run(c => c.download(hash)).then(() => true));

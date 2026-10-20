@@ -76,6 +76,21 @@ CineLocal puede buscar y descargar con eMule y seguir el progreso desde la secci
 
 * Busca en servidores o Kad, descarga, pausa, reanuda y cancela, o pega un enlace `ed2k://`.
 * En la ficha de un título: `···` → **Buscar en eMule**.
+
+### Conexión: servidores y Kad
+
+La barra de arriba de **Descargas** muestra el servidor (con *ID alta* o *ID baja*) y el estado de Kad (*Desconectado*, *Conectando…*, *Tras cortafuegos* o *Abierto*, con los contactos), sin tener que abrir la ventana de eMule:
+
+* **Conectar** entra en el primer servidor disponible (como el botón de eMule); mientras conecta, **Cancelar**; ya conectado, **Desconectar**.
+* **Conectar Kad** / **Desconectar Kad**.
+* **Servidores** despliega la lista de servidores de eMule: nombre y descripción, dirección, usuarios, archivos, ping y fallos, con las etiquetas *Estático* y *Prioridad alta*. Se ordena por usuarios, archivos, ping o nombre pulsando la cabecera; el servidor conectado aparece arriba y resaltado, y cada fila tiene su botón **Conectar**. Mientras está a la vista se actualiza cada 5 s. Se abre sola si no hay servidor conectado.
+* Debajo de la lista: **Añadir servidores de un server.met** (pega su dirección `http://…/server.met`; eMule lo descarga y muestra su ventana de progreso) y, con Kad sin conectar, **Conectar Kad desde un nodo** (`IP:puerto`), útil si Kad no encuentra contactos.
+
+Esto necesita la revisión 2 de la plantilla, que CineLocal copia al arrancar en `%APPDATA%\CineLocal\emule\CineLocal.tmpl`. eMule solo lee la plantilla al activar el servidor web o al pulsar *Recargar*, así que si ya la tenías puesta, la primera vez hay que ir a *eMule → Opciones → Servidor Web*, pulsar **Recargar** junto a la plantilla y después **Aplicar** (no hace falta reiniciar eMule). Mientras tanto, Descargas lo avisa en lugar de la lista.
+
+Límites del servidor web de eMule 0.50a: mientras conecta no dice con qué servidor lo está intentando, de Kad solo da el estado y el número de contactos (no los nodos), y no puede cargar un `nodes.dat` desde una dirección (solo arrancar Kad desde un nodo concreto). Si alguna vez ocultaste columnas en la lista de servidores de la interfaz web original, eMule las devuelve vacías.
+
+* Prueba del parser y de los comandos contra un eMule simulado: `node test/emule-servers-test.js`. Capturas del panel: `npx electron test/emule-servers-ui-test.js <carpetaTemporal> <carpetaCapturas>`.
 * Con **Mover a la biblioteca al terminar**, los vídeos que acaba eMule se mueven a la biblioteca: las películas a la raíz y los episodios (`S01E02`, `1x02`, `Cap.102`) a la carpeta de su serie (se reutiliza la carpeta si la serie ya existe). Solo se mueven las descargas que CineLocal ha visto en curso.
 * Con la plantilla de CineLocal, la interfaz web original de eMule deja de verse en el navegador. Para recuperarla, elige `eMule.tmpl` en *Opciones → Servidor Web*.
 * No abras el puerto del servidor web en el router: CineLocal solo se conecta a `127.0.0.1`.
@@ -101,6 +116,22 @@ Pruebas:
 * Perfil: `npx electron test/letterboxd-test.js <copiaDeDatos> <carpetaCapturas> profile <usuario>`.
 * ZIP: `npx electron test/letterboxd-test.js <copiaDeDatos> <carpetaCapturas> export <zip>`.
 
+## Actualizaciones
+
+CineLocal se actualiza solo desde las [releases de GitHub](https://github.com/d4nthalion/cine-local/releases) (con [electron-updater](https://www.electron.build/auto-update)).
+
+* **Instalada:** unos 10 s después de abrir, busca una versión nueva. Si la hay, la descarga en segundo plano. Al terminar aparece el aviso *«CineLocal X.Y.Z está lista · se instalará al cerrar»* con el botón **Reiniciar ahora**; si la ventana no está en primer plano, también llega una notificación de Windows. Si no reinicias, se instala sola al cerrar CineLocal.
+* **Portable:** no puede instalarse sola. Avisa de la versión nueva con un botón **Descargar** que abre la página de la release.
+* **Ajustes → Actualizaciones:** activa o desactiva *Buscar actualizaciones al abrir*, muestra la versión actual, el estado (con el progreso de la descarga y las novedades) y el botón **Comprobar ahora**.
+* **Errores:** nunca interrumpen. Se ven sólo en Ajustes y el detalle queda en `%APPDATA%\CineLocal\updater.log`.
+* **Qué versión elige:** la release marcada como *Latest* en GitHub, leyendo su `latest.yml`. Las releases de Android (`android-v…`) se publican con `--latest=false`, así que nunca lo son. Aun así, CineLocal sólo descarga etiquetas `vX.Y.Z` más nuevas que la instalada.
+* Las versiones hasta la 1.5.0 no traen el actualizador: a la 1.7.0 hay que pasar instalándola a mano.
+
+Pruebas, sin publicar ni instalar nada (antes, `npm run dist`):
+* Flujo completo con un servidor local que ofrece una versión siguiente falsa: `npx electron test/update-test.js <carpetaTemporal> <carpetaCapturas> installer`.
+* Aviso de la portable (incluido descartar una release de Android): `npx electron test/update-test.js <carpetaTemporal> <carpetaCapturas> portable`.
+* Qué release elige en el repositorio real (sólo lectura): `npx electron test/update-test.js <carpetaTemporal> <carpetaCapturas> github`.
+
 ## Android
 
 En [`android/`](android/README.md) está **CineLocal para Android** (móvil): lee la biblioteca directamente de la carpeta compartida del PC (`\\MI-PC\Peliculas`), con la misma forma de reconocer películas y series, metadatos de TMDB y reproductor propio (LibVLC). Se descarga como `CineLocal-android-<versión>.apk` desde las releases `android-v…`.
@@ -117,5 +148,24 @@ npm run fetch-mpv -- --update   # actualiza el mpv que se incluye
 ```
 
 `npm run dist` descarga mpv en `mpv\` la primera vez (compilación x86_64 de [shinchiro](https://github.com/shinchiro/mpv-winbuild-cmake), GPL) y luego reutiliza esa copia; la carpeta no se sube a git.
+
+### Publicar una versión
+
+1. Sube la versión: `npm version X.Y.Z --no-git-tag-version`.
+2. Genera los instaladores: `npm run dist`. En `dist\` quedan:
+   * `CineLocal-Setup-X.Y.Z.exe` (instalador)
+   * `CineLocal-Setup-X.Y.Z.exe.blockmap` (para descargar sólo lo que cambia)
+   * `latest.yml` (versión y sha512 del instalador)
+   * `CineLocal-X.Y.Z-portable.exe`
+3. Publica la release con **los cuatro archivos**. Sin `latest.yml` las versiones instaladas no ven la actualización:
+
+```bash
+gh release create vX.Y.Z dist/CineLocal-Setup-X.Y.Z.exe dist/CineLocal-Setup-X.Y.Z.exe.blockmap dist/latest.yml dist/CineLocal-X.Y.Z-portable.exe --title "CineLocal X.Y.Z" --notes "Novedades…" --latest
+```
+
+* La etiqueta debe ser `vX.Y.Z` y la release, la *Latest*.
+* `latest.yml` tiene que ser el del mismo `npm run dist` que el instalador, porque lleva su sha512.
+* No renombres los archivos: `latest.yml` los busca por su nombre exacto.
+* Las releases de Android van siempre con `--latest=false`, para que la *Latest* sea siempre la de escritorio.
 
 Los datos (ajustes, caché de metadatos, progreso) se guardan en `%APPDATA%\CineLocal`.

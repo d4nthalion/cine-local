@@ -1,7 +1,7 @@
 {
   "name": "cinelocal",
   "productName": "CineLocal",
-  "version": "1.5.0",
+  "version": "1.7.0",
   "description": "Tu cine en casa: películas y series de tu disco con estilo de plataforma de streaming",
   "main": "src/main/main.js",
   "author": "Carlos",
@@ -10,7 +10,7 @@
     "start": "electron .",
     "fetch-mpv": "node scripts/fetch-mpv.js",
     "predist": "node scripts/fetch-mpv.js",
-    "dist": "electron-builder --win nsis portable --x64"
+    "dist": "electron-builder --win nsis portable --x64 --publish never"
   },
   "build": {
     "appId": "com.cinelocal.app",
@@ -48,6 +48,7 @@
       "signAndEditExecutable": true
     },
     "nsis": {
+      "artifactName": "CineLocal-Setup-${version}.${ext}",
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
@@ -57,7 +58,14 @@
     },
     "portable": {
       "artifactName": "CineLocal-${version}-portable.exe"
-    }
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "d4nthalion",
+        "repo": "cine-local"
+      }
+    ]
   },
   "devDependencies": {
     "7zip-bin": "^5.2.0",
@@ -66,5 +74,8 @@
   },
   "allowScripts": {
     "electron@33.4.11": true
+  },
+  "dependencies": {
+    "electron-updater": "6.8.10"
   }
 }

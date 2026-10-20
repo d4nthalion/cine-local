@@ -81,6 +81,12 @@ class EmuleService extends EventEmitter {
     return r;
   }
 
+  /** Consulta que no cambia nada en eMule (lista de servidores): no vuelve a leer las descargas */
+  async query(fn) {
+    if (!this.enabled) throw new Error('Activa la integración con eMule en Ajustes');
+    return fn(this.client);
+  }
+
   async handleCompleted(downloads) {
     const tracked = this.state.data.tracked;
     let changed = false;

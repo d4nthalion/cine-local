@@ -156,7 +156,7 @@ local function render()
 
     -- ---------- barra de tiempo
     local bar_y = h - 112 * s
-    local bar_x1, bar_x2 = pad, w - pad - 128 * s
+    local bar_x1, bar_x2 = pad + 128 * s, w - pad - 128 * s   -- a los lados: tiempo transcurrido y restante
     add_control(bar_x1 - 6 * s, bar_y - 20 * s, bar_x2 + 6 * s, bar_y + 20 * s, 'timeline', nil)
 
     -- ---------- fila inferior
@@ -239,6 +239,7 @@ local function render()
         end
       end
       circle(px, bar_y, (tl_hover and 13 or 9) * s, ACCENT, alpha(0, f))
+      text(pad, bar_y, 4, fmt_time(pos), 25 * s, WHITE, alpha(0, f), false)
       text(w - pad, bar_y, 6, '-' .. fmt_time(dur - pos), 25 * s, WHITE, alpha(0, f), false)
 
       -- tiempo y miniatura bajo el ratón
