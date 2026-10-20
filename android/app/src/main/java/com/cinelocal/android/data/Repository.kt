@@ -53,6 +53,9 @@ class Repository(private val context: Context) {
     val progress = store("progress.json", MapSerializer(String.serializer(), Progress.serializer()), emptyMap())
     val userState = store("state.json", UserState.serializer(), UserState())
 
+    /** Actualizaciones desde las releases de GitHub */
+    val updater = Updater(context, scope, dir) { settings.value.autoUpdate }
+
     private val _status = MutableStateFlow(Status())
     val status: StateFlow<Status> = _status.asStateFlow()
 
@@ -303,6 +306,6 @@ class Repository(private val context: Context) {
     }
 
     fun flushAll() {
-        for (s in listOf(settings, library, metadata, progress, userState, letterboxd.store)) s.flush()
+        for (s in listOf(settings, library, metadata, progress, userState, letterboxd.store, updater.memory)) s.flush()
     }
 }

@@ -11,6 +11,7 @@ Versión para móvil de [CineLocal](../README.md): tus películas y series de la
 * Portada con *Continuar viendo*, *Añadido recientemente*, Mi lista, mejor valoradas y filas por género; Películas y Series con orden, filtro vistas/sin ver y géneros; búsqueda por título, reparto, director o género.
 * El progreso, Mi lista y las vistas son de cada móvil.
 * **Letterboxd**, igual que en escritorio (ver abajo).
+* **Se actualiza sola** desde las releases de GitHub (ver abajo).
 
 ## Letterboxd
 
@@ -27,6 +28,21 @@ En *Ajustes → Letterboxd* escribe tu usuario y el móvil lee tu perfil públic
 * **Emparejado:** con TMDB igual que en escritorio (`data/LetterboxdService.kt`). Los lectores de páginas, RSS y ZIP están en `core/Letterboxd.kt`, con pruebas.
 * **Alternativa:** importar el ZIP de *Letterboxd → Settings → Data → Export your data*.
 
+## Actualizaciones
+
+Al abrir, la app mira en GitHub si hay una versión nueva (como mucho una vez cada 6 horas) y, si la hay, muestra sus novedades con **Actualizar**, **Más tarde** y **Omitir esta versión**. En *Ajustes → Actualizaciones* se puede desactivar la búsqueda al abrir, ver la versión instalada y **Comprobar ahora**.
+
+* **Qué release elige:** lee `GET /repos/d4nthalion/cine-local/releases` y se queda con la de versión más alta cuya etiqueta sea exactamente `android-vX.Y.Z`, que no sea borrador ni prerelease y que tenga un `.apk`. Las de escritorio (`vX.Y.Z`, la *latest* de GitHub) no cuentan. La comparación es numérica (`0.10.0` > `0.9.0`) con el `versionName` instalado. Las notas de la release se muestran sin la sintaxis de markdown. Todo esto está en `core/Updates.kt`, con pruebas.
+* **Descarga:** el APK va a la caché de la app (`cache/updates`) con barra de progreso; se comprueba que el tamaño coincide con el de GitHub y se borran las descargas anteriores.
+* **Permiso:** la primera vez, Android pide permitir que CineLocal instale aplicaciones (*Instalar aplicaciones desconocidas*). La app abre esa pantalla y, al volver con el permiso activado, sigue con la instalación.
+* **Instalación:** con la API de sesiones de `PackageInstaller` (`data/Updater.kt`). El APK se copia a la sesión desde la caché privada, sin `FileProvider`, y el resultado vuelve con un código de estado, así que los fallos (por ejemplo, *firmada con otra clave*) se explican en español. Android siempre pide confirmar la actualización; al terminar, la app se cierra y hay que volver a abrirla.
+
+**Para que funcione, cada release de Android debe:**
+
+1. llevar la etiqueta `android-vX.Y.Z` (sin sufijos como `-beta`; esas se ignoran) y una versión mayor que la anterior en `versionName`,
+2. tener adjunto el `.apk` (`CineLocal-android-X.Y.Z.apk`),
+3. ir firmada con **la misma clave** que las anteriores (ver *Firma y versiones*); si no, Android no la instala encima.
+
 ## Primer uso
 
 1. En el PC, comparte la carpeta de la biblioteca (clic derecho → *Propiedades → Compartir*, solo lectura basta). La red debe ser **Privada**.
@@ -42,7 +58,7 @@ Requisitos: JDK 17 o superior y Android SDK 36 (vale el de Android Studio). Todo
 ```bash
 gradlew assembleDebug        # app/build/outputs/apk/debug/CineLocal-android-<versión>-debug.apk
 gradlew assembleRelease      # app/build/outputs/apk/release/CineLocal-android-<versión>.apk (firmada)
-gradlew testDebugUnitTest    # pruebas del reconocimiento de nombres, del escáner y de Letterboxd
+gradlew testDebugUnitTest    # pruebas del reconocimiento de nombres, del escáner, de Letterboxd y de las actualizaciones
 gradlew installDebug         # instalar en el móvil conectado por USB (depuración USB activada)
 ```
 
@@ -59,12 +75,12 @@ CINELOCAL_KEY_PASSWORD=…
 
 Sin esas propiedades, `assembleRelease` firma con la clave de depuración (sirve para probar, no para publicar). **Guarda una copia del `.jks` y de la contraseña**: si se pierden, las nuevas versiones no se podrán instalar encima y habrá que desinstalar la app.
 
-Para publicar: sube `versionCode` y `versionName` en `app/build.gradle.kts`, compila con `assembleRelease` y crea la release en GitHub con la etiqueta `android-v<versión>` y `--latest=false`, para que la de Windows siga siendo la destacada.
+Para publicar: sube `versionCode` y `versionName` en `app/build.gradle.kts`, compila con `assembleRelease` y crea la release en GitHub con la etiqueta `android-v<versión>`, el `.apk` adjunto y `--latest=false`, para que la de Windows siga siendo la destacada. Los móviles con la app instalada la encontrarán solos (ver *Actualizaciones*).
 
 | Carpeta | Contenido |
 |---|---|
-| `core/` | Modelos, reconocimiento de nombres, escáner e idiomas. Sin dependencias de Android (preparado para reutilizar en Android TV). |
-| `data/` | Acceso SMB (smbj), TMDB (OkHttp), Letterboxd (WebView), almacenamiento JSON y `Repository` (equivale a `main.js`). |
+| `core/` | Modelos, reconocimiento de nombres, escáner, idiomas y elección de actualizaciones. Sin dependencias de Android (preparado para reutilizar en Android TV). |
+| `data/` | Acceso SMB (smbj), TMDB (OkHttp), Letterboxd (WebView), actualizaciones (`Updater`), almacenamiento JSON y `Repository` (equivale a `main.js`). |
 | `ui/` | Pantallas en Compose: Inicio, Películas/Series/Mi lista, Buscar, Ficha y Ajustes. |
 | `player/` | Reproductor con LibVLC y sus controles. |
 

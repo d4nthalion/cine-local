@@ -67,6 +67,7 @@ import com.cinelocal.android.core.Languages
 import com.cinelocal.android.core.Letterboxd
 import com.cinelocal.android.core.Settings
 import com.cinelocal.android.data.Ntfy
+import com.cinelocal.android.data.UpdatePhase
 import com.cinelocal.android.repo
 import com.cinelocal.android.ui.components.AppMenu
 import com.cinelocal.android.ui.components.AppMenuItem
@@ -189,6 +190,8 @@ fun SettingsScreen(nav: Nav) {
                 ActionRow("Actualizar metadatos") { repo.fetchMissingMetadata(force = true) }
             }
 
+            UpdatesSection(s, onChange = { s = it })
+
             Text(
                 "CineLocal para Android " + runCatching { ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName }.getOrNull().orEmpty(),
                 Modifier.fillMaxWidth().padding(vertical = 32.dp),
@@ -297,6 +300,67 @@ private fun LetterboxdSection(s: Settings, onChange: (Settings) -> Unit, saveFir
         confirmButton = { TextAction("Borrar", CL.error) { confirmClear = false; repo.letterboxd.reset() } },
         dismissButton = { TextAction("Cancelar") { confirmClear = false } }
     )
+}
+
+/** Actualizaciones desde GitHub: búsqueda al abrir, versión instalada, estado y "Comprobar ahora" */
+@Composable
+private fun UpdatesSection(s: Settings, onChange: (Settings) -> Unit) {
+    val updater = LocalContext.current.repo.updater
+    val phase by updater.phase.collectAsStateWithLifecycle()
+    val memory by updater.memory.flow.collectAsStateWithLifecycle()
+    val body = MaterialTheme.typography.bodyMedium.copy(fontFeatureSettings = TNUM)
+
+    Header("Actualizaciones")
+    Group {
+        SwitchRow("Buscar actualizaciones al abrir", "Como mucho una vez cada 6 horas.", s.autoUpdate) { onChange(s.copy(autoUpdate = it)) }
+        Sep()
+        Row(Modifier.fillMaxWidth().heightIn(min = 52.dp).padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("Versión instalada", Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge, color = CL.text)
+            Text(updater.installed, style = body, color = CL.text2)
+        }
+        Sep()
+        // estado; con una versión nueva, la fila abre su diálogo
+        val release = when (val p = phase) {
+            is UpdatePhase.Available -> p.release
+            is UpdatePhase.Downloading -> p.release
+            is UpdatePhase.NeedsPermission -> p.release
+            is UpdatePhase.Installing -> p.release
+            is UpdatePhase.Failed -> p.release
+            else -> null
+        }
+        Row(
+            Modifier.fillMaxWidth().heightIn(min = 52.dp).tapRow(enabled = release != null) { updater.showDialog() }
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            val checked = if (memory.lastCheck > 0) "Comprobado el " + java.text.DateFormat.getDateTimeInstance(
+                java.text.DateFormat.MEDIUM, java.text.DateFormat.SHORT, java.util.Locale("es", "ES")
+            ).format(java.util.Date(memory.lastCheck)) else "Aún no se ha comprobado."
+            when (val p = phase) {
+                UpdatePhase.Checking -> {
+                    CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp, color = CL.accent, trackColor = Color.Transparent)
+                    Text("Buscando en GitHub…", Modifier.padding(start = 10.dp), style = body, color = CL.text2)
+                }
+                UpdatePhase.UpToDate -> Text("Tienes la última versión. $checked", style = body, color = CL.text2)
+                UpdatePhase.Idle -> Text(checked, style = body, color = CL.text3)
+                is UpdatePhase.Failed -> Text(p.message, Modifier.weight(1f), style = body, color = CL.error)
+                is UpdatePhase.Downloading -> Text(
+                    "Descargando la ${p.release.version}… ${if (p.total > 0) (p.done * 100 / p.total) else 0} %", Modifier.weight(1f), style = body, color = CL.text2
+                )
+                else -> {
+                    val r = release!!
+                    Text(
+                        "Disponible la ${r.version}" + (if (memory.skipped == r.version) " (omitida)" else ""),
+                        Modifier.weight(1f), style = body, color = CL.accent
+                    )
+                    Icon(Icons.Rounded.ChevronRight, null, Modifier.size(18.dp), tint = CL.text3)
+                }
+            }
+        }
+        Sep()
+        ActionRow("Comprobar ahora", enabled = phase != UpdatePhase.Checking && phase !is UpdatePhase.Downloading) { updater.check(manual = true) }
+    }
+    Help("Las versiones nuevas se descargan de las releases de GitHub. Android pide confirmar la instalación.")
 }
 
 @Composable

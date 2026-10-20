@@ -123,7 +123,8 @@ data class Settings(
     val lbMarkWatched: Boolean = true,   // marcar como vistas las películas que ya has visto en Letterboxd
     val ntfyServer: String = "",         // vacío: https://ntfy.sh
     val ntfyTopic: String = "",          // tema de ntfy al que llegan las peticiones de descarga
-    val ntfyToken: String = ""           // token de acceso, sólo si el tema está protegido
+    val ntfyToken: String = "",          // token de acceso, sólo si el tema está protegido
+    val autoUpdate: Boolean = true       // buscar actualizaciones en GitHub al abrir la app
 ) {
     val configured get() = libraryPath.isNotBlank()
     val ntfyReady get() = ntfyTopic.isNotBlank()

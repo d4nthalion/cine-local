@@ -61,6 +61,7 @@ import androidx.navigation.NavBackStackEntry
 import com.cinelocal.android.ui.components.BottomNav
 import com.cinelocal.android.ui.components.NavTab
 import com.cinelocal.android.ui.components.TextAction
+import com.cinelocal.android.ui.components.UpdateDialog
 import com.cinelocal.android.ui.theme.Dur
 import com.cinelocal.android.ui.theme.EaseEmphasized
 import com.cinelocal.android.ui.theme.EaseExit
@@ -84,7 +85,14 @@ class MainActivity : ComponentActivity() {
         )
         // Al abrir: mostrar lo conocido y volver a escanear la carpeta de red
         if (savedInstanceState == null) { repo.scan(); repo.autoSyncLetterboxd() }
+        repo.updater.autoCheck()   // actualizaciones en GitHub: una vez por proceso, como mucho cada 6 h
         setContent { CineLocalTheme { App() } }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // vuelta de "Instalar aplicaciones desconocidas": si ya hay permiso, sigue la instalación
+        repo.updater.onResume()
     }
 
     override fun onStop() {
@@ -140,6 +148,16 @@ private fun App() {
     // Letterboxd: comprobación de Cloudflare que no pasa sola en segundo plano
     val challenge by repo.letterboxd.challenge.collectAsStateWithLifecycle()
     challenge?.let { CloudflareDialog(it) { repo.letterboxd.cancel() } }
+
+    // Actualización: diálogo y ventana de confirmación del instalador de Android
+    val updater = repo.updater
+    val showUpdate by updater.dialog.collectAsStateWithLifecycle()
+    val updatePhase by updater.phase.collectAsStateWithLifecycle()
+    if (showUpdate) UpdateDialog(updatePhase, updater)
+    val confirmInstall by updater.confirm.collectAsStateWithLifecycle()
+    LaunchedEffect(confirmInstall) {
+        confirmInstall?.let { runCatching { ctx.startActivity(it) }; updater.consumeConfirm() }
+    }
 
     Scaffold(
         containerColor = CL.bg,
