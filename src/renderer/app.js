@@ -114,6 +114,11 @@ function fmtSize(b) {
 function pct(p) { return p && p.dur ? Math.min(100, (p.pos / p.dur) * 100) : 0; }
 function epLabel(e) { return `T${e.season}:E${e.episode}${e.episodeEnd ? '-' + e.episodeEnd : ''}`; }
 function epMeta(it, e) { return it.meta?.seasons?.[e.season]?.episodes?.[e.episode] || null; }
+// TMDB devuelve el nombre genérico en inglés ("Season 1", "Episode 3", "Specials") cuando no está traducido
+const GENERIC_SEASON = /^(season|series|temporada|staffel|saison|stagione)\s*\d+$|^(specials|especiales)$/i;
+const GENERIC_EPISODE = /^(episode|episodio|capítulo|capitulo|folge|épisode|episodio)\s*\d+$/i;
+const seasonLabel = (it, n) => { const name = it.meta?.seasons?.[n]?.name; return name && !GENERIC_SEASON.test(name.trim()) ? name : (n === 0 ? 'Especiales' : `Temporada ${n}`); };
+const episodeLabel = (em, n) => em?.name && !GENERIC_EPISODE.test(em.name.trim()) ? em.name : `Episodio ${n}`;
 
 /** Para una serie: episodio a reproducir y estado */
 function seriesState(it) {
@@ -232,7 +237,8 @@ function watchlistCard({ f, it }) {
 function wideCard({ it, p, ep }) {
   const em = ep ? epMeta(it, ep) : null;
   const img = em?.still && !it.meta?.backdrop ? em.still : (it.meta?.backdrop ? it.meta.backdrop.replace('/original/', '/w780/') : em?.still);
-  const sub = ep ? `${epLabel(ep)}${em?.name ? ' · ' + em.name : ''}` : (p ? fmtLeft(p.dur - p.pos) : '');
+  const named = em?.name && !GENERIC_EPISODE.test(em.name.trim()) ? em.name : '';
+  const sub = ep ? `${epLabel(ep)}${named ? ' · ' + named : ''}` : (p ? fmtLeft(p.dur - p.pos) : '');
   const bar = p ? `<div class="progress"><i style="width:${pct(p)}%"></i></div>` : '';
   const label = ep && !p ? `<span class="tag">Siguiente episodio</span>` : '';
   return `<div class="card wide" tabindex="0" data-play="${it.id}" ${ep ? `data-ep="${ep.id}"` : ''}>
@@ -815,7 +821,7 @@ function seasonSection(it) {
   const season = S.season[it.id] ?? st.ep.season;
   const eps = it.episodes.filter(e => e.season === season);
   const sm = it.meta?.seasons?.[season];
-  const seasonName = n => it.meta?.seasons?.[n]?.name || (n === 0 ? 'Especiales' : `Temporada ${n}`);
+  const seasonName = n => seasonLabel(it, n);
   const tabs = it.seasons.length > 6
     ? `<select class="select" data-season-select="${it.id}">${it.seasons.map(n => `<option value="${n}" ${n === season ? 'selected' : ''}>${esc(seasonName(n))}</option>`).join('')}</select>`
     : `<div class="season-tabs">${it.seasons.map(n => `<button class="${n === season ? 'on' : ''}" data-season="${n}" data-id="${it.id}">${esc(seasonName(n))}</button>`).join('')}</div>`;
@@ -834,7 +840,7 @@ function seasonSection(it) {
           ${p && !p.watched && p.pos > 0 ? `<div class="progress"><i style="width:${pct(p)}%"></i></div>` : ''}
         </div>
         <div class="info">
-          <div class="t">${esc(em.name || `Episodio ${e.episode}`)}<small>${[em.runtime ? em.runtime + ' min' : (p?.dur ? Math.round(p.dur / 60) + ' min' : ''), em.airDate ? new Date(em.airDate).toLocaleDateString('es-ES', { year: 'numeric', month: 'short', day: 'numeric' }) : ''].filter(Boolean).join(' · ')}</small></div>
+          <div class="t">${esc(episodeLabel(em, e.episode))}<small>${[em.runtime ? em.runtime + ' min' : (p?.dur ? Math.round(p.dur / 60) + ' min' : ''), em.airDate ? new Date(em.airDate).toLocaleDateString('es-ES', { year: 'numeric', month: 'short', day: 'numeric' }) : ''].filter(Boolean).join(' · ')}</small></div>
           ${em.overview ? `<p>${esc(em.overview)}</p>` : ''}
           <div class="file">${esc(e.fileName)}</div>
         </div>

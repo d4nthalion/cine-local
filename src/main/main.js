@@ -421,7 +421,8 @@ function buildPlaylist(item, episodeId, fromStart) {
     const code = `T${e.season}:E${e.episode}`;
     return {
       path: e.path,
-      title: `${series} · ${code}${em?.name ? ' · ' + em.name : ''}`,
+      // sin el nombre genérico que da TMDB cuando no está traducido ("Episode 3")
+      title: `${series} · ${code}${em?.name && !/^(episode|episodio|cap[ií]tulo)\s*\d+$/i.test(em.name.trim()) ? ' · ' + em.name : ''}`,
       start: i === 0 ? startOf(e.path) : 0
     };
   });
