@@ -44,6 +44,7 @@ D:\Películas y Series\
 * Si la búsqueda no encuentra nada en tu biblioteca, busca la película en TMDB: cada resultado lleva *Dónde verla* y, con eMule activado, *Buscar en eMule*. Un año al final («dune 2021») afina la búsqueda.
 * Detección automática: lo que copies o descargues en la carpeta aparece solo (cuando termina de copiarse), con aviso en la app y notificación de Windows.
 * Pantalla completa de la app: botón en la barra superior, **F11**, u opción *Iniciar en pantalla completa*.
+* Discord: tu perfil muestra lo que estás viendo («Viendo CineLocal», con póster y tiempo). Ver [Discord](#discord).
 
 ### Atajos
 
@@ -116,6 +117,31 @@ Letterboxd no tiene API pública, así que las páginas del perfil (`/usuario/fi
 Pruebas:
 * Perfil: `npx electron test/letterboxd-test.js <copiaDeDatos> <carpetaCapturas> profile <usuario>`.
 * ZIP: `npx electron test/letterboxd-test.js <copiaDeDatos> <carpetaCapturas> export <zip>`.
+
+## Discord
+
+Mientras ves algo en CineLocal, tu perfil de Discord puede mostrarlo (Rich Presence):
+
+> **Viendo CineLocal**
+> Twin Peaks
+> T2:E5 · El hombre tras el cristal
+> 12:31 ━━━━━━━━━━──── 47:02
+
+Con el póster de TMDB, la barra de tiempo (desaparece y pone *En pausa* al pausar) y los botones *Ver en TMDB* y, en las películas que tienes en Letterboxd, *Ver en Letterboxd* (los botones sólo los ven los demás, no tú). Las películas muestran *Título (año)* y *Película de* su director. Al terminar de ver, al cerrar CineLocal o al desactivarlo, la actividad desaparece.
+
+Configuración (una sola vez):
+
+1. Entra en [discord.com/developers/applications](https://discord.com/developers/applications) y crea una aplicación con **New Application**. Llámala **CineLocal**: el nombre es lo que aparece después de «Viendo».
+2. En *General Information*, copia el **Application ID** y pégalo en *Ajustes → Discord → ID de la aplicación de Discord*. Activa **Mostrar en Discord lo que estoy viendo** y pulsa **Probar**: durante 15 s tu perfil mostrará *Probando CineLocal*.
+3. Opcional: en *Rich Presence → Art Assets* sube el icono de la app (`build/icon.png`) con el nombre `cinelocal`. Si no lo subes se usa el icono del repositorio de GitHub.
+4. En Discord: *Ajustes de usuario → Privacidad de actividad* → activa *Compartir tu actividad*.
+
+* **Modo discreto:** sólo *Viendo una película* o *Viendo una serie*, sin título, póster ni botones.
+* **Estado** (en Ajustes): *Conectado a Discord*, *Discord no está abierto* (lo vuelve a intentar solo, cada vez más espaciado, hasta un minuto) o el error, p. ej. un ID que Discord no reconoce.
+* Sólo se conecta a Discord cuando empiezas a reproducir, y cierra la conexión poco después de terminar. Envía una actualización al empezar, pausar o reanudar, saltar y cambiar de capítulo, como mucho una cada 4 s (Discord admite unas 5 cada 20 s); el avance normal no se envía porque Discord calcula la barra solo.
+* Habla directamente el protocolo local de Discord (tubería `\\?\pipe\discord-ipc-N`), sin librerías ni internet salvo para comprobar si la aplicación tiene el icono `cinelocal`.
+
+Pruebas: `node test/discord-test.js` (actividad y protocolo con un Discord falso). Contra el Discord de tu PC: `node test/discord-test.js real <ApplicationID>` (prueba de 15 s, una película de ejemplo unos segundos y la borra).
 
 ## Actualizaciones
 

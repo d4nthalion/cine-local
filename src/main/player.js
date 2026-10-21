@@ -201,6 +201,7 @@ class Player extends EventEmitter {
       send(['observe_property', 2, 'time-pos']);
       send(['observe_property', 3, 'duration']);
       send(['observe_property', 4, 'playlist-pos']);
+      send(['observe_property', 8, 'pause']);
       if (this.embedded) {
         // integrado, mpv ignora estas órdenes (botones de uosc, teclas) y CineLocal las aplica a su ventana
         send(['observe_property', 5, 'fullscreen']);
@@ -271,6 +272,8 @@ class Player extends EventEmitter {
       return;
     }
     if (m.event === 'file-loaded') { this._addExternalSubs(); return; }
+    // tras un salto (o al empezar un archivo) avisar con la posición ya actualizada
+    if (m.event === 'playback-restart') { this._get('time-pos').then(p => { if (typeof p === 'number') this.state.pos = p; this._emitState(); }); return; }
     if (m.event !== 'property-change') return;
     const s = this.state;
     if (m.name === 'path' && m.data && m.data !== s.path) {
@@ -279,9 +282,13 @@ class Player extends EventEmitter {
     } else if (m.name === 'time-pos' && typeof m.data === 'number') {
       s.pos = m.data;
       const now = Date.now();
-      if (!s.lastEmit || now - s.lastEmit > 5000) { s.lastEmit = now; this._flush(); }
+      if (!s.lastEmit || now - s.lastEmit > 5000) { s.lastEmit = now; this._flush(); this._emitState(); }
     } else if (m.name === 'duration' && typeof m.data === 'number') {
+      const first = !(s.dur > 0) || Math.abs(m.data - s.dur) > 2;
       s.dur = m.data;
+      if (first) this._emitState();
+    } else if (m.name === 'pause' && typeof m.data === 'boolean') {
+      if (s.paused !== m.data) { s.paused = m.data; this._emitState(); }
     } else if (m.name === 'fullscreen' && typeof m.data === 'boolean') {
       // el primer aviso es el valor inicial de mpv, no un cambio pedido por el usuario
       if (this.fsSeen) this.emit('fullscreen', m.data);
@@ -298,6 +305,12 @@ class Player extends EventEmitter {
   _flush() {
     const s = this.state;
     if (s.path && s.dur > 0) this.emit('progress', { path: resolvePath(s.path, s.playlist), pos: s.pos, dur: s.dur });
+  }
+
+  /** Estado de la reproducción (archivo, posición, duración, pausa) para Discord: al empezar, pausar, saltar y cada 5 s */
+  _emitState() {
+    const s = this.state;
+    if (s.path && s.dur > 0) this.emit('state', { path: resolvePath(s.path, s.playlist), pos: s.pos, dur: s.dur, paused: !!s.paused });
   }
 
   /** Integrado: refleja en mpv la pantalla completa de la ventana de CineLocal */

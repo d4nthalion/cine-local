@@ -58,6 +58,11 @@ contextBridge.exposeInMainWorld('api', {
     onUpdate: on('letterboxd:update'),
     onStatus: on('letterboxd:status')
   },
+  discord: {
+    status: () => ipcRenderer.invoke('discord:status'),
+    test: (clientId) => ipcRenderer.invoke('discord:test', clientId),
+    onStatus: on('discord:status')
+  },
   update: {
     status: () => ipcRenderer.invoke('update:status'),
     check: () => ipcRenderer.invoke('update:check'),

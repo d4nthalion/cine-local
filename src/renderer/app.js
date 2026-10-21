@@ -52,6 +52,7 @@ const S = {
   filters: { movies: { genre: null, sort: 'added', seen: 'all', open: false }, series: { genre: null, sort: 'added', seen: 'all', open: false }, directors: { sort: 'count', q: '' }, filmo: 'all', filmoSort: 'year', watchlist: 'all' },
   lb: { films: [], status: {} },   // Letterboxd: películas vistas, notas y watchlist
   update: { state: 'idle' },       // actualizaciones de CineLocal (estado que envía el proceso principal)
+  discord: { state: 'off' },       // Discord Rich Presence: estado de la conexión
   updDismissed: null,              // versión cuyo aviso se ha cerrado con «Más tarde»
   lbById: new Map(),
   people: {},
@@ -922,7 +923,11 @@ function viewSettings() {
       ${emuleSettingsHTML(s, sw)}
     </div>
 
-    <div class="set-group"><h3>Aplicación</h3>
+    ${window.api.platform === 'win32' ? `<div class="set-group" id="discord"><h3>Discord</h3>
+      ${discordSettingsHTML(s, sw)}
+    </div>
+
+    ` : ''}<div class="set-group"><h3>Aplicación</h3>
       <div class="set-row"><div class="lbl"><div class="t">Iniciar en pantalla completa</div><div class="d">Pulsa F11 en cualquier momento para entrar o salir.</div></div><div class="ctl">${sw('startFullscreen', s.startFullscreen)}</div></div>
       <div class="set-row"><div class="lbl"><div class="t">Pantalla completa ahora</div></div><div class="ctl"><button class="btn btn-ghost btn-sm" data-action="fullscreen">Alternar (F11)</button></div></div>
     </div>
@@ -1344,6 +1349,43 @@ function paintLbStatus() {
   const el = $('#lbStatus');
   if (el) el.innerHTML = lbStatusHTML();
   $$('[data-action="lb-sync"],[data-action="lb-import"]').forEach(b => { b.disabled = !!S.lb.status?.running || (b.dataset.action === 'lb-sync' && !S.settings.lbUser); });
+}
+
+// ---------------------------------------------------------------- Discord
+const DISCORD_ID = /^\d{17,20}$/;
+function discordStatusHTML() {
+  const d = S.discord || {};
+  if (S.discordTest === 'running') return '<span class="status-pill"><span class="spinner sm"></span>Probando…</span>';
+  if (S.discordTest?.ok) return '<span class="status-pill ok">Prueba enviada</span> · mira tu perfil de Discord durante 15 s';
+  if (S.discordTest?.error) return `<span class="status-pill bad">${esc(S.discordTest.error)}</span>`;
+  switch (d.state) {
+    case 'connected': return '<span class="status-pill ok">Conectado a Discord</span>';
+    case 'connecting': return '<span class="status-pill"><span class="spinner sm"></span>Conectando con Discord…</span>';
+    case 'not-running': return '<span class="status-pill warn">Discord no está abierto</span> · se volverá a intentar solo';
+    case 'error': return `<span class="status-pill bad">${esc(d.error || 'Error de Discord')}</span>`;
+    case 'unconfigured': return 'Falta el ID de la aplicación de Discord.';
+    case 'idle': return 'Se conecta a Discord al empezar a reproducir.';
+    default: return 'Desactivado.';
+  }
+}
+function discordSettingsHTML(s, sw) {
+  const id = s.discordClientId || '';
+  return `<div class="set-row"><div class="lbl"><div class="t">Mostrar en Discord lo que estoy viendo</div>
+      <div class="d">Mientras reproduces, tu perfil de Discord muestra «Viendo CineLocal» con el título, el póster y el tiempo que queda. Discord tiene que estar abierto en este PC.</div></div>
+      <div class="ctl">${sw('discordEnabled', s.discordEnabled)}</div></div>
+    <div class="set-row"><div class="lbl"><div class="t">ID de la aplicación de Discord</div>
+      <div class="d">Crea una aplicación llamada «CineLocal» en <a data-url="https://discord.com/developers/applications">discord.com/developers/applications</a> y copia aquí su <i>Application ID</i> (General Information). El nombre de la aplicación es lo que aparece después de «Viendo».</div></div>
+      <div class="ctl"><input class="input" data-discord-id value="${esc(id)}" placeholder="123456789012345678" inputmode="numeric" spellcheck="false" style="min-width:220px">
+      <button class="btn btn-ghost btn-sm" data-action="discord-test">Probar</button></div></div>
+    <div class="set-row"><div class="lbl"><div class="t">Modo discreto</div>
+      <div class="d">Sólo «Viendo una película» o «Viendo una serie»: sin título, póster ni enlaces.</div></div>
+      <div class="ctl">${sw('discordDiscreet', s.discordDiscreet)}</div></div>
+    <div class="set-row"><div class="lbl"><div class="t">Estado</div><div class="d" id="discordStatus">${discordStatusHTML()}</div></div></div>`;
+}
+function paintDiscord() {
+  if (S.route.name !== 'settings') return;
+  const el = $('#discordStatus');
+  if (el) el.innerHTML = discordStatusHTML();
 }
 
 // ---------------------------------------------------------------- actualizaciones
@@ -1787,6 +1829,17 @@ document.addEventListener('click', async (e) => {
       if (p) { await saveSetting('mpvPath', p); S.lib = await window.api.getLibrary(); closeModal(); render(true); toast(S.lib.mpv ? 'mpv configurado' : 'Ese archivo no parece mpv', S.lib.mpv ? 'ok' : 'error'); }
     } else if (a === 'mpv-help') mpvHelp();
     else if (a === 'close-modal') closeModal();
+    else if (a === 'discord-test') {
+      const input = $('[data-discord-id]');
+      const id = input.value.trim();
+      if (!DISCORD_ID.test(id)) { S.discordTest = { error: 'El ID tiene que tener entre 17 y 20 cifras' }; paintDiscord(); return; }
+      if (id !== (S.settings.discordClientId || '')) await saveSetting('discordClientId', id);
+      S.discordTest = 'running'; paintDiscord();
+      const r = await window.api.discord.test(id);
+      S.discordTest = r; paintDiscord();
+      clearTimeout(S.discordTestTimer);
+      S.discordTestTimer = setTimeout(() => { S.discordTest = null; paintDiscord(); }, r.ok ? 15000 : 8000);
+    }
     else if (a === 'test-key') {
       const key = $('[data-set-text="tmdbKey"]').value.trim();
       const st = $('#keyStatus');
@@ -1871,6 +1924,12 @@ document.addEventListener('change', (e) => {
       if (t.dataset.set === 'startFullscreen') window.api.setFullscreen(v);
       if (t.dataset.set === 'singleFileFolderAsMovie') window.api.getLibrary().then(l => { S.lib = l; });
     });
+  } else if ('discordId' in t.dataset) {
+    // sólo cifras; un ID mal copiado no se guarda
+    const v = t.value.replace(/\s+/g, '');
+    if (v && !DISCORD_ID.test(v)) { S.discordTest = { error: 'El ID tiene que tener entre 17 y 20 cifras' }; paintDiscord(); return; }
+    S.discordTest = null;
+    saveSetting('discordClientId', v).then(paintDiscord);
   } else if (t.dataset.libPath) {
     const list = [...document.querySelectorAll('[data-lib-path]')].map(x => x.value.trim());
     saveLibPaths(list);
@@ -1963,6 +2022,7 @@ window.api.onNewItems((list) => {
   if (list.length > 4) toast(`…y ${list.length - 4} novedades más`);
 });
 window.api.update.onStatus((st) => { S.update = st; paintUpdate(); });
+window.api.discord.onStatus((st) => { S.discord = st; paintDiscord(); });
 window.api.onOpenItem((id) => { closeModal(); go('detail', { id }); });
 window.api.onMetaProgress((p) => {
   const el = $('#metaStatus');
@@ -1980,6 +2040,7 @@ window.api.onMetaProgress((p) => {
   S.emule.snap = await window.api.emule.get();
   setLb(await window.api.letterboxd.get());
   S.update = await window.api.update.status();
+  S.discord = await window.api.discord.status();
   render();
   paintUpdToast();
   paintEmule();

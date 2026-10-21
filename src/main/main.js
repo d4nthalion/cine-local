@@ -11,6 +11,7 @@ const emule = require('./emule');
 const { EmuleService } = require('./emule/service');
 const { LetterboxdService, keyOf: lbKey } = require('./letterboxd');
 const { Updater } = require('./updater');
+const { DiscordPresence, mediaInfo, GENERIC_EPISODE } = require('./discord');
 
 app.setAppUserModelId('com.cinelocal.app');
 if (!app.requestSingleInstanceLock()) { app.quit(); process.exit(0); }
@@ -46,7 +47,10 @@ const DEFAULT_SETTINGS = {
   region: 'ES',                   // país de las plataformas (independiente del idioma de los metadatos)
   lbUser: '',                    // usuario de Letterboxd
   lbMarkWatched: true,           // marcar como vistas las películas que ya has visto en Letterboxd
-  autoUpdate: true               // buscar actualizaciones al abrir (se descargan solas y se instalan al cerrar)
+  autoUpdate: true,              // buscar actualizaciones al abrir (se descargan solas y se instalan al cerrar)
+  discordEnabled: false,         // mostrar en Discord lo que estás viendo (Rich Presence)
+  discordClientId: '',           // ID de la aplicación creada en discord.com/developers
+  discordDiscreet: false         // sin título ni póster: «Viendo una película» / «Viendo una serie»
 };
 
 // ---------- persistencia sencilla en JSON ----------
@@ -109,7 +113,12 @@ function createWindow() {
   Menu.setApplicationMenu(null);
   nativeTheme.themeSource = 'dark';
   win.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
-  win.once('ready-to-show', () => win.show());
+  // En Windows ready-to-show a veces no llega (la ventana oculta no pinta) y la app quedaba abierta sin ventana:
+  // mostrarla también al terminar de cargar y, como muy tarde, a los 4 s
+  const reveal = () => { if (win && !win.isDestroyed() && !win.isVisible()) win.show(); };
+  win.once('ready-to-show', reveal);
+  win.webContents.once('did-finish-load', reveal);
+  setTimeout(reveal, 4000);
 
   win.on('enter-full-screen', () => { send('window:fullscreen', true); syncEmbeddedFullscreen(true); });
   win.on('leave-full-screen', () => { send('window:fullscreen', false); syncEmbeddedFullscreen(false); });
@@ -143,13 +152,19 @@ function send(ch, payload) {
   if (win && !win.isDestroyed()) win.webContents.send(ch, payload);
 }
 
-app.on('second-instance', () => { if (win) { if (win.isMinimized()) win.restore(); win.focus(); } });
+app.on('second-instance', () => {
+  if (!win || win.isDestroyed()) return;
+  if (win.isMinimized()) win.restore();
+  if (!win.isVisible()) win.show();
+  win.focus();
+});
 app.whenReady().then(() => { createWindow(); restartWatcher(); emuleService.restart(); if (embeddedMode()) winEmbed.start(); setTimeout(autoSyncLetterboxd, 15000); setTimeout(() => updater.start(), 10000); });
 app.on('window-all-closed', () => {
   player.stop();
   winEmbed.stop();
   watcher.stop();
   emuleService.stop();
+  discord.shutdown();
   for (const s of [settings, library, metadata, progress, userState, emuleState, lbStore]) s.flushSync();
   app.quit();
 });
@@ -410,7 +425,7 @@ function buildPlaylist(item, episodeId, fromStart) {
   };
   if (item.type === 'movie') {
     const t = item.meta?.title || item.title;
-    return [{ path: item.path, title: t, start: startOf(item.path), subs: findExternalSubs(rootOf(item.path), item) }];
+    return [{ path: item.path, title: t, start: startOf(item.path), subs: findExternalSubs(rootOf(item.path), item), discord: mediaInfo(item, null, lbSlugOf(item)) }];
   }
   const eps = item.episodes;
   let idx = Math.max(0, eps.findIndex(e => e.id === episodeId));
@@ -422,10 +437,19 @@ function buildPlaylist(item, episodeId, fromStart) {
     return {
       path: e.path,
       // sin el nombre genérico que da TMDB cuando no está traducido ("Episode 3")
-      title: `${series} · ${code}${em?.name && !/^(episode|episodio|cap[ií]tulo)\s*\d+$/i.test(em.name.trim()) ? ' · ' + em.name : ''}`,
-      start: i === 0 ? startOf(e.path) : 0
+      title: `${series} · ${code}${em?.name && !GENERIC_EPISODE.test(em.name.trim()) ? ' · ' + em.name : ''}`,
+      start: i === 0 ? startOf(e.path) : 0,
+      discord: mediaInfo(item, e)
     };
   });
+}
+
+/** Ficha de la película en Letterboxd, si la conocemos (botón de Discord) */
+function lbSlugOf(item) {
+  const id = item.meta?.tmdbId;
+  if (!id) return null;
+  for (const [k, f] of Object.entries(lbStore.data.films || {})) if (f.slug && lbStore.data.ids?.[k]?.id === id) return f.slug;
+  return null;
 }
 
 player.on('progress', ({ path: p, pos, dur }) => {
@@ -449,6 +473,7 @@ player.on('maximize', v => {
   v ? win.maximize() : win.unmaximize();
 });
 player.on('closed', ({ code, stderr }) => {
+  discord.setPlayback(null);
   if (embedded && win && !win.isDestroyed()) {
     // volver al estado de pantalla completa que tenía la app antes de reproducir
     if (win.isFullScreen() !== embedded.wasFullscreen) win.setFullScreen(embedded.wasFullscreen);
@@ -461,6 +486,20 @@ player.on('closed', ({ code, stderr }) => {
   }
 });
 player.on('error', msg => send('toast', { type: 'error', text: 'No se pudo iniciar mpv: ' + msg }));
+
+// ---------- Discord ----------
+const discord = new DiscordPresence({
+  // imágenes subidas a la aplicación de Discord (endpoint público): ¿está el icono «cinelocal»?
+  fetchAssets: id => net.fetch(`https://discord.com/api/v10/oauth2/applications/${id}/assets`).then(r => r.ok ? r.json() : [])
+});
+const discordConfig = (s = settings.data) => ({ enabled: s.discordEnabled, clientId: s.discordClientId, discreet: s.discordDiscreet });
+discord.configure(discordConfig());
+discord.on('status', st => send('discord:status', st));
+// al empezar, pausar o reanudar, saltar, cambiar de capítulo y cada 5 s (sólo se envía a Discord si cambia algo)
+player.on('state', ({ path: p, pos, dur, paused }) => {
+  const item = (player.state.playlist || []).find(i => i.path === p);
+  discord.setPlayback(item?.discord ? { media: item.discord, pos, dur, paused } : null);
+});
 
 // ---------- reproductor integrado (Windows) ----------
 // mpv dibuja dentro de la ventana de CineLocal (--wid) y winEmbed lo sube por encima del contenido web.
@@ -604,6 +643,7 @@ ipcMain.handle('settings:set', async (_e, patch) => {
     if (s.lbUser) letterboxd.sync(s.lbUser, { full: true }).catch(() => {});
   }
   if (!before.lbMarkWatched && s.lbMarkWatched) markLetterboxdWatched();
+  if (['discordEnabled', 'discordClientId', 'discordDiscreet'].some(k => before[k] !== s[k])) discord.configure(discordConfig(s));
   return s;
 });
 ipcMain.handle('tmdb:test', async (_e, key) => {
@@ -725,6 +765,9 @@ ipcMain.handle('update:status', () => updater.status());
 ipcMain.handle('update:check', () => updater.check());
 ipcMain.handle('update:install', () => updater.install());
 ipcMain.handle('update:open', () => updater.openRelease());
+
+ipcMain.handle('discord:status', () => discord.status);
+ipcMain.handle('discord:test', (_e, clientId) => discord.test(clientId));
 
 ipcMain.handle('letterboxd:get', () => letterboxd.snapshot());
 ipcMain.handle('letterboxd:sync', async (_e, full = true) => {
