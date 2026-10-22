@@ -3,6 +3,7 @@ package com.cinelocal.android.data
 import android.content.Context
 import android.net.ConnectivityManager
 import android.net.Uri
+import com.cinelocal.android.core.Episode
 import com.cinelocal.android.core.LbEntry
 import com.cinelocal.android.core.Letterboxd
 import com.cinelocal.android.core.LibraryData
@@ -10,6 +11,7 @@ import com.cinelocal.android.core.LibraryItem
 import com.cinelocal.android.core.LibraryScanner
 import com.cinelocal.android.core.MetaEntry
 import com.cinelocal.android.core.Progress
+import com.cinelocal.android.core.SegRequest
 import com.cinelocal.android.core.Settings
 import com.cinelocal.android.core.Title
 import com.cinelocal.android.core.UserState
@@ -23,6 +25,8 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
@@ -80,6 +84,31 @@ class Repository(private val context: Context) {
 
     /** Filtro rápido "solo lo descargado" de Inicio, Películas, Series y Mi lista */
     val onlyDownloaded = MutableStateFlow(false)
+
+    // ---------------------------------------------------------------- saltar intro (TheIntroDB)
+
+    /** Tramos de intro, resumen y créditos, con caché en skip.json */
+    val introDb = IntroDb(dir, scope, version = { updater.installed })
+
+    /** Qué preguntar a TheIntroDB por una película ([e] null) o un episodio; null si el título no está identificado en TMDB */
+    fun segRequest(t: Title, e: Episode?): SegRequest? {
+        val id = t.meta?.tmdbId ?: return null
+        return if (t.isMovie || e == null) SegRequest(id) else SegRequest(id, e.season, e.episode)
+    }
+
+    init {
+        // Lo descargado (o en cola) guarda sus tramos al pedirlo, para tener el botón sin conexión
+        @OptIn(kotlinx.coroutines.FlowPreview::class)
+        scope.launch {
+            combine(downloads.index.flow, titles) { idx, ts ->
+                val byId = ts.associateBy { it.id }
+                idx.files.mapNotNull { f ->
+                    val t = byId[f.itemId] ?: return@mapNotNull null
+                    segRequest(t, f.episodeId?.let { id -> t.item.episodes.firstOrNull { it.id == id } })
+                }
+            }.distinctUntilChanged().debounce(2000).collect { introDb.prefetch(it) }
+        }
+    }
 
     // ---------------------------------------------------------------- Letterboxd
 
@@ -342,6 +371,6 @@ class Repository(private val context: Context) {
     }
 
     fun flushAll() {
-        for (s in listOf(settings, library, metadata, progress, userState, letterboxd.store, updater.memory, downloads.index)) s.flush()
+        for (s in listOf(settings, library, metadata, progress, userState, letterboxd.store, updater.memory, downloads.index, introDb.store)) s.flush()
     }
 }

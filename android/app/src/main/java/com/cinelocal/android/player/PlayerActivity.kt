@@ -18,6 +18,10 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import com.cinelocal.android.core.Languages
 import com.cinelocal.android.core.PlayQueue
+import com.cinelocal.android.core.SegRequest
+import com.cinelocal.android.core.Segment
+import com.cinelocal.android.core.SkipAction
+import com.cinelocal.android.core.SkipSegments
 import com.cinelocal.android.core.SubFile
 import com.cinelocal.android.repo
 import com.cinelocal.android.ui.epMeta
@@ -32,8 +36,14 @@ import java.io.IOException
 import java.util.concurrent.Executors
 import com.cinelocal.android.ui.title
 
-/** Un elemento de la lista de reproducción (película o episodio) */
-data class PlayItem(val path: String, val title: String, val subtitle: String?, val start: Double, val subs: List<SubFile>)
+/**
+ * Un elemento de la lista de reproducción (película o episodio). [seg]: qué preguntar a TheIntroDB (null si el
+ * título no está identificado en TMDB); [multiEpisode]: archivo con dos episodios (S01E01-E02).
+ */
+data class PlayItem(
+    val path: String, val title: String, val subtitle: String?, val start: Double, val subs: List<SubFile>,
+    val seg: SegRequest? = null, val multiEpisode: Boolean = false
+)
 
 /** De dónde se reproduce: el archivo descargado (y sus subtítulos descargados) o la carpeta compartida por SMB */
 private class Source(val video: Uri, val subs: List<Uri>, val local: Boolean)
@@ -65,6 +75,14 @@ class PlayerActivity : ComponentActivity() {
     @Volatile private var lastReachable: Boolean? = null
     /** Comprobaciones de red y de archivos descargados, fuera del hilo principal */
     private val io = Executors.newSingleThreadExecutor()
+    /** Consultas a TheIntroDB, aparte para no retrasar las comprobaciones de [io] */
+    private val net = Executors.newSingleThreadExecutor()
+
+    // saltar intro / resumen / créditos
+    /** Tramos del vídeo actual (de TheIntroDB o de la caché) */
+    private var segments: List<Segment> = emptyList()
+    /** La posición ya es la de verdad: al reanudar, VLC puede avisar primero de 0 antes de ir a start-time */
+    private var timeSettled = false
 
     // estado que pinta la interfaz
     val state = PlayerUiState()
@@ -96,7 +114,7 @@ class PlayerActivity : ComponentActivity() {
                 PlayerScreen(
                     state = state,
                     videoLayout = videoLayout,
-                    hasNext = { ready && autoplay && PlayQueue.next(paths, index, ::isLocal) { lastReachable ?: true } != null },
+                    hasNext = ::hasNext,
                     onBack = { finish() },
                     onTogglePlay = { if (player.isPlaying) player.pause() else player.play() },
                     onSeekTo = { ms -> player.time = ms.coerceIn(0, maxOf(0, player.length - 1000)); state.time = player.time },
@@ -108,6 +126,7 @@ class PlayerActivity : ComponentActivity() {
                     currentSub = { player.spuTrack },
                     onAudio = { player.setAudioTrack(it) },
                     onSub = { player.setSpuTrack(it) },
+                    onSkip = ::skip,
                     onToggleFill = {
                         state.fill = !state.fill
                         player.videoScale = if (state.fill) MediaPlayer.ScaleType.SURFACE_FILL else MediaPlayer.ScaleType.SURFACE_BEST_FIT
@@ -163,6 +182,7 @@ class PlayerActivity : ComponentActivity() {
     override fun onDestroy() {
         super.onDestroy()
         io.shutdownNow()
+        net.shutdownNow()
         handler.removeCallbacksAndMessages(null)
         if (::player.isInitialized) {
             player.setEventListener(null)
@@ -185,7 +205,7 @@ class PlayerActivity : ComponentActivity() {
         if (t.isMovie) {
             isMovie = true
             autoplay = false
-            playlist = listOf(PlayItem(t.item.path, t.name, null, 0.0, t.item.subs))
+            playlist = listOf(PlayItem(t.item.path, t.name, null, 0.0, t.item.subs, repo.segRequest(t, null)))
             paths = playlist.map { it.path }
             return 0
         }
@@ -193,7 +213,7 @@ class PlayerActivity : ComponentActivity() {
         if (eps.isEmpty()) return -1
         playlist = eps.map { e ->
             val em = epMeta(t, e)
-            PlayItem(e.path, t.name, e.label + (em.title?.let { " · $it" } ?: ""), 0.0, e.subs)
+            PlayItem(e.path, t.name, e.label + (em.title?.let { " · $it" } ?: ""), 0.0, e.subs, repo.segRequest(t, e), e.episodeEnd != null)
         }
         paths = playlist.map { it.path }
         return episodeId?.let { id -> eps.indexOfFirst { it.id == id } }?.takeIf { it >= 0 }
@@ -202,6 +222,9 @@ class PlayerActivity : ComponentActivity() {
 
     /** Descargado y en el móvil */
     private fun isLocal(path: String) = repo.downloads.localIfDone(path) != null
+
+    /** Hay un siguiente episodio que se pueda reproducir (sin conexión, uno descargado) */
+    private fun hasNext(): Boolean = ready && autoplay && PlayQueue.next(paths, index, ::isLocal) { lastReachable ?: true } != null
 
     /** ¿Se llega ahora al PC? Hace red: solo desde [io] */
     private fun probe(): Boolean = repo.pcReachable().also { lastReachable = it }
@@ -232,6 +255,7 @@ class PlayerActivity : ComponentActivity() {
         state.length = 0
         state.buffering = true
         pendingStartMs = (item.start * 1000).toLong()
+        loadSegments(i)
 
         val src = try {
             source(item)
@@ -273,8 +297,8 @@ class PlayerActivity : ComponentActivity() {
             MediaPlayer.Event.Playing -> { state.playing = true; state.buffering = false }
             MediaPlayer.Event.Paused, MediaPlayer.Event.Stopped -> state.playing = false
             MediaPlayer.Event.Buffering -> state.buffering = e.buffering < 100f
-            MediaPlayer.Event.TimeChanged -> { state.time = e.timeChanged; state.buffering = false }
-            MediaPlayer.Event.LengthChanged -> state.length = e.lengthChanged
+            MediaPlayer.Event.TimeChanged -> { state.time = e.timeChanged; state.buffering = false; updateSkip(e.timeChanged) }
+            MediaPlayer.Event.LengthChanged -> { state.length = e.lengthChanged; updateSkip(state.time) }
             MediaPlayer.Event.Vout, MediaPlayer.Event.ESAdded -> if (!tracksApplied) {
                 handler.removeCallbacks(applyTracks)
                 handler.postDelayed(applyTracks, 1200)
@@ -349,6 +373,56 @@ class PlayerActivity : ComponentActivity() {
         player.setSpuTrack(pick?.id ?: -1)
     }
 
+    // ---------------------------------------------------------------- saltar intro / resumen / créditos
+
+    /** Los tramos del vídeo [i]: los guardados al momento y, si faltan o caducaron, los de TheIntroDB */
+    private fun loadSegments(i: Int) {
+        segments = emptyList()
+        timeSettled = false
+        state.skip = null
+        val req = playlist[i].seg ?: return
+        repo.introDb.cached(req)?.let { segments = it.segments }
+        net.execute {
+            val segs = repo.introDb.get(req)
+            handler.post {
+                if (isDestroyed || index != i) return@post
+                segments = segs
+                updateSkip(state.time)
+            }
+            // el siguiente episodio, ya preparado (también para verlo sin conexión si está descargado)
+            playlist.getOrNull(i + 1)?.seg?.let { repo.introDb.prefetch(listOf(it)) }
+        }
+    }
+
+    /** El botón que toca en [t] (solo botón: nunca se salta nada sin tocarlo) */
+    private fun updateSkip(t: Long) {
+        if (!::player.isInitialized || playlist.isEmpty()) return
+        if (!timeSettled) {
+            if (t < pendingStartMs - 2000) return
+            timeSettled = true
+        }
+        val segs = SkipSegments.forFile(segments, playlist[index].multiEpisode, state.length)
+        val a = SkipSegments.action(segs, t, state.length, ::hasNext)
+        if (state.skip != a) state.skip = a
+    }
+
+    /** Botón de saltar: al final del tramo o, en los créditos, al siguiente episodio (que cuenta este como visto) */
+    private fun skip() {
+        val a: SkipAction = state.skip ?: return
+        if (a.next) {
+            val dur = player.length / 1000.0
+            if (dur > 0) repo.saveProgress(playlist[index].path, dur, dur)
+            state.skip = null
+            advance()
+        } else a.seekTo?.let(::seekSkip)
+    }
+
+    private fun seekSkip(ms: Long) {
+        player.time = ms
+        state.time = ms
+        updateSkip(ms)
+    }
+
     // ---------------------------------------------------------------- progreso
 
     private val ticker = object : Runnable {
@@ -394,4 +468,6 @@ class PlayerUiState {
     var length by mutableLongStateOf(0L)
     var error by mutableStateOf<String?>(null)
     var fill by mutableStateOf(false)
+    /** Botón de saltar intro / resumen / créditos que toca ahora */
+    var skip by mutableStateOf<SkipAction?>(null)
 }

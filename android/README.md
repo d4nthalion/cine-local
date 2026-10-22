@@ -8,6 +8,7 @@ Versión para móvil de [CineLocal](../README.md): tus películas y series de la
 * Entiende los nombres igual que la app de escritorio: **archivo suelto = película, carpeta = serie**, `S01E02`, `1x02`, `Cap.102`, `Temporada N`… (`core/NameParser.kt` es una traducción de `scanner.js`).
 * Carátulas, sinopsis, reparto y episodios desde **TMDB** (misma búsqueda que en escritorio, con *Corregir coincidencia*).
 * Reproduce con **LibVLC**: MKV, AC3, DTS, subtítulos `.srt`/`.ass` internos o junto al vídeo, audio y subtítulos según el idioma elegido (con el modo *“Sólo si el audio está en otro idioma”*), reanuda donde lo dejaste y pasa al siguiente episodio.
+* **Saltar intro, resumen y créditos** con los tiempos de [TheIntroDB](https://theintrodb.org) (ver abajo).
 * Portada con *Continuar viendo*, *Añadido recientemente*, Mi lista, mejor valoradas y filas por género; Películas y Series con orden, filtro vistas/sin ver y géneros; búsqueda por título, reparto, director o género.
 * Si la búsqueda no encuentra nada en la biblioteca, busca la película en **TMDB** (un año al final afina: `dune 2021`) y cada resultado tiene **Pedir descarga** por ntfy, como en la watchlist (`core/OnlineSearch.kt`, con pruebas).
 * **Descargas para ver sin conexión** con el PC: películas, temporadas, series o episodios sueltos (ver abajo).
@@ -31,6 +32,15 @@ Para ver algo cuando el PC está apagado o fuera de casa, descárgalo antes al m
 * **Pantalla Descargas:** desde el icono de la cabecera (aparece cuando hay alguna) o *Ajustes → Descargas → Ver descargas*. Muestra lo que está en curso (pausar, reanudar, cancelar), lo descargado agrupado por título con su tamaño (eliminar) y el espacio usado y libre.
 * **Carátulas:** al pedir una descarga se guardan en la caché de imágenes el póster, el fondo, el logotipo y las imágenes de los episodios, para que se vean sin conexión.
 * La lógica pura (índice y estados, comprobación de espacio, rutas locales, resúmenes) está en `core/Downloads.kt`, con pruebas.
+
+## Saltar intro, resumen y créditos
+
+Durante la intro aparece abajo a la derecha **Saltar intro** (y **Saltar resumen** en el *«Anteriormente en…»*), aunque los controles estén ocultos; al tocarlo, el vídeo sigue medio segundo después de donde acaba. En los créditos, si hay un siguiente episodio que se pueda ver (sin conexión, uno descargado), el botón es **Siguiente episodio** y cuenta el actual como visto. En el último episodio o en una película no hay botón si los créditos llegan al final (cerrar el reproductor de golpe sorprende y salir ya está a un toque); si después hay una escena, el botón es **Saltar créditos**. Con mando o teclado el botón toma el foco.
+
+* **Siempre activo y sin ajustes:** no hay nada que configurar ni clave que poner. Nunca se salta nada sin tocar el botón.
+* **De dónde salen los tiempos:** `GET https://api.theintrodb.org/v4/media?tmdb_id=…&season=…&episode=…` con el id de TMDB del título (las películas, solo `tmdb_id`). Una petición por capítulo al empezar a verlo, y la del siguiente en segundo plano. Las peticiones son anónimas, con un límite (25 cada 10 s y uno diario): la app va con margen y, ante un *429*, espera lo que diga `Retry-After`.
+* **Caché:** en `skip.json`; lo encontrado vale 30 días y lo que TheIntroDB no tiene, 7. Sin red se usa lo guardado aunque haya caducado. Al pedir una descarga se guardan también sus tiempos, para tener el botón sin conexión.
+* La lógica pura (lectura y limpieza de la respuesta, tramo activo, botón, caducidad, límite de peticiones) está en `core/SkipSegments.kt`, con pruebas; la red en `data/IntroDb.kt`.
 
 ## Letterboxd
 
@@ -78,7 +88,7 @@ Requisitos: JDK 17 o superior y Android SDK 36 (vale el de Android Studio). Todo
 ```bash
 gradlew assembleDebug        # app/build/outputs/apk/debug/CineLocal-android-<versión>-debug.apk
 gradlew assembleRelease      # app/build/outputs/apk/release/CineLocal-android-<versión>.apk (firmada)
-gradlew testDebugUnitTest    # pruebas del reconocimiento de nombres, de Letterboxd, de las actualizaciones, de las descargas y de las rutas SMB
+gradlew testDebugUnitTest    # pruebas del reconocimiento de nombres, de Letterboxd, de las actualizaciones, de las descargas, de saltar la intro y de las rutas SMB
 gradlew installDebug         # instalar en el móvil conectado por USB (depuración USB activada)
 ```
 

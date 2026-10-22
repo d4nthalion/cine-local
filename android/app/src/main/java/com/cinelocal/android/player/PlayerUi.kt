@@ -48,6 +48,7 @@ import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.AspectRatio
 import androidx.compose.material.icons.rounded.Audiotrack
 import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.FastForward
 import androidx.compose.material.icons.rounded.Forward10
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
@@ -69,6 +70,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.input.InputMode
+import androidx.compose.ui.platform.LocalInputModeManager
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
@@ -111,6 +117,7 @@ fun PlayerScreen(
     currentSub: () -> Int,
     onAudio: (Int) -> Unit,
     onSub: (Int) -> Unit,
+    onSkip: () -> Unit,
     onToggleFill: () -> Unit
 ) {
     var controls by remember { mutableStateOf(true) }
@@ -214,6 +221,26 @@ fun PlayerScreen(
             ) {
                 Text(msg, color = CL.text, textAlign = TextAlign.Center, style = MaterialTheme.typography.bodyLarge)
                 PrimaryButton("Volver", onClick = onBack)
+            }
+        }
+
+        // «Saltar intro» / «Saltar resumen» / «Siguiente episodio»: abajo a la derecha, también con los controles
+        // ocultos; con ellos visibles sube por encima de la barra de tiempo
+        AnimatedVisibility(
+            state.skip != null && state.error == null && dialog == null,
+            modifier = Modifier.align(Alignment.BottomEnd),
+            enter = fadeIn(tween(200)) + slideInHorizontally(tween(240)) { it / 4 },
+            exit = fadeOut(tween(160))
+        ) {
+            // conserva el último texto mientras se desvanece
+            val last = remember { mutableStateOf(state.skip) }
+            state.skip?.let { last.value = it }
+            val bottom by animateDpAsState(if (controls) 112.dp else 28.dp, tween(220), label = "skipY")
+            last.value?.let { a ->
+                SkipPill(
+                    a.label, a.next,
+                    Modifier.windowInsetsPadding(WindowInsets.safeDrawing).padding(end = 24.dp, bottom = bottom)
+                ) { onSkip() }
             }
         }
 
@@ -341,6 +368,36 @@ private fun NextButton(onClick: () -> Unit) {
     ) {
         Text("Siguiente episodio", color = CL.text, style = MaterialTheme.typography.labelLarge)
         Icon(Icons.Rounded.SkipNext, null, Modifier.padding(start = 6.dp).size(20.dp), tint = CL.text)
+    }
+}
+
+/**
+ * Píldora de saltar (como en las plataformas de streaming): blanca con texto tinta, como el botón principal.
+ * Se puede usar con mando o teclado: con ellos toma el foco al aparecer y lo marca con un borde violeta.
+ */
+@Composable
+private fun SkipPill(label: String, next: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    val s by animateFloatAsState(if (pressed) 0.96f else 1f, spring(dampingRatio = 0.7f, stiffness = Spring.StiffnessMedium), label = "skipScale")
+    val focus = remember { FocusRequester() }
+    var focused by remember { mutableStateOf(false) }
+    val keyboard = LocalInputModeManager.current.inputMode == InputMode.Keyboard
+    LaunchedEffect(label) { if (keyboard) runCatching { focus.requestFocus() } }
+    Row(
+        modifier
+            .graphicsLayer { scaleX = s; scaleY = s }
+            .height(46.dp)
+            .background(if (pressed) CL.paperPressed else CL.paper, CircleShape)
+            .then(if (focused && keyboard) Modifier.border(2.dp, CL.accent, CircleShape) else Modifier)
+            .focusRequester(focus)
+            .onFocusChanged { focused = it.isFocused }
+            .clickable(interaction, indication = null, role = Role.Button, onClick = onClick)
+            .padding(start = 20.dp, end = 16.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(label, color = CL.onPaper, style = MaterialTheme.typography.labelLarge, maxLines = 1)
+        Icon(if (next) Icons.Rounded.SkipNext else Icons.Rounded.FastForward, null, Modifier.padding(start = 8.dp).size(20.dp), tint = CL.onPaper)
     }
 }
 
