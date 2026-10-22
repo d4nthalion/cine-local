@@ -126,6 +126,13 @@ function createWindow() {
   win.on('unmaximize', () => { if (embedded && player.playing) player.setMaximized(false); });
   // al restaurar desde la barra de tareas, volver a poner el vídeo delante
   win.on('restore', () => { if (embedded && player.playing) winEmbed.raise(embedded.hwnd); });
+  // al volver a la ventana (Alt+Tab, clic en la barra de tareas) Chromium se repinta encima del vídeo
+  // y mpv deja de recibir el ratón: sin esto la interfaz del reproductor no reaparece hasta pulsar Esc
+  win.on('focus', () => {
+    if (!embedded || !player.playing) return;
+    const hwnd = embedded.hwnd;
+    for (const ms of [0, 150, 600]) setTimeout(() => { if (embedded?.hwnd === hwnd && player.playing) winEmbed.raise(hwnd); }, ms);
+  });
   win.webContents.on('before-input-event', (e, input) => {
     if (input.type === 'keyDown' && input.key === 'F11') {
       win.setFullScreen(!win.isFullScreen());

@@ -176,7 +176,8 @@ local function render()
     end
     -- control de volumen: se despliega al pasar por el altavoz
     local vol_x1, vol_x2 = x - 30 * s, x + 120 * s
-    if state.vol_open then add_control(vol_x1, row_y - 22 * s, vol_x2 + 10 * s, row_y + 22 * s, 'volume', nil) end
+    -- la zona empieza justo donde acaba el altavoz (sin hueco que la cierre) y es igual de alta
+    if state.vol_open then add_control(x - 40 * s, row_y - 30 * s, vol_x2 + 16 * s, row_y + 30 * s, 'volume', nil) end
 
     local right = {}
     right[#right + 1] = { state.fullscreen and 'fullscreen_exit' or 'fullscreen', 'fullscreen', state.fullscreen and 'Salir de pantalla completa' or 'Pantalla completa' }
@@ -451,8 +452,17 @@ mp.observe_property('mouse-pos', 'native', function(_, m)
   end
   -- abrir/cerrar el volumen según el ratón
   local c = control_at(state.mx, state.my)
-  if c and (c.id == 'mute' or c.id == 'volume') then state.vol_open = true
-  elseif state.vol_open and state.dragging ~= 'volume' then state.vol_open = false end
+  if c and (c.id == 'mute' or c.id == 'volume') then
+    state.vol_open = true
+    if state.vol_close then state.vol_close:kill(); state.vol_close = nil end
+  elseif state.vol_open and state.dragging ~= 'volume' and not state.vol_close then
+    -- se cierra si el ratón sigue fuera un momento: al ir del altavoz a la barra no desaparece
+    state.vol_close = mp.add_timeout(0.45, function()
+      state.vol_close = nil
+      local c2 = control_at(state.mx, state.my)
+      if state.dragging ~= 'volume' and not (c2 and (c2.id == 'mute' or c2.id == 'volume')) then state.vol_open = false; wake() end
+    end)
+  end
   if moved then show() else wake() end
 end)
 
