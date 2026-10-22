@@ -45,6 +45,7 @@ D:\Películas y Series\
 * Detección automática: lo que copies o descargues en la carpeta aparece solo (cuando termina de copiarse), con aviso en la app y notificación de Windows.
 * Pantalla completa de la app: botón en la barra superior, **F11**, u opción *Iniciar en pantalla completa*.
 * Discord: tu perfil muestra lo que estás viendo («Viendo CineLocal», con póster y tiempo). Ver [Discord](#discord).
+* Saltar intro, resumen y créditos con los tiempos de [TheIntroDB](https://theintrodb.org), como en Netflix. Ver [Saltar intro](#saltar-intro).
 
 ### Atajos
 
@@ -57,6 +58,7 @@ D:\Películas y Series\
 | En el reproductor: `f` | Pantalla completa · `q` salir (guarda el progreso) |
 | En el reproductor: clic derecho | Menú: subtítulos, audio, capítulos, episodios, velocidad |
 | En el reproductor: `Tab` | Mostrar u ocultar los controles |
+| En el reproductor: `s` | Saltar intro / resumen o ir al siguiente episodio (si el botón está a la vista; si no, captura de pantalla) |
 | En el reproductor: clic / doble clic / rueda | Pausa / pantalla completa / ±5 s |
 
 ### Reproductor integrado
@@ -66,6 +68,18 @@ En Windows el vídeo se reproduce **dentro de la ventana de CineLocal** (que pas
 ### Interfaz del reproductor
 
 Por defecto el reproductor usa la interfaz propia de CineLocal (`player-ui/scripts/cinelocal-osc.lua`), al estilo de Netflix / Prime Video: al mover el ratón aparecen los sombreados, el título con el botón de volver, el botón grande de reproducir/pausa con ±10 s, la barra de tiempo con miniaturas ([thumbfast](https://github.com/po5/thumbfast), MPL‑2.0) y la fila de controles (volumen desplegable, siguiente episodio, episodios, subtítulos, audio, pantalla completa y, fuera de pantalla completa, minimizar/maximizar/cerrar); se oculta sola a los ~2,5 s salvo en pausa. Un clic en el vídeo pausa, doble clic pone pantalla completa y la rueda avanza o retrocede 5 s (sobre el altavoz, cambia el volumen). Los menús de audio, subtítulos y episodios (y el del clic derecho) son de [uosc](https://github.com/tomasklaen/uosc) (LGPL‑2.1), al que se le desactivan sus propios controles. Todo está en `player-ui/`, que se copia a `%APPDATA%\CineLocal\mpv-config` y se pasa a mpv con `--config-dir` (al cambiar `player-ui/VERSION` se vuelve a copiar). Con esa interfaz mpv no lee tu configuración propia de `%APPDATA%\mpv`; si la prefieres, elige *Ajustes → Reproducción → Interfaz del reproductor → Clásica de mpv*. Capturas de prueba: `node test/player-ui-test.js "C:\ruta\mpv.exe" <carpeta>`.
+
+### Saltar intro
+
+Con la interfaz moderna del reproductor, durante la intro, el resumen («Anteriormente en…») o los créditos aparece abajo a la derecha, sobre la barra de tiempo, un botón **Saltar intro**, **Saltar resumen** o **Siguiente episodio** (en los créditos, sólo si hay otro capítulo en la lista; en el último capítulo y en las películas no sale). Se ve durante todo el tramo aunque el resto de los controles estén ocultos; se pulsa con el ratón o con la tecla `s`. Saltar lleva al final del tramo (+0,5 s).
+
+Viene siempre activado y no tiene nada que configurar.
+
+* Los tiempos son de [TheIntroDB](https://theintrodb.org), una base de datos de la comunidad: no todas las series tienen tiempos. Se buscan por el id de TMDB de la serie, la temporada y el capítulo (y la duración del archivo, para elegir el montaje correcto), así que hace falta que la serie esté identificada en TMDB. Con la interfaz clásica de mpv no hay botón.
+* Una consulta por capítulo al empezar a reproducirlo (`GET https://api.theintrodb.org/v4/media?tmdb_id=…&season=…&episode=…&duration_ms=…`) y, al minuto de verlo, la del siguiente capítulo de la lista en segundo plano. Las respuestas se guardan en `%APPDATA%\CineLocal\introdb.json`: 30 días lo encontrado y 7 días lo que no está. Si la API pide esperar (429), no se le vuelve a preguntar hasta que pase el tiempo que indica; nunca más de 20 consultas cada 10 s.
+* `src/main/introdb.js` (consultas, caché y normalización: `start_ms` nulo = 0, `end_ms` nulo = hasta el final, rangos vacíos como `{0,0}` se ignoran) manda los tramos a `cinelocal-osc.lua` con `script-message cinelocal-segments`.
+
+Pruebas: `node test/introdb-test.js` (normalización, tramo activo, caché, 429; añade `real` para 3 consultas a la API de verdad) y capturas del botón con `node test/skip-intro-ui-test.js "C:\ruta\mpv.exe" <carpeta>`.
 
 ## Descargas con eMule
 

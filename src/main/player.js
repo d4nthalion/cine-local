@@ -165,6 +165,7 @@ class Player extends EventEmitter {
     }
 
     this.embedded = !!wid;
+    this.modernUi = !!uiDir;   // interfaz de CineLocal (cinelocal-osc.lua): botón «Saltar intro»
     this.fsSeen = false;
     this.maxSeen = false;
     this.state = { playlist, index: 0, path: playlist[0]?.path, pos: 0, dur: 0 };
@@ -287,6 +288,11 @@ class Player extends EventEmitter {
       const first = !(s.dur > 0) || Math.abs(m.data - s.dur) > 2;
       s.dur = m.data;
       if (first) this._emitState();
+      // una vez por archivo, con la duración ya conocida (tiempos de TheIntroDB)
+      if (s.path && s.loadedFor !== s.path && m.data > 0) {
+        s.loadedFor = s.path;
+        this.emit('loaded', { path: resolvePath(s.path, s.playlist), mpvPath: s.path, dur: m.data });
+      }
     } else if (m.name === 'pause' && typeof m.data === 'boolean') {
       if (s.paused !== m.data) { s.paused = m.data; this._emitState(); }
     } else if (m.name === 'fullscreen' && typeof m.data === 'boolean') {
@@ -318,6 +324,9 @@ class Player extends EventEmitter {
 
   /** Integrado: refleja en mpv si la ventana de CineLocal está maximizada (icono del botón de uosc) */
   setMaximized(v) { this._cmd('set', 'window-maximized', v ? 'yes' : 'no'); }
+
+  /** Tramos de intro/resumen/créditos para el botón «Saltar» de cinelocal-osc.lua (mpvPath: ruta tal como la da mpv) */
+  sendSegments(payload) { this._cmd('script-message', 'cinelocal-segments', JSON.stringify(payload)); }
 
   /** Integrado: tecla pulsada con el foco en CineLocal (nombre de tecla de mpv) */
   key(name) { this._cmd('keypress', name); }

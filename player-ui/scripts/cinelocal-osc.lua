@@ -1,6 +1,8 @@
 -- Interfaz de reproducción de CineLocal, al estilo de Netflix / Prime Video / HBO Max.
 -- Al mover el ratón aparece todo (sombreados, título, botón central, barra de tiempo y controles)
 -- y se oculta sola. Los menús de audio, subtítulos y episodios son los de uosc.
+-- Con los tiempos de TheIntroDB (los manda CineLocal con «script-message cinelocal-segments <json>») muestra
+-- el botón «Saltar intro» / «Saltar resumen» / «Siguiente episodio», visible aunque el resto esté oculto.
 
 local mp = require 'mp'
 local utils = require 'mp.utils'
@@ -21,6 +23,8 @@ local state = {
   menu_open = false, pressed = nil, dragging = nil, vol_open = false,
   flash = nil, pending_click = nil, ignore_up = false, down_at = nil,
   thumb = { width = 0, height = 0, disabled = true }, thumb_shown = false,
+  -- saltar intro/resumen/créditos: tramos del archivo actual, tramo activo, botón y aviso
+  segs = {}, seg = nil, seg_idx = nil, seg_done = {}, auto = {}, pill_fade = 0, pill_last = nil, toast = nil,
 }
 local controls = {}       -- zonas pulsables de la última pintada: {x1,y1,x2,y2,id,tip}
 local timer = nil
@@ -47,6 +51,19 @@ local function rect(x1, y1, x2, y2, color, a, r, blur)
   if by2 < by1 then by1, by2 = (y1 + y2) / 2, (y1 + y2) / 2 end
   push(string.format('{\\an7\\pos(0,0)\\shad0\\bord%.2f\\blur%.2f\\1c&H%s&\\3c&H%s&\\1a&H%s&\\3a&H%s&\\p1}m %.1f %.1f l %.1f %.1f %.1f %.1f %.1f %.1f{\\p0}',
     r, blur or 0, color, color, a, a, bx1, by1, bx2, by1, bx2, by2, bx1, by2))
+end
+
+-- Rectángulo de esquinas redondeadas trazado con curvas (admite borde de otro color)
+local function rrect(x1, y1, x2, y2, r, fill, fill_a, border, border_a, bord)
+  local c = r * 0.4477    -- 1 - 0.5523: puntos de control de un cuarto de círculo
+  push(string.format('{\\an7\\pos(0,0)\\shad0\\blur0\\bord%.2f\\1c&H%s&\\3c&H%s&\\1a&H%s&\\3a&H%s&\\p1}' ..
+    'm %.1f %.1f l %.1f %.1f b %.1f %.1f %.1f %.1f %.1f %.1f l %.1f %.1f b %.1f %.1f %.1f %.1f %.1f %.1f ' ..
+    'l %.1f %.1f b %.1f %.1f %.1f %.1f %.1f %.1f l %.1f %.1f b %.1f %.1f %.1f %.1f %.1f %.1f{\\p0}',
+    bord or 0, fill, border or fill, fill_a, border_a or fill_a,
+    x1 + r, y1, x2 - r, y1, x2 - c, y1, x2, y1 + c, x2, y1 + r,
+    x2, y2 - r, x2, y2 - c, x2 - c, y2, x2 - r, y2,
+    x1 + r, y2, x1 + c, y2, x1, y2 - c, x1, y2 - r,
+    x1, y1 + r, x1, y1 + c, x1 + c, y1, x1 + r, y1))
 end
 
 local function circle(x, y, radius, color, a)
@@ -100,6 +117,36 @@ end)
 local function thumb_clear()
   if state.thumb_shown then mp.commandv('script-message-to', 'thumbfast', 'clear'); state.thumb_shown = false end
 end
+
+-- ---------------------------------------------------------------- saltar intro / resumen / créditos
+
+local SEG_LABELS = { intro = 'Saltar intro', recap = 'Saltar resumen' }
+local SEG_TOASTS = { intro = 'Intro saltada', recap = 'Resumen saltado' }
+
+-- final del tramo en segundos (sin final = hasta el final del archivo)
+local function seg_end(sg)
+  local e = sg['end']
+  if not e or (state.dur > 0 and e > state.dur) then e = state.dur end
+  return e or 0
+end
+
+-- texto del botón para un tramo; nil = sin botón (créditos del último capítulo o de una película)
+local function seg_label(sg)
+  if SEG_LABELS[sg.kind] then return SEG_LABELS[sg.kind] end
+  if (sg.kind == 'credits' or sg.kind == 'preview') and state.pl_pos < state.pl_count - 1 then return 'Siguiente episodio' end
+  return nil
+end
+
+local function find_segment(t)
+  for i, sg in ipairs(state.segs) do
+    local e = seg_end(sg)
+    if e > 0 and t >= (sg.start or 0) and t < e - 0.5 and seg_label(sg) then return sg, i end
+  end
+  return nil, nil
+end
+
+-- longitud aproximada del texto (en caracteres UTF-8)
+local function ulen(s) return select(2, s:gsub('[^\128-\191]', '')) end
 
 -- ---------------------------------------------------------------- pintado
 
@@ -293,6 +340,41 @@ local function render()
     thumb_clear()
   end
 
+  -- botón «Saltar intro» / «Saltar resumen» / «Siguiente episodio»: abajo a la derecha, sobre la barra de tiempo,
+  -- visible durante todo el tramo aunque el resto de la interfaz esté oculta
+  local pill_y2 = h - 162 * s
+  local pf = state.pill_fade
+  if pf > 0.001 and state.pill_last and not state.menu_open then
+    local label = state.pill_last
+    local fs = 25 * s
+    local x2 = w - 52 * s
+    local x1 = x2 - (24 * s + 32 * s + 12 * s + ulen(label) * fs * 0.55 + 28 * s)
+    local y1, y2 = pill_y2 - 58 * s, pill_y2
+    local ctl = state.seg and add_control(x1, y1, x2, y2, 'skip', nil)
+    local hv = ctl and state.hover and control_at(mx, my) == ctl
+    rrect(x1, y1, x2, y2, 8 * s, hv and ACCENT or '1A1414', alpha(hv and 0 or 0x40, pf), hv and ACCENT or WHITE, alpha(hv and 0 or 0x40, pf), 2 * s)
+    icon(x1 + 24 * s + 16 * s, (y1 + y2) / 2, 'skip_next', 34 * s, WHITE, alpha(0, pf))
+    text(x1 + 24 * s + 32 * s + 12 * s, (y1 + y2) / 2, 4, label, fs, WHITE, alpha(0, pf), true)
+    pill_y2 = y1 - 14 * s
+  end
+
+  -- aviso breve tras saltar solo la intro o el resumen
+  if state.toast then
+    local k = mp.get_time() - state.toast.at
+    if k > 2.4 then
+      state.toast = nil
+    else
+      local ta = math.max(0, math.min(1, k / 0.15, (2.4 - k) / 0.4))
+      local fs = 23 * s
+      local x2 = w - 52 * s
+      local x1 = x2 - (20 * s + 30 * s + 10 * s + ulen(state.toast.text) * fs * 0.52 + 24 * s)
+      local y1, y2 = pill_y2 - 50 * s, pill_y2
+      rrect(x1, y1, x2, y2, 8 * s, '1A1414', alpha(0x40, ta))
+      icon(x1 + 20 * s + 15 * s, (y1 + y2) / 2, 'check_circle', 30 * s, ACCENT, alpha(0, ta))
+      text(x1 + 20 * s + 30 * s + 10 * s, (y1 + y2) / 2, 4, state.toast.text, fs, WHITE, alpha(0, ta), false)
+    end
+  end
+
   overlay.res_x, overlay.res_y = w, h
   overlay.data = table.concat(A, '\n')
   overlay:update()
@@ -302,6 +384,7 @@ end
 
 local function animating()
   return state.visible and state.fade < 1 or (not state.visible and state.fade > 0) or state.flash ~= nil
+    or state.seg ~= nil or state.pill_fade > 0 or state.toast ~= nil
 end
 
 local function tick()
@@ -315,10 +398,11 @@ local function tick()
   end
   local step = (1 / 30) / FADE_TIME
   if state.visible then state.fade = math.min(1, state.fade + step) else state.fade = math.max(0, state.fade - step) end
+  if state.seg and not state.menu_open then state.pill_fade = math.min(1, state.pill_fade + step) else state.pill_fade = math.max(0, state.pill_fade - step) end
   local cursor = (state.visible or state.fade > 0) and 'no' or 'always'
   if cursor ~= state.cursor then state.cursor = cursor; mp.set_property('cursor-autohide', cursor) end
   render()
-  if not state.visible and state.fade <= 0 and not state.flash and timer then
+  if not state.visible and state.fade <= 0 and not state.flash and not state.seg and state.pill_fade <= 0 and not state.toast and timer then
     timer:kill()
   end
 end
@@ -339,6 +423,37 @@ end
 -- ---------------------------------------------------------------- acciones
 
 local function seek_rel(sec) mp.commandv('seek', tostring(sec), 'relative', 'exact') end
+
+-- Saltar el tramo: intro y resumen, al final del tramo (+0,5 s); créditos, al siguiente capítulo
+local function do_skip(sg)
+  if not sg then return false end
+  if SEG_LABELS[sg.kind] then
+    local target = seg_end(sg) + 0.5
+    if state.dur > 0 then target = math.min(target, state.dur - 1) end
+    mp.commandv('seek', tostring(target), 'absolute', 'exact')
+  else
+    mp.commandv('playlist-next')
+  end
+  state.seg = nil          -- el botón se desvanece ya (seg_idx se conserva hasta salir del tramo)
+  wake()
+  return true
+end
+
+-- Al cambiar la posición: ¿empieza o acaba un tramo? Con el salto automático activado se salta una vez por archivo
+local function update_segment()
+  local sg, i = find_segment(state.pos)
+  if i == state.seg_idx then return end
+  state.seg, state.seg_idx = sg, i
+  if sg then
+    state.pill_last = seg_label(sg)
+    if state.auto[sg.kind] and not state.seg_done[i] and state.dragging ~= 'timeline' then
+      state.seg_done[i] = true
+      do_skip(sg)
+      state.toast = { text = SEG_TOASTS[sg.kind], at = mp.get_time() }
+    end
+  end
+  wake()
+end
 
 local function timeline_time(x)
   local s = math.max(0.55, math.min(state.w / 1920, state.h / 1080))
@@ -368,6 +483,7 @@ local actions = {
   subs = function() mp.commandv('script-binding', 'uosc/subtitles') end,
   audio = function() mp.commandv('script-binding', 'uosc/audio') end,
   episodes = function() mp.commandv('script-binding', 'uosc/playlist') end,
+  skip = function() do_skip(state.seg) end,
 }
 
 local function on_left(e)
@@ -427,6 +543,23 @@ mp.add_forced_key_binding('MBTN_LEFT_DBL', 'cl-double', on_double)
 mp.add_forced_key_binding('WHEEL_UP', 'cl-wheel-up', on_wheel(1))
 mp.add_forced_key_binding('WHEEL_DOWN', 'cl-wheel-down', on_wheel(-1))
 mp.add_key_binding(nil, 'toggle', function() if state.visible then state.visible = false else show() end; wake() end)
+-- tecla s (input.conf): pulsa el botón «Saltar…» si está a la vista; si no, la captura de pantalla de siempre
+mp.add_key_binding(nil, 'skip', function() if not do_skip(state.seg) then mp.commandv('screenshot') end end)
+
+-- Tiempos de TheIntroDB para el archivo actual: {path, segments = [{kind, start, end}], autoIntro, autoRecap}
+mp.register_script_message('cinelocal-segments', function(json)
+  local d = utils.parse_json(json)
+  if type(d) ~= 'table' then return end
+  if d.path and d.path ~= mp.get_property('path') then return end   -- llegó tarde: ya se reproduce otro
+  state.segs = type(d.segments) == 'table' and d.segments or {}
+  state.auto = { intro = d.autoIntro == true, recap = d.autoRecap == true }
+  state.seg, state.seg_idx, state.seg_done = nil, nil, {}
+  update_segment()
+end)
+
+mp.register_event('start-file', function()
+  state.segs, state.seg, state.seg_idx, state.seg_done, state.pill_last = {}, nil, nil, {}, nil
+end)
 
 -- ---------------------------------------------------------------- propiedades
 
@@ -473,7 +606,7 @@ mp.observe_property('pause', 'bool', function(_, v)
   if v then show() end
   wake()
 end)
-mp.observe_property('time-pos', 'number', function(_, v) state.pos = v or 0 end)
+mp.observe_property('time-pos', 'number', function(_, v) state.pos = v or 0; if #state.segs > 0 then update_segment() end end)
 mp.observe_property('duration', 'number', function(_, v) state.dur = v or 0 end)
 mp.observe_property('volume', 'number', function(_, v) state.volume = v or 100; wake() end)
 mp.observe_property('mute', 'bool', function(_, v) state.mute = v; wake() end)

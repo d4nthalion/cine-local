@@ -12,6 +12,7 @@ const { EmuleService } = require('./emule/service');
 const { LetterboxdService, keyOf: lbKey } = require('./letterboxd');
 const { Updater } = require('./updater');
 const { DiscordPresence, mediaInfo, GENERIC_EPISODE } = require('./discord');
+const { IntroDB, flatten: flattenSegments } = require('./introdb');
 
 app.setAppUserModelId('com.cinelocal.app');
 if (!app.requestSingleInstanceLock()) { app.quit(); process.exit(0); }
@@ -82,6 +83,7 @@ const progress = store('progress.json', {});
 const userState = store('state.json', { favorites: [], lastPlayed: {} });
 const emuleState = store('emule.json', { tracked: {} });
 const lbStore = store('letterboxd.json', { films: {}, ids: {}, user: '', syncedAt: 0, fullAt: 0, source: null });
+const introStore = store('introdb.json', { entries: {} });
 
 let win = null;
 const player = new Player();
@@ -172,7 +174,7 @@ app.on('window-all-closed', () => {
   watcher.stop();
   emuleService.stop();
   discord.shutdown();
-  for (const s of [settings, library, metadata, progress, userState, emuleState, lbStore]) s.flushSync();
+  for (const s of [settings, library, metadata, progress, userState, emuleState, lbStore, introStore]) s.flushSync();
   app.quit();
 });
 
@@ -432,7 +434,8 @@ function buildPlaylist(item, episodeId, fromStart) {
   };
   if (item.type === 'movie') {
     const t = item.meta?.title || item.title;
-    return [{ path: item.path, title: t, start: startOf(item.path), subs: findExternalSubs(rootOf(item.path), item), discord: mediaInfo(item, null, lbSlugOf(item)) }];
+    return [{ path: item.path, title: t, start: startOf(item.path), subs: findExternalSubs(rootOf(item.path), item), discord: mediaInfo(item, null, lbSlugOf(item)),
+      skip: item.meta?.tmdbId ? { type: 'movie', tmdbId: item.meta.tmdbId } : null }];
   }
   const eps = item.episodes;
   let idx = Math.max(0, eps.findIndex(e => e.id === episodeId));
@@ -446,7 +449,8 @@ function buildPlaylist(item, episodeId, fromStart) {
       // sin el nombre genérico que da TMDB cuando no está traducido ("Episode 3")
       title: `${series} · ${code}${em?.name && !GENERIC_EPISODE.test(em.name.trim()) ? ' · ' + em.name : ''}`,
       start: i === 0 ? startOf(e.path) : 0,
-      discord: mediaInfo(item, e)
+      discord: mediaInfo(item, e),
+      skip: item.meta?.tmdbId ? { type: 'tv', tmdbId: item.meta.tmdbId, season: e.season, episode: e.episode } : null
     };
   });
 }
@@ -481,6 +485,7 @@ player.on('maximize', v => {
 });
 player.on('closed', ({ code, stderr }) => {
   discord.setPlayback(null);
+  clearTimeout(introPrefetch);
   if (embedded && win && !win.isDestroyed()) {
     // volver al estado de pantalla completa que tenía la app antes de reproducir
     if (win.isFullScreen() !== embedded.wasFullscreen) win.setFullScreen(embedded.wasFullscreen);
@@ -506,6 +511,42 @@ discord.on('status', st => send('discord:status', st));
 player.on('state', ({ path: p, pos, dur, paused }) => {
   const item = (player.state.playlist || []).find(i => i.path === p);
   discord.setPlayback(item?.discord ? { media: item.discord, pos, dur, paused } : null);
+});
+
+// ---------- saltar intro / resumen / créditos (TheIntroDB) ----------
+const introDb = new IntroDB({
+  fetch: (u, o) => net.fetch(u, o),
+  store: introStore,
+  apiKey: () => '',   // sin clave: va de serie, sin nada que configurar
+  userAgent: `CineLocal/${app.getVersion()}`
+});
+let introPrefetch = null;
+
+// al empezar cada archivo (con su duración ya conocida) se piden sus tiempos y se pasan a la interfaz del reproductor
+player.on('loaded', async ({ path: p, mpvPath, dur }) => {
+  if (!player.modernUi) return;   // la interfaz clásica de mpv no tiene el botón
+  const list = player.state.playlist || [];
+  const idx = list.findIndex(i => i.path === p);
+  const item = list[idx];
+  clearTimeout(introPrefetch);
+  if (!item?.skip) return;
+  const segs = await introDb.get(item.skip, { durationMs: dur * 1000 });
+  if (!player.playing || player.state.playlist !== list) return;
+  if (segs) {
+    player.sendSegments({
+      path: mpvPath,
+      segments: flattenSegments(segs, dur),
+      autoIntro: false,
+      autoRecap: false
+    });
+  }
+  // el siguiente capítulo, en segundo plano y sin prisa (si se sigue viendo este)
+  const next = list[idx + 1];
+  if (next?.skip && introDb.cached(next.skip) === undefined) {
+    introPrefetch = setTimeout(() => {
+      if (player.playing && player.state.playlist === list) introDb.get(next.skip, { durationMs: (progress.data[next.path]?.dur || 0) * 1000 }).catch(() => {});
+    }, 60e3);
+  }
 });
 
 // ---------- reproductor integrado (Windows) ----------
