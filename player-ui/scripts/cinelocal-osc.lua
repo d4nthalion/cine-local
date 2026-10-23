@@ -204,6 +204,7 @@ local function render()
     -- ---------- barra de tiempo
     local bar_y = h - 112 * s
     local bar_x1, bar_x2 = pad + 128 * s, w - pad - 128 * s   -- a los lados: tiempo transcurrido y restante
+    state.bar = { bar_x1, bar_x2 }   -- timeline_time() usa estos mismos extremos
     add_control(bar_x1 - 6 * s, bar_y - 20 * s, bar_x2 + 6 * s, bar_y + 20 * s, 'timeline', nil)
 
     -- ---------- fila inferior
@@ -455,9 +456,10 @@ local function update_segment()
   wake()
 end
 
+-- Tiempo bajo el ratón, con los extremos de la barra tal y como se dibujó
 local function timeline_time(x)
-  local s = math.max(0.55, math.min(state.w / 1920, state.h / 1080))
-  local x1, x2 = 52 * s, state.w - 52 * s - 128 * s
+  if not state.bar then return state.pos end
+  local x1, x2 = state.bar[1], state.bar[2]
   return state.dur * math.max(0, math.min(1, (x - x1) / (x2 - x1)))
 end
 
@@ -538,7 +540,19 @@ local function on_wheel(dir)
   end
 end
 
-mp.add_forced_key_binding('MBTN_LEFT', 'cl-left', on_left, { complex = true })
+-- Botón izquierdo en una sección propia (como uosc): sobre la barra de tiempo o la de volumen se activa sin
+-- allow-vo-dragging, para que en ventana aparte arrastrarlas no mueva la ventana; en el resto, el vídeo la sigue moviendo.
+mp.set_key_bindings({ { 'mbtn_left', function() on_left({ event = 'up' }) end, function() on_left({ event = 'down' }) end } }, 'cl-left', 'force')
+local function update_window_drag()
+  local c = state.hover and control_at(state.mx, state.my)
+  local block = state.dragging ~= nil or (c and (c.id == 'timeline' or c.id == 'volume'))
+  local flags = block and '' or 'allow-vo-dragging+allow-hide-cursor'
+  if flags ~= state.left_flags then
+    mp.enable_key_bindings('cl-left', flags)
+    state.left_flags = flags
+  end
+end
+update_window_drag()
 mp.add_forced_key_binding('MBTN_LEFT_DBL', 'cl-double', on_double)
 mp.add_forced_key_binding('WHEEL_UP', 'cl-wheel-up', on_wheel(1))
 mp.add_forced_key_binding('WHEEL_DOWN', 'cl-wheel-down', on_wheel(-1))
@@ -596,6 +610,7 @@ mp.observe_property('mouse-pos', 'native', function(_, m)
       if state.dragging ~= 'volume' and not (c2 and (c2.id == 'mute' or c2.id == 'volume')) then state.vol_open = false; wake() end
     end)
   end
+  update_window_drag()
   if moved then show() else wake() end
 end)
 
