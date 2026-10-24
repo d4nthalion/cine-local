@@ -41,16 +41,17 @@ function parseName(raw) {
   s = s.replace(/\[[^\]]*\]/g, ' ')          // [etiquetas]
        .replace(/\{[^}]*\}/g, ' ')
        .replace(/[._]+/g, ' ')
+       .replace(/(\p{L})(\d{3,4}p)\b/giu, '$1 $2')   // "Drácula720p"
        .replace(/\s+/g, ' ')
        .trim();
 
   let year = null;
-  // año entre paréntesis tiene prioridad: "Dune (2021)"
+  // año entre paréntesis tiene prioridad: "Dune (2021)"; delante del título, "(1958) Drácula"
   const maxYear = new Date().getFullYear() + 1;
   let m = s.match(/\((19\d{2}|20\d{2})\)/);
   if (m && +m[1] <= maxYear) {
     year = parseInt(m[1], 10);
-    s = s.slice(0, m.index);
+    s = m.index === 0 ? s.slice(m[0].length) : s.slice(0, m.index);
   } else {
     // último año que no esté al principio del título ("2001 Una odisea... 1968")
     const re = /(?:^|\s)(19\d{2}|20\d{2})(?=\s|$|-)/g;

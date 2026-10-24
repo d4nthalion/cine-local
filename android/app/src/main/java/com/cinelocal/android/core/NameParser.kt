@@ -20,7 +20,8 @@ object NameParser {
     private val IC = setOf(RegexOption.IGNORE_CASE)
 
     val SKIP_DIRS = Regex(
-        "^(sample|samples|extras?|featurettes?|behind the scenes|deleted scenes|trailers?|\\\$recycle\\.bin|system volume information|\\..*)$",
+        // @eaDir, #recycle, #snapshot: carpetas internas de los NAS Synology
+        "^(sample|samples|extras?|featurettes?|behind the scenes|deleted scenes|trailers?|\\\$recycle\\.bin|system volume information|\\..*|@.*|#recycle|#snapshot)$",
         IC
     )
     val SKIP_FILES = Regex("(^|[\\s._-])sample([\\s._-]|$)", IC)
@@ -60,15 +61,16 @@ object NameParser {
         s = s.replace(Regex("\\[[^\\]]*\\]"), " ")
             .replace(Regex("\\{[^}]*\\}"), " ")
             .replace(Regex("[._]+"), " ")
+            .replace(Regex("(\\p{L})(\\d{3,4}p)\\b", RegexOption.IGNORE_CASE), "$1 $2")   // "Drácula720p"
             .replace(Regex("\\s+"), " ")
             .trim()
 
         var year: Int? = null
-        // año entre paréntesis tiene prioridad: "Dune (2021)"
+        // año entre paréntesis tiene prioridad: "Dune (2021)"; delante del título, "(1958) Drácula"
         val paren = Regex("\\((19\\d{2}|20\\d{2})\\)").find(s)
         if (paren != null && paren.groupValues[1].toInt() <= maxYear) {
             year = paren.groupValues[1].toInt()
-            s = s.substring(0, paren.range.first)
+            s = if (paren.range.first == 0) s.substring(paren.range.last + 1) else s.substring(0, paren.range.first)
         } else {
             // último año que no esté al principio del título ("2001 Una odisea... 1968")
             var last: MatchResult? = null

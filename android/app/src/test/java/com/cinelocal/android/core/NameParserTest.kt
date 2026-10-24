@@ -8,6 +8,8 @@ class NameParserTest {
 
     private fun name(raw: String) = NameParser.parseName(raw, maxYear = 2027)
 
+    @Test fun anioDelanteDelTitulo() = assertEquals(NameParser.ParsedName("Drácula", 1958), name("(1958) Drácula 720p.mkv"))
+    @Test fun resolucionPegada() = assertEquals(NameParser.ParsedName("Las Cicatrices de Drácula", 1970), name("(1970) Las Cicatrices de Drácula720p.mkv"))
     @Test fun peliculaConAnioEntreParentesis() = assertEquals(NameParser.ParsedName("Dune Parte Dos", 2024), name("Dune Parte Dos (2024).mkv"))
     @Test fun nombreDeRelease() = assertEquals(NameParser.ParsedName("The Matrix", 1999), name("The.Matrix.1999.1080p.BluRay.mkv"))
     @Test fun anioAlPrincipioNoEsAnio() = assertEquals(NameParser.ParsedName("2001 A Space Odyssey", 1968), name("2001.A.Space.Odyssey.1968.mkv"))
