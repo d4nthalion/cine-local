@@ -25,6 +25,9 @@ object NameParser {
         IC
     )
     val SKIP_FILES = Regex("(^|[\\s._-])sample([\\s._-]|$)", IC)
+    // carpetas de categoría (sólo en la raíz de la biblioteca)
+    val MOVIES_DIR = Regex("^(pel[iíÍ]culas|pelis|movies|films|cine)$", IC)   // IC sólo pliega ASCII: la Í va aparte
+    val SERIES_DIR = Regex("^(series|tv|tv shows|shows)$", IC)
 
     private val JUNK = listOf(
         "2160p", "1080p", "1080i", "720p", "576p", "480p", "4k", "uhd", "hdr", "hdr10", "dv", "dolby vision",

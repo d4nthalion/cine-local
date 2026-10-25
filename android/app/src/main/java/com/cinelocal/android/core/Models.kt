@@ -110,6 +110,7 @@ data class UserState(
 @Serializable
 data class Settings(
     val libraryPath: String = "",        // \\EQUIPO\Carpeta o smb://equipo/carpeta
+    val nasMode: Boolean = false,        // la carpeta está en un NAS: el usuario y la contraseña son los del NAS
     val smbUser: String = "",
     val smbPassword: String = "",
     val tmdbKey: String = "",

@@ -114,9 +114,14 @@ fun SettingsScreen(nav: Nav) {
         Column(Modifier.weight(1f).verticalScroll(scroll).padding(horizontal = 16.dp)) {
             Header("Biblioteca")
             Group {
-                Field("Carpeta de red", s.libraryPath, "\\\\MI-PC\\Peliculas") { s = s.copy(libraryPath = it) }
+                SwitchRow("Modo NAS", "La biblioteca está en un NAS (Synology…) en vez de en el PC", s.nasMode) { s = s.copy(nasMode = it) }
                 Sep()
-                Field("Usuario de Windows del PC", s.smbUser, "Vacío para entrar como invitado") { s = s.copy(smbUser = it) }
+                Field("Carpeta de red", s.libraryPath, if (s.nasMode) "\\\\NAS\\Multimedia" else "\\\\MI-PC\\Peliculas") { s = s.copy(libraryPath = it) }
+                Sep()
+                Field(
+                    if (s.nasMode) "Usuario del NAS" else "Usuario de Windows del PC", s.smbUser,
+                    if (s.nasMode) "Usuario de DSM con permiso de lectura" else "Vacío para entrar como invitado"
+                ) { s = s.copy(smbUser = it) }
                 Sep()
                 Field(
                     "Contraseña", s.smbPassword, "", password = true, showPass = showPass, onTogglePass = { showPass = !showPass }
@@ -129,8 +134,13 @@ fun SettingsScreen(nav: Nav) {
                     }
                 }
             }
-            Help("Carpeta compartida del PC donde están las películas y series. En el PC: clic derecho en la carpeta → Propiedades → Compartir.")
-            Help("Si el PC usa una cuenta de Microsoft, el usuario es el correo de la cuenta y la contraseña la de Microsoft (no el PIN).", top = 6.dp)
+            if (s.nasMode) {
+                Help("Carpeta compartida del NAS donde están las películas y series. En el Synology: Panel de control → Carpeta compartida, y SMB activado en Servicios de archivos.")
+                Help("Fuera de casa, conecta la VPN del NAS y escribe la carpeta con su IP dentro de la VPN, por ejemplo \\\\10.8.0.1\\Multimedia.", top = 6.dp)
+            } else {
+                Help("Carpeta compartida del PC donde están las películas y series. En el PC: clic derecho en la carpeta → Propiedades → Compartir.")
+                Help("Si el PC usa una cuenta de Microsoft, el usuario es el correo de la cuenta y la contraseña la de Microsoft (no el PIN).", top = 6.dp)
+            }
 
             Header("Metadatos · TMDB")
             Group {

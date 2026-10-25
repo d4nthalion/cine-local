@@ -5,7 +5,7 @@ Versión para móvil de [CineLocal](../README.md): tus películas y series de la
 ## Cómo funciona
 
 * Lee la biblioteca **directamente de la carpeta compartida del PC** (SMB, como `\\MI-PC\Peliculas`); no hay que copiar nada al móvil.
-* Entiende los nombres igual que la app de escritorio: **archivo suelto = película, carpeta = serie**, `S01E02`, `1x02`, `Cap.102`, `Temporada N`… (`core/NameParser.kt` es una traducción de `scanner.js`).
+* Entiende los nombres igual que la app de escritorio: **archivo suelto = película, carpeta = serie** (y carpetas `Películas` / `Series` en la raíz), `S01E02`, `1x02`, `Cap.102`, `Temporada N`… (`core/NameParser.kt` es una traducción de `scanner.js`).
 * Carátulas, sinopsis, reparto y episodios desde **TMDB** (misma búsqueda que en escritorio, con *Corregir coincidencia*).
 * Reproduce con **LibVLC**: MKV, AC3, DTS, subtítulos `.srt`/`.ass` internos o junto al vídeo, audio y subtítulos según el idioma elegido (con el modo *“Sólo si el audio está en otro idioma”*), reanuda donde lo dejaste y pasa al siguiente episodio.
 * **Saltar intro, resumen y créditos** con los tiempos de [TheIntroDB](https://theintrodb.org) (ver abajo).
@@ -79,6 +79,7 @@ Al abrir, la app mira en GitHub si hay una versión nueva (como mucho una vez ca
    * Cuenta de Microsoft: usuario = correo, contraseña = la de Microsoft (no el PIN).
    * Si el servidor SMB no usa el puerto 445: `\\EQUIPO:4445\Carpeta` o `smb://equipo:4445/Carpeta`.
    * Sin usuario se entra como invitado (solo si el PC tiene desactivado el *uso compartido con protección por contraseña*).
+   * **Biblioteca en un NAS:** activa **Modo NAS** y usa la carpeta compartida del NAS (`\\NAS\Multimedia`) con un usuario del NAS (de DSM en un Synology). Fuera de casa, conecta la VPN del NAS y escribe la carpeta con su IP dentro de la VPN (`\\10.8.0.1\Multimedia`).
 3. Pon tu **API key de TMDB** (gratis en themoviedb.org → Ajustes → API) y guarda.
 
 ## Desarrollo

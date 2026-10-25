@@ -10,6 +10,7 @@ fun interface LibraryFs {
 
 /**
  * Escáner de la biblioteca: archivo suelto = película, carpeta = serie.
+ * Excepción: en la raíz, una carpeta «Películas» / «Movies» contiene películas y una «Series» / «TV» contiene series.
  * Misma lógica que src/main/scanner.js; además recoge los subtítulos externos junto a cada vídeo.
  */
 object LibraryScanner {
@@ -20,21 +21,51 @@ object LibraryScanner {
 
     fun scan(fs: LibraryFs): List<LibraryItem> {
         val items = mutableListOf<LibraryItem>()
-        val root = fs.list("")
-        for (e in root) {
+        scanEntries(fs, "", fs.list(""), items, top = true)
+        return items.sortedWith(compareBy(NameParser.naturalOrder) { it.title })
+    }
+
+    /** Vídeo suelto = película, carpeta = serie; en la raíz (top) se respetan las carpetas «Películas» y «Series» */
+    private fun scanEntries(fs: LibraryFs, dir: String, entries: List<FsEntry>, items: MutableList<LibraryItem>, top: Boolean) {
+        for (e in entries) {
+            val path = join(dir, e.name)
             if (e.isDir) {
                 if (NameParser.SKIP_DIRS.matches(e.name)) continue
-                scanSeries(fs, e)?.let { items += it }
+                when {
+                    top && NameParser.MOVIES_DIR.matches(e.name) -> scanMovies(fs, path, items)
+                    top && NameParser.SERIES_DIR.matches(e.name) ->
+                        try { scanEntries(fs, path, fs.list(path), items, top = false) } catch (_: Exception) {}
+                    else -> scanSeries(fs, e.copy(name = path))?.let { items += it }
+                }
             } else if (isPlayable(e.name)) {
-                val info = NameParser.parseName(e.name)
-                items += LibraryItem(
-                    id = NameParser.hashId("movie:" + e.name), type = "movie", path = e.name, fileName = e.name,
-                    title = info.title, year = info.year, size = e.size, added = added(e),
-                    subs = subsFor(e.name, "", root)
-                )
+                items += movieItem(FoundVideo(path, e, entries))
             }
         }
-        return items.sortedWith(compareBy(NameParser.naturalOrder) { it.title })
+    }
+
+    /** Carpeta «Películas»: cada vídeo es una película; si está solo en su carpeta, el título sale de la carpeta */
+    private fun scanMovies(fs: LibraryFs, dir: String, items: MutableList<LibraryItem>) {
+        val entries = try { fs.list(dir) } catch (_: Exception) { return }
+        for (e in entries) {
+            val path = join(dir, e.name)
+            if (e.isDir) {
+                if (NameParser.SKIP_DIRS.matches(e.name)) continue
+                val files = mutableListOf<FoundVideo>()
+                walkVideos(fs, path, 0, files)
+                for (f in files) items += movieItem(f, if (files.size == 1) e.name else null)
+            } else if (isPlayable(e.name)) {
+                items += movieItem(FoundVideo(path, e, entries))
+            }
+        }
+    }
+
+    private fun movieItem(f: FoundVideo, folderName: String? = null): LibraryItem {
+        val info = NameParser.parseName(folderName ?: f.entry.name)
+        return LibraryItem(
+            id = NameParser.hashId("movie:" + f.path), type = "movie", path = f.path, fileName = f.entry.name,
+            title = info.title, year = info.year, size = f.entry.size, added = added(f.entry),
+            subs = subsFor(f.entry.name, f.path.substringBeforeLast('/', ""), f.siblings)
+        )
     }
 
     private fun isPlayable(name: String) = NameParser.isVideo(name) && !NameParser.SKIP_FILES.containsMatchIn(name)
@@ -59,7 +90,7 @@ object LibraryScanner {
         walkVideos(fs, dirPath, 0, files)
         if (files.isEmpty()) return null
         files.sortWith(compareBy(NameParser.naturalOrder) { it.path })
-        val info = NameParser.parseName(dirEntry.name)
+        val info = NameParser.parseName(dirPath.substringAfterLast('/'))
 
         val episodes = mutableListOf<Episode>()
         val unplaced = mutableListOf<Pair<Episode, Int?>>()
