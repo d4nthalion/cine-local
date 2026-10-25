@@ -625,6 +625,14 @@ code.path, .set-row code { background: var(--bg-3); padding: 2px 7px; border-rad
 .icon-btn.sm { width: 34px; height: 34px; }
 .icon-btn.sm svg { width: 18px; height: 18px; }
 .btn.add-path { align-self: flex-start; display: inline-flex; align-items: center; gap: 6px; }
+
+/* modo NAS: los campos del inicio de sesión van debajo de la explicación */
+.set-row.nas-row { flex-wrap: wrap; gap: 12px 24px; }
+.set-row.nas-row .lbl { flex-basis: 100%; }
+.set-row.nas-row .ctl { flex: 1; flex-wrap: wrap; }
+.set-row.nas-row .ctl .input { flex: 1; min-width: 120px; }
+.set-row.nas-row .nas-status { flex-basis: 100%; color: var(--text-3); font-size: 13px; }
+.set-row.nas-row .nas-status:empty { display: none; }
 .btn.add-path svg { width: 18px; height: 18px; fill: currentColor; }
 
 /* actualizaciones */

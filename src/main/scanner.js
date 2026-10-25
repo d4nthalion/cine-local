@@ -1,4 +1,5 @@
 // Escáner de la biblioteca: archivo suelto = película, carpeta = serie.
+// Excepción: en la raíz, una carpeta «Películas» / «Movies» contiene películas y una «Series» / «TV» contiene series.
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
@@ -8,7 +9,10 @@ const VIDEO_EXT = new Set([
   '.webm', '.mpg', '.mpeg', '.flv', '.vob', '.ogv', '.divx', '.3gp'
 ]);
 
-const SKIP_DIRS = /^(sample|samples|extras?|featurettes?|behind the scenes|deleted scenes|trailers?|\$recycle\.bin|system volume information|\..*)$/i;
+const SKIP_DIRS = /^(sample|samples|extras?|featurettes?|behind the scenes|deleted scenes|trailers?|\$recycle\.bin|system volume information|\..*|@.*|#recycle|#snapshot)$/i;
+// carpetas de categoría (sólo en la raíz de la biblioteca)
+const MOVIES_DIR = /^(pel[ií]culas|pelis|movies|films|cine)$/i;
+const SERIES_DIR = /^(series|tv|tv shows|shows)$/i;
 const SKIP_FILES = /(^|[\s._-])sample([\s._-]|$)/i;
 
 const JUNK = [
@@ -137,12 +141,7 @@ function scanSeries(dirPath, dirName, options) {
   // Excepción opcional: carpeta con un único vídeo sin patrón de episodio -> película
   if (options.singleFileFolderAsMovie && files.length === 1 &&
       !parseEpisode(path.basename(files[0]), null)?.episode) {
-    const fst = safeStat(files[0]);
-    return {
-      id: hashId('movie:' + files[0]), type: 'movie', path: files[0], folder: dirPath,
-      fileName: path.basename(files[0]), title: info.title, year: info.year,
-      size: fst?.size || 0, added: (fst?.birthtimeMs || fst?.mtimeMs || 0)
-    };
+    return movieItem(files[0], dirPath);
   }
 
   const episodes = [];
@@ -191,24 +190,61 @@ function scanLibrary(root, options = {}) {
   try { entries = fs.readdirSync(root, { withFileTypes: true }); }
   catch (e) { return { ok: false, error: e.message, items: [] }; }
 
-  for (const e of entries) {
-    const full = path.join(root, e.name);
-    if (e.isDirectory()) {
-      if (SKIP_DIRS.test(e.name)) continue;
-      const s = scanSeries(full, e.name, options);
-      if (s) items.push(s);
-    } else if (e.isFile() && isVideo(e.name) && !SKIP_FILES.test(e.name)) {
-      const st = safeStat(full);
-      const info = parseName(e.name);
-      items.push({
-        id: hashId('movie:' + full), type: 'movie', path: full, fileName: e.name,
-        title: info.title, year: info.year,
-        size: st?.size || 0, added: st?.birthtimeMs || st?.mtimeMs || 0
-      });
-    }
-  }
+  scanEntries(root, entries, options, items, true);
   items.sort((a, b) => naturalCompare(a.title, b.title));
   return { ok: true, items, scannedAt: Date.now() };
+}
+
+/** Vídeo suelto = película, carpeta = serie; en la raíz (top) se respetan las carpetas de categoría */
+function scanEntries(dir, entries, options, items, top) {
+  for (const e of entries) {
+    const full = path.join(dir, e.name);
+    if (e.isDirectory()) {
+      if (SKIP_DIRS.test(e.name)) continue;
+      if (top && MOVIES_DIR.test(e.name)) scanMovies(full, items);
+      else if (top && SERIES_DIR.test(e.name)) {
+        try { scanEntries(full, fs.readdirSync(full, { withFileTypes: true }), options, items, false); } catch {}
+      } else {
+        const s = scanSeries(full, e.name, options);
+        if (s) items.push(s);
+      }
+    } else if (e.isFile() && isVideo(e.name) && !SKIP_FILES.test(e.name)) {
+      items.push(movieItem(full));
+    }
+  }
+}
+
+/** Carpeta «Películas»: cada vídeo es una película; si está solo en su carpeta, el título sale de la carpeta */
+function scanMovies(dir, items) {
+  let entries;
+  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+  for (const e of entries) {
+    const full = path.join(dir, e.name);
+    if (e.isDirectory()) {
+      if (SKIP_DIRS.test(e.name)) continue;
+      const files = walkVideos(full);
+      for (const f of files) items.push(movieItem(f, files.length === 1 ? full : null));
+    } else if (e.isFile() && isVideo(e.name) && !SKIP_FILES.test(e.name)) {
+      items.push(movieItem(full));
+    }
+  }
+}
+
+/** Carpeta de categoría («Películas» o «Series») que haya en la raíz de la biblioteca, o null */
+function categoryDir(root, kind) {
+  const re = kind === 'movies' ? MOVIES_DIR : SERIES_DIR;
+  try { return fs.readdirSync(root, { withFileTypes: true }).filter(e => e.isDirectory() && re.test(e.name)).map(e => path.join(root, e.name))[0] || null; }
+  catch { return null; }
+}
+
+function movieItem(file, folder = null) {
+  const st = safeStat(file);
+  const info = parseName(path.basename(folder || file));
+  return {
+    id: hashId('movie:' + file), type: 'movie', path: file, ...(folder && { folder }), fileName: path.basename(file),
+    title: info.title, year: info.year,
+    size: st?.size || 0, added: st?.birthtimeMs || st?.mtimeMs || 0
+  };
 }
 
 /**
@@ -238,4 +274,4 @@ function scanLibraries(roots, options = {}) {
   return { ok: failed.length < roots.length, items, failed, scannedAt: Date.now() };
 }
 
-module.exports = { scanLibrary, scanLibraries, parseName, parseEpisode, isVideo, hashId };
+module.exports = { scanLibrary, scanLibraries, parseName, parseEpisode, isVideo, hashId, categoryDir };

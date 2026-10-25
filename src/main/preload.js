@@ -11,6 +11,7 @@ contextBridge.exposeInMainWorld('api', {
   getSettings: () => ipcRenderer.invoke('settings:get'),
   setSettings: (patch) => ipcRenderer.invoke('settings:set', patch),
   testKey: (key) => ipcRenderer.invoke('tmdb:test', key),
+  testNas: (q) => ipcRenderer.invoke('nas:test', q),
   getLibrary: () => ipcRenderer.invoke('library:get'),
   scan: () => ipcRenderer.invoke('library:scan'),
   refreshMeta: () => ipcRenderer.invoke('library:refreshMeta'),

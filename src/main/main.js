@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, shell, Menu, nativeTheme, net, Notification, clipboard } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, Menu, nativeTheme, net, Notification, clipboard, safeStorage } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { scanLibraries } = require('./scanner');
@@ -13,6 +13,7 @@ const { LetterboxdService, keyOf: lbKey } = require('./letterboxd');
 const { Updater } = require('./updater');
 const { DiscordPresence, mediaInfo, GENERIC_EPISODE } = require('./discord');
 const { IntroDB, flatten: flattenSegments } = require('./introdb');
+const { NasSession, cleanHost, keyOf: nasKey } = require('./nas');
 
 app.setAppUserModelId('com.cinelocal.app');
 if (!app.requestSingleInstanceLock()) { app.quit(); process.exit(0); }
@@ -51,7 +52,11 @@ const DEFAULT_SETTINGS = {
   autoUpdate: true,              // buscar actualizaciones al abrir (se descargan solas y se instalan al cerrar)
   discordEnabled: false,         // mostrar en Discord lo que estás viendo (Rich Presence)
   discordClientId: '',           // ID de la aplicación creada en discord.com/developers
-  discordDiscreet: false         // sin título ni póster: «Viendo una película» / «Viendo una serie»
+  discordDiscreet: false,        // sin título ni póster: «Viendo una película» / «Viendo una serie»
+  nasMode: false,                // iniciar sesión en el NAS con un usuario propio (net use) antes de leer la biblioteca
+  nasHost: '',                   // nombre o IP del NAS (\\NAS, o 10.8.0.1 por la VPN)
+  nasUser: '',
+  nasPasswordEnc: ''             // contraseña cifrada con safeStorage (nunca se envía a la ventana)
 };
 
 // ---------- persistencia sencilla en JSON ----------
@@ -192,12 +197,35 @@ function view() {
     items,
     scannedAt: library.data.scannedAt,
     error: library.data.error,
+    nas: nasStatus,
     progress: progress.data,
     favorites: userState.data.favorites,
     mpv: findMpv(settings.data.mpvPath, process.resourcesPath),
     hasKey: !!settings.data.tmdbKey,
     fetching
   };
+}
+
+// ---------- modo NAS ----------
+const nas = new NasSession();
+let nasStatus = null;   // resultado del último inicio de sesión en el NAS
+
+function encryptSecret(v) {
+  if (!v) return '';
+  return safeStorage.isEncryptionAvailable() ? 'enc:' + safeStorage.encryptString(v).toString('base64') : 'plain:' + v;
+}
+function decryptSecret(v) {
+  if (!v) return '';
+  if (v.startsWith('plain:')) return v.slice(6);
+  try { return safeStorage.decryptString(Buffer.from(v.slice(4), 'base64')); } catch { return ''; }
+}
+function nasConfig(s = settings.data, password) {
+  return { host: s.nasHost, user: (s.nasUser || '').trim(), password: password ?? decryptSecret(s.nasPasswordEnc), roots: libraryRoots(s) };
+}
+/** Ajustes que ve la ventana: sin la contraseña del NAS */
+function publicSettings(s = settings.data) {
+  const { nasPasswordEnc, ...rest } = s;
+  return { ...rest, nasHasPassword: !!nasPasswordEnc };
 }
 
 // ---------- escaneo + detección de novedades ----------
@@ -235,6 +263,11 @@ function scan() {
 }
 
 async function doScan() {
+  if (settings.data.nasMode) {
+    const wasOpen = !!nas.key;
+    nasStatus = await nas.ensure(nasConfig());
+    if (nasStatus.ok && !wasOpen && nas.key) restartWatcher();   // las carpetas del NAS ya se pueden vigilar
+  } else nasStatus = null;
   const prevItems = library.data.items || [];
   const hadLibrary = prevItems.length > 0;
   const known = new Set();
@@ -255,6 +288,8 @@ async function doScan() {
     r.items.sort((a, b) => a.title.localeCompare(b.title, 'es', { numeric: true }));
   }
   r.error = r.failed.map(f => f.error).join(' · ') || null;
+  if (nasStatus && !nasStatus.ok) r.error = 'NAS: ' + nasStatus.error + (r.error ? ' · ' + r.error : '');
+  else if (r.failed.length) nas.reset();   // quizá se cerró la sesión (NAS reiniciado, VPN caída): reabrirla la próxima vez
 
   // Los archivos nuevos que aún se están copiando/descargando se dejan para más tarde
   let pending = false;
@@ -673,17 +708,23 @@ const updater = new Updater({
 });
 
 // ---------- IPC ----------
-ipcMain.handle('settings:get', () => ({ ...settings.data, defaults: DEFAULT_SETTINGS }));
+ipcMain.handle('settings:get', () => ({ ...publicSettings(), defaults: DEFAULT_SETTINGS }));
 ipcMain.handle('settings:set', async (_e, patch) => {
   const before = { ...settings.data };
+  patch = { ...patch };
+  if ('nasPassword' in patch) { patch.nasPasswordEnc = encryptSecret(patch.nasPassword); delete patch.nasPassword; }
+  delete patch.nasHasPassword;
   settings.data = { ...settings.data, ...patch };
   const s = settings.data;
+  const nasChanged = ['nasMode', 'nasHost', 'nasUser', 'nasPasswordEnc'].some(k => before[k] !== s[k]);
+  // la sesión que acaba de abrir «Conectar» con estos mismos datos se conserva
+  if (nasChanged) { nasStatus = null; if (!s.nasMode || nas.key !== nasKey(nasConfig(s))) await nas.disconnect(); }
   const oldRoots = libraryRoots(before), newRoots = libraryRoots(s);
   const rootsChanged = oldRoots.join('|') !== newRoots.join('|');
   // carpeta nueva: lo que ya tenga no es una novedad
   for (const r of newRoots) if (!oldRoots.includes(r)) silentRoots.add(r);
   if (rootsChanged || before.autoWatch !== s.autoWatch) restartWatcher();
-  if (rootsChanged || before.singleFileFolderAsMovie !== s.singleFileFolderAsMovie) await scan();
+  if (rootsChanged || nasChanged || before.singleFileFolderAsMovie !== s.singleFileFolderAsMovie) await scan();
   else if (before.tmdbKey !== s.tmdbKey || before.metaLang !== s.metaLang) fetchMissingMetadata();
   if (['emuleEnabled', 'emulePort', 'emulePassword'].some(k => before[k] !== s[k])) emuleService.restart();
   if (before.lbUser !== s.lbUser) {
@@ -692,7 +733,19 @@ ipcMain.handle('settings:set', async (_e, patch) => {
   }
   if (!before.lbMarkWatched && s.lbMarkWatched) markLetterboxdWatched();
   if (['discordEnabled', 'discordClientId', 'discordDiscreet'].some(k => before[k] !== s[k])) discord.configure(discordConfig(s));
-  return s;
+  return publicSettings(s);
+});
+// Prueba con lo escrito en Ajustes (contraseña vacía = la guardada) y dice si se ve la biblioteca
+ipcMain.handle('nas:test', async (_e, { host, user, password }) => {
+  const s = { ...settings.data, nasHost: host, nasUser: user };
+  const cfg = nasConfig(s, password || undefined);
+  await nas.disconnect();
+  const r = await nas.connect(cleanHost(host), cfg);
+  if (!r.ok) return r;
+  const h = cleanHost(host).toLowerCase();
+  const onNas = cfg.roots.filter(p => p.toLowerCase().startsWith(`\\\\${h}\\`));
+  const missing = onNas.filter(p => !fs.existsSync(p));
+  return { ...r, roots: onNas.length, missing };
 });
 ipcMain.handle('tmdb:test', async (_e, key) => {
   try { await new TMDB(key, 'es-ES', (u, o) => net.fetch(u, o)).test(); return { ok: true }; }

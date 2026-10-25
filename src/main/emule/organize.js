@@ -1,8 +1,8 @@
 // Lleva a la biblioteca los vídeos que termina de descargar eMule.
-// Película → raíz de la biblioteca. Episodio (S01E02, 1x02, Cap.102) → carpeta de su serie.
+// Película → raíz de la biblioteca (o su carpeta «Películas»). Episodio (S01E02, 1x02, Cap.102) → carpeta de su serie.
 const fs = require('fs');
 const path = require('path');
-const { parseName, isVideo } = require('../scanner');
+const { parseName, isVideo, categoryDir } = require('../scanner');
 
 const norm = s => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
 
@@ -24,12 +24,12 @@ function safeName(s) { return s.replace(/[<>:"/\\|?*\x00-\x1f]/g, ' ').replace(/
  */
 function destinationFor(fileName, root, items = []) {
   const ep = episodeOf(fileName);
-  if (!ep) return path.join(root, fileName);
+  if (!ep) return path.join(categoryDir(root, 'movies') || root, fileName);
   // "Cap.102" de releases españolas: el título está antes de "Cap"
   const { title, year } = parseName(fileName.replace(/[\s._-]*cap(?:itulo|ítulo)?\s*\.?\s*\d{3,4}.*$/i, ''));
   const key = norm(title);
   const show = items.find(it => it.type === 'series' && [it.title, it.meta?.title, it.meta?.originalTitle].some(t => t && norm(t) === key));
-  const dir = show ? show.path : path.join(root, safeName(year ? `${title} (${year})` : title) || 'Series');
+  const dir = show ? show.path : path.join(categoryDir(root, 'series') || root, safeName(year ? `${title} (${year})` : title) || 'Series');
   return path.join(dir, fileName);
 }
 

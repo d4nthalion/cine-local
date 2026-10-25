@@ -15,11 +15,16 @@ D:\Películas y Series\
 ```
 
 * **Archivo suelto = película. Carpeta = serie.**
+* **Carpetas de categoría:** en la raíz de una carpeta de la biblioteca, una carpeta `Películas` (o `Peliculas`, `Pelis`, `Movies`, `Films`, `Cine`) contiene películas y una `Series` (o `TV`, `TV Shows`, `Shows`) contiene series. Así `\\NAS\Multimedia` con `Peliculas\` y `Series\` dentro funciona como una sola carpeta, también en Android.
+  * Dentro de `Películas`, cada vídeo es una película, aunque esté en su propia carpeta (`Blade Runner (1982)\br.mkv` toma el título de la carpeta) o en una carpeta de saga con varias.
+  * eMule mueve ahí las películas y crea ahí las series nuevas.
+  * Se ignoran las carpetas internas de los NAS Synology (`@eaDir`, `#recycle`, `#snapshot`).
 * **Varias carpetas:** en *Ajustes → Biblioteca → Añadir nueva ruta* puedes sumar todas las que quieras, por ejemplo una por disco.
   * Todo aparece en una sola biblioteca. Una serie repartida entre carpetas (mismo título y año) se muestra como una sola.
   * Lo que ya había en una carpeta recién añadida no se anuncia como novedad.
   * Si un disco está desconectado, se conservan sus títulos y se avisa de que falta.
   * La primera carpeta es la principal: ahí mueve eMule las descargas.
+* **Modo NAS** (*Ajustes → Biblioteca*): CineLocal inicia sesión en el NAS con su propio usuario (`net use \\NAS\IPC$`, sin unidad ni sesión persistente), sin depender de las credenciales guardadas en el Explorador. Las carpetas se escriben como `\\NAS\Multimedia` o, desde fuera por la VPN del Synology, `\\10.8.0.1\Multimedia`. **Conectar** solo guarda los datos si la conexión funciona. La contraseña se guarda cifrada con `safeStorage` (DPAPI de Windows) y nunca llega a la ventana. Si la sesión se cae (NAS reiniciado, VPN cortada), se vuelve a abrir en el siguiente escaneo. Si Windows ya tenía otra sesión abierta en ese NAS y se puede leer la biblioteca, se usa esa. Capturas: `npx electron test/nas-ui-test.js <carpetaTemporal> <carpetaCapturas>`.
 * Episodios reconocidos: `S01E02`, `1x02`, `Cap.102`, `Episodio 2`, `02 - Título`… y subcarpetas `Temporada N` / `Season N` / `S01`.
 * Se limpian del título las etiquetas típicas (1080p, BluRay, x265, Castellano…) y se detecta el año.
 * Se ignoran `sample`, `extras`, `featurettes`, etc.

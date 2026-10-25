@@ -874,6 +874,17 @@ function viewSettings() {
         <div class="ctl">${sw('autoWatch', s.autoWatch !== false)}</div></div>
       <div class="set-row"><div class="lbl"><div class="t">Carpetas con un solo vídeo como película</div><div class="d">Si una carpeta contiene un único vídeo sin numeración de episodio, se trata como película en vez de serie.</div></div>
         <div class="ctl">${sw('singleFileFolderAsMovie', s.singleFileFolderAsMovie)}</div></div>
+      <div class="set-row"><div class="lbl"><div class="t">Modo NAS</div><div class="d">CineLocal inicia sesión en el NAS con su propio usuario, sin depender de las credenciales guardadas en el Explorador de Windows. Escribe las carpetas como <code>\\\\NAS\\Multimedia</code> (o <code>\\\\10.8.0.1\\Multimedia</code> si entras por la VPN del Synology).</div></div>
+        <div class="ctl">${sw('nasMode', s.nasMode)}</div></div>
+      ${s.nasMode ? `<div class="set-row nas-row"><div class="lbl"><div class="t">Inicio de sesión en el NAS</div>
+        <div class="d">Un usuario del NAS con permiso de lectura en la carpeta (de escritura si eMule mueve ahí las descargas). La contraseña se guarda cifrada con tu cuenta de Windows.</div></div>
+        <div class="ctl">
+          <input class="input" data-nas="host" value="${esc(s.nasHost)}" placeholder="NAS o 10.8.0.1" spellcheck="false">
+          <input class="input" data-nas="user" value="${esc(s.nasUser)}" placeholder="Usuario" spellcheck="false">
+          <input class="input" type="password" data-nas="password" placeholder="${s.nasHasPassword ? 'Contraseña guardada' : 'Contraseña'}">
+          <button class="btn btn-ghost btn-sm" data-action="nas-test">Conectar</button>
+        </div>
+        <div class="nas-status" id="nasStatus">${nasStatePill()}</div></div>` : ''}
     </div>
 
     <div class="set-group"><h3>Metadatos (TMDB)</h3>
@@ -1382,6 +1393,16 @@ function discordSettingsHTML(s, sw) {
       <div class="ctl">${sw('discordDiscreet', s.discordDiscreet)}</div></div>
     <div class="set-row"><div class="lbl"><div class="t">Estado</div><div class="d" id="discordStatus">${discordStatusHTML()}</div></div></div>`;
 }
+/** Estado de la sesión en el NAS: la prueba en curso o, si no, el último escaneo */
+function nasStatePill() {
+  const t = S.nasTest, n = S.lib.nas;
+  if (t === 'running') return '<span class="status-pill"><span class="spinner sm"></span>Conectando…</span>';
+  if (t?.ok === false || n?.ok === false) return `<span class="status-pill bad">${esc((t || n).error)}</span>`;
+  if (t?.missing?.length) return `<span class="status-pill bad">Conectado, pero no se encuentra ${esc(t.missing.join(', '))}</span>`;
+  if (t?.ok || n?.ok) return `<span class="status-pill ok">Conectado</span>${(t || n).note ? ' · ' + esc((t || n).note) : ''}`;
+  return '';
+}
+
 function paintDiscord() {
   if (S.route.name !== 'settings') return;
   const el = $('#discordStatus');
@@ -1636,7 +1657,8 @@ async function saveLibPaths(list) {
 async function saveSetting(key, value) {
   S.settings = await window.api.setSettings({ [key]: value });
   if (key === 'region') S.providerList = null;   // recargar la lista del nuevo país (los ids de TMDB son los mismos en todos)
-  if (key === 'subLang' || key === 'emuleEnabled' || key === 'playerMode' || key === 'region') render(true);
+  if (key === 'nasMode') { S.nasTest = null; S.lib = await window.api.getLibrary(); }
+  if (key === 'subLang' || key === 'emuleEnabled' || key === 'playerMode' || key === 'region' || key === 'nasMode') render(true);
   if (key === 'lbUser') { setLb(await window.api.letterboxd.get()); paintLbStatus(); }
   if (key.startsWith('emule')) paintEmule();
   if (key === 'emuleEnabled' && value) loadEmuleInfo();
@@ -1839,6 +1861,21 @@ document.addEventListener('click', async (e) => {
       S.discordTest = r; paintDiscord();
       clearTimeout(S.discordTestTimer);
       S.discordTestTimer = setTimeout(() => { S.discordTest = null; paintDiscord(); }, r.ok ? 15000 : 8000);
+    }
+    else if (a === 'nas-test') {
+      // sólo se guarda lo que conecta, para no escanear con datos a medias
+      const val = k => $(`[data-nas="${k}"]`).value.trim();
+      const q = { host: val('host'), user: val('user'), password: $('[data-nas="password"]').value };
+      S.nasTest = 'running'; $('#nasStatus').innerHTML = nasStatePill();
+      const r = await window.api.testNas(q);
+      S.nasTest = r;
+      if (r.ok) {
+        const patch = { nasHost: q.host, nasUser: q.user };
+        if (q.password) patch.nasPassword = q.password;
+        S.settings = await window.api.setSettings(patch);
+        S.lib = await window.api.getLibrary();
+        render(true);
+      } else $('#nasStatus').innerHTML = nasStatePill();
     }
     else if (a === 'test-key') {
       const key = $('[data-set-text="tmdbKey"]').value.trim();
