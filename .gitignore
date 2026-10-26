@@ -3,3 +3,7 @@ dist/
 # mpv se descarga con scripts/fetch-mpv.js (npm run dist lo hace solo)
 mpv/*
 !mpv/LEEME.txt
+.vscode/
+# CineLocal Server: datos y configuración local
+server/data/
+server/.env

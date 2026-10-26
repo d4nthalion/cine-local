@@ -213,7 +213,9 @@ body.fullscreen #btnFullscreen .ico-enter { display: none; }
 .card .cap .t { font-weight: 600; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .card .cap .s { font-size: 12.5px; color: var(--text-3); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .card .wide-title { z-index: 1; position: absolute; left: 12px; right: 12px; bottom: 14px; font-weight: 700; font-size: 15px; text-shadow: 0 2px 8px rgba(0,0,0,.8); }
-.card .wide-logo { z-index: 1; position: absolute; left: 12px; bottom: 14px; max-width: 55%; max-height: 42%; object-fit: contain; object-position: left bottom; filter: drop-shadow(0 2px 8px rgba(0,0,0,.7)); }
+/* .card .art .wide-logo: más específico que «.card .art img», que si no lo estira a toda la tarjeta y lo recorta */
+.card .art .wide-logo { z-index: 1; position: absolute; left: 12px; bottom: 14px; width: auto; height: auto; max-width: 55%; max-height: 42%; object-fit: contain; object-position: left bottom; filter: drop-shadow(0 2px 8px rgba(0,0,0,.7)); }
+.card:hover .art .wide-logo { transform: none; }
 .card.wide .art::after { content: ""; position: absolute; inset: 0; z-index: 0; background: linear-gradient(to top, rgba(0,0,0,.7), rgba(0,0,0,0) 55%); pointer-events: none; }
 .progress { position: absolute; left: 0; right: 0; bottom: 0; height: 4px; background: rgba(255,255,255,.25); z-index: 3; }
 .progress i { display: block; height: 100%; background: var(--grad); }

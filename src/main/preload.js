@@ -12,6 +12,10 @@ contextBridge.exposeInMainWorld('api', {
   setSettings: (patch) => ipcRenderer.invoke('settings:set', patch),
   testKey: (key) => ipcRenderer.invoke('tmdb:test', key),
   testNas: (q) => ipcRenderer.invoke('nas:test', q),
+  remote: {
+    login: (q) => ipcRenderer.invoke('remote:login', q),
+    logout: () => ipcRenderer.invoke('remote:logout')
+  },
   getLibrary: () => ipcRenderer.invoke('library:get'),
   scan: () => ipcRenderer.invoke('library:scan'),
   refreshMeta: () => ipcRenderer.invoke('library:refreshMeta'),

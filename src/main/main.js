@@ -14,6 +14,7 @@ const { Updater } = require('./updater');
 const { DiscordPresence, mediaInfo, GENERIC_EPISODE } = require('./discord');
 const { IntroDB, flatten: flattenSegments } = require('./introdb');
 const { NasSession, cleanHost, keyOf: nasKey } = require('./nas');
+const { RemoteServer, normUrl } = require('./remote');
 
 app.setAppUserModelId('com.cinelocal.app');
 if (!app.requestSingleInstanceLock()) { app.quit(); process.exit(0); }
@@ -56,7 +57,11 @@ const DEFAULT_SETTINGS = {
   nasMode: false,                // iniciar sesión en el NAS con un usuario propio (net use) antes de leer la biblioteca
   nasHost: '',                   // nombre o IP del NAS (\\NAS, o 10.8.0.1 por la VPN)
   nasUser: '',
-  nasPasswordEnc: ''             // contraseña cifrada con safeStorage (nunca se envía a la ventana)
+  nasPasswordEnc: '',            // contraseña cifrada con safeStorage (nunca se envía a la ventana)
+  remoteMode: false,             // la biblioteca viene de CineLocal Server (NAS) en vez de carpetas
+  remoteUrl: '',                 // https://cine.dominio.com
+  remoteUser: '',
+  remoteTokenEnc: ''             // token de la sesión, cifrado (la contraseña no se guarda)
 };
 
 // ---------- persistencia sencilla en JSON ----------
@@ -172,7 +177,7 @@ app.on('second-instance', () => {
   if (!win.isVisible()) win.show();
   win.focus();
 });
-app.whenReady().then(() => { createWindow(); restartWatcher(); emuleService.restart(); if (embeddedMode()) winEmbed.start(); setTimeout(autoSyncLetterboxd, 15000); setTimeout(() => updater.start(), 10000); });
+app.whenReady().then(() => { configureRemote(); createWindow(); restartWatcher(); emuleService.restart(); if (embeddedMode()) winEmbed.start(); setTimeout(autoSyncLetterboxd, 15000); setTimeout(() => updater.start(), 10000); });
 app.on('window-all-closed', () => {
   player.stop();
   winEmbed.stop();
@@ -189,6 +194,10 @@ function tmdb() {
 }
 
 function view() {
+  if (remoteOn()) {
+    const v = remoteView || { items: [], scannedAt: 0, error: null, progress: {}, favorites: [], hasKey: true, fetching: false };
+    return { ...v, error: remoteError || v.error, nas: null, remote: true, mpv: findMpv(settings.data.mpvPath, process.resourcesPath) };
+  }
   const items = library.data.items.map(it => {
     const m = metadata.data[it.id];
     return { ...it, meta: m && !m.failed ? m.meta : null, metaFailed: !!m?.failed };
@@ -222,10 +231,49 @@ function decryptSecret(v) {
 function nasConfig(s = settings.data, password) {
   return { host: s.nasHost, user: (s.nasUser || '').trim(), password: password ?? decryptSecret(s.nasPasswordEnc), roots: libraryRoots(s) };
 }
-/** Ajustes que ve la ventana: sin la contraseña del NAS */
+/** Ajustes que ve la ventana: sin la contraseña del NAS ni el token del servidor */
 function publicSettings(s = settings.data) {
-  const { nasPasswordEnc, ...rest } = s;
-  return { ...rest, nasHasPassword: !!nasPasswordEnc };
+  const { nasPasswordEnc, remoteTokenEnc, ...rest } = s;
+  return { ...rest, nasHasPassword: !!nasPasswordEnc, remoteConnected: !!remoteTokenEnc };
+}
+
+// ---------- CineLocal Server (biblioteca en el NAS, sin VPN) ----------
+const remote = new RemoteServer({ fetch: (u, o) => net.fetch(u, o) });
+let remoteView = null;    // última biblioteca recibida del servidor
+let remoteError = null;
+
+const remoteOn = () => !!settings.data.remoteMode && remote.ready;
+function configureRemote(s = settings.data) {
+  remote.configure({ url: s.remoteUrl, token: s.remoteMode ? decryptSecret(s.remoteTokenEnc) : '' });
+}
+
+async function remoteFetch(path = '/api/library', method = 'GET') {
+  try {
+    remoteView = await remote.request(method, path);
+    remoteError = null;
+  } catch (e) {
+    remoteError = e.message;
+  }
+  return view();
+}
+
+remote.on('event', (ev, data) => {
+  if (ev === 'library:updated') { remoteView = data; remoteError = null; send('library:updated', view()); }
+  else if (ev === 'progress:updated') { if (remoteView) remoteView.progress = data; send('progress:updated', data); }
+  else send(ev, data);   // meta:progress, toast, library:new
+});
+remote.on('unauthorized', () => { remoteError = 'La sesión de CineLocal Server ha caducado: vuelve a conectar en Ajustes'; send('library:updated', view()); });
+remote.on('offline', () => { remoteError = 'No se puede conectar con CineLocal Server'; send('library:updated', view()); });
+remote.on('online', () => { if (remoteError) remoteFetch().then(v => send('library:updated', v)); });
+
+// progreso de mpv → servidor, como mucho cada 10 s por vídeo (y el último al cerrar)
+const remoteProgress = { last: new Map(), pending: null };
+function reportRemoteProgress(id, pos, dur, force) {
+  remoteProgress.pending = { id, pos, dur };
+  if (!force && Date.now() - (remoteProgress.last.get(id) || 0) < 10000) return;
+  remoteProgress.last.set(id, Date.now());
+  remoteProgress.pending = null;
+  remote.post('/api/progress', { id, pos, dur }).catch(() => {});
 }
 
 // ---------- escaneo + detección de novedades ----------
@@ -247,13 +295,14 @@ const silentRoots = new Set();
 
 function restartWatcher() {
   watcher.stop();
-  if (settings.data.autoWatch !== false) watcher.start(libraryRoots());
+  if (settings.data.autoWatch !== false && !remoteOn()) watcher.start(libraryRoots());
 }
 
 let scanning = null;
 let rescan = false;
 
 function scan() {
+  if (remoteOn()) return remoteFetch('/api/scan', 'POST');   // el servidor escanea su carpeta
   if (scanning) { rescan = true; return scanning; }
   scanning = doScan().finally(() => {
     scanning = null;
@@ -405,6 +454,7 @@ async function fetchItem(api, it, forcedId) {
 }
 
 async function fetchMissingMetadata(force = false) {
+  if (remoteOn()) return;   // los metadatos los descarga el servidor
   const api = tmdb();
   if (!api.enabled) return;
   if (fetching) { fetchAgain = true; return; }
@@ -499,6 +549,9 @@ function lbSlugOf(item) {
 }
 
 player.on('progress', ({ path: p, pos, dur }) => {
+  // vídeo de CineLocal Server: el progreso se guarda en el servidor (y llega de vuelta por sus eventos)
+  const remoteId = (player.state.playlist || []).find(i => i.path === p)?.remoteId;
+  if (remoteId) return reportRemoteProgress(remoteId, pos, dur);
   const prev = progress.data[p] || {};
   const watched = dur > 0 && (pos / dur >= 0.92 || dur - pos < 120 && dur > 600);
   progress.data[p] = { pos: watched ? 0 : pos, dur, watched: watched || (prev.watched && pos < 30), at: Date.now() };
@@ -519,6 +572,8 @@ player.on('maximize', v => {
   v ? win.maximize() : win.unmaximize();
 });
 player.on('closed', ({ code, stderr }) => {
+  const last = remoteProgress.pending;
+  if (last) reportRemoteProgress(last.id, last.pos, last.dur, true);
   discord.setPlayback(null);
   clearTimeout(introPrefetch);
   if (embedded && win && !win.isDestroyed()) {
@@ -676,7 +731,7 @@ letterboxd.on('updated', () => { markLetterboxdWatched(); send('letterboxd:updat
 
 /** Las películas de la biblioteca que ya has visto en Letterboxd se marcan como vistas (sin tocar las que tienen progreso) */
 function markLetterboxdWatched() {
-  if (!settings.data.lbMarkWatched) return;
+  if (!settings.data.lbMarkWatched || remoteOn()) return;
   const seen = new Set(letterboxd.snapshot().films.filter(f => f.watched && f.tmdbId).map(f => f.tmdbId));
   let n = 0;
   for (const it of library.data.items) {
@@ -714,8 +769,16 @@ ipcMain.handle('settings:set', async (_e, patch) => {
   patch = { ...patch };
   if ('nasPassword' in patch) { patch.nasPasswordEnc = encryptSecret(patch.nasPassword); delete patch.nasPassword; }
   delete patch.nasHasPassword;
+  // el token sólo lo pone remote:login
+  delete patch.remoteTokenEnc; delete patch.remoteConnected;
   settings.data = { ...settings.data, ...patch };
   const s = settings.data;
+  if (before.remoteMode !== s.remoteMode || before.remoteUrl !== s.remoteUrl) {
+    configureRemote(s);
+    remoteView = null;
+    restartWatcher();
+    await scan();
+  }
   const nasChanged = ['nasMode', 'nasHost', 'nasUser', 'nasPasswordEnc'].some(k => before[k] !== s[k]);
   // la sesión que acaba de abrir «Conectar» con estos mismos datos se conserva
   if (nasChanged) { nasStatus = null; if (!s.nasMode || nas.key !== nasKey(nasConfig(s))) await nas.disconnect(); }
@@ -752,12 +815,38 @@ ipcMain.handle('tmdb:test', async (_e, key) => {
   catch (e) { return { ok: false, error: e.message }; }
 });
 
-ipcMain.handle('library:get', () => view());
+ipcMain.handle('library:get', async () => (remoteOn() && !remoteView ? remoteFetch() : view()));
 ipcMain.handle('library:scan', () => scan());
-ipcMain.handle('library:refreshMeta', () => { fetchMissingMetadata(true); return true; });
+ipcMain.handle('library:refreshMeta', () => {
+  if (remoteOn()) return remote.post('/api/meta/refresh');
+  fetchMissingMetadata(true); return true;
+});
+
+// Iniciar sesión en CineLocal Server: se guarda el token (cifrado), nunca la contraseña
+ipcMain.handle('remote:login', async (_e, { url, user, password, otp }) => {
+  const r = await remote.login(url, { user: String(user || '').trim(), password, otp });
+  if (!r.ok) return { ok: false, error: r.error, otp: !!r.otp };
+  settings.data = { ...settings.data, remoteMode: true, remoteUrl: normUrl(url), remoteUser: r.user, remoteTokenEnc: encryptSecret(r.token) };
+  configureRemote();
+  remoteView = null;
+  restartWatcher();
+  const v = await remoteFetch();
+  send('library:updated', v);
+  return { ok: true, user: r.user, admin: r.admin, settings: publicSettings() };
+});
+ipcMain.handle('remote:logout', async () => {
+  if (remote.ready) await remote.post('/api/logout').catch(() => {});
+  settings.data = { ...settings.data, remoteTokenEnc: '' };
+  configureRemote();
+  remoteView = null;
+  restartWatcher();
+  await scan();
+  return publicSettings();
+});
 
 const people = store('people.json', {});
 ipcMain.handle('meta:person', async (_e, id) => {
+  if (remoteOn()) return remote.get('/api/person/' + encodeURIComponent(id)).catch(() => null);
   const c = people.data[id];
   // las fichas guardadas antes de añadir la popularidad se vuelven a pedir
   if (c && Date.now() - c.at < 1000 * 60 * 60 * 24 * 30 && c.lang === settings.data.metaLang && Array.isArray(c.data?.films) && c.data.films.every(f => 'popularity' in f)) return c.data;
@@ -772,6 +861,7 @@ ipcMain.handle('meta:person', async (_e, id) => {
 });
 let providerListCache = null;
 ipcMain.handle('meta:providerList', async () => {
+  if (remoteOn()) return remote.get('/api/providers');
   const k = (settings.data.region || 'ES') + ':' + settings.data.metaLang;
   if (providerListCache?.k === k && Date.now() - providerListCache.at < 1000 * 60 * 60 * 24) return providerListCache.data;
   const api = tmdb();
@@ -782,6 +872,7 @@ ipcMain.handle('meta:providerList', async () => {
 });
 const providersCache = new Map();
 ipcMain.handle('meta:providers', async (_e, movieId) => {
+  if (remoteOn()) return remote.get('/api/providers/' + encodeURIComponent(movieId));
   const k = movieId + ':' + (settings.data.region || 'ES');
   const c = providersCache.get(k);
   if (c && Date.now() - c.at < 1000 * 60 * 60 * 12) return c.data;
@@ -792,11 +883,17 @@ ipcMain.handle('meta:providers', async (_e, movieId) => {
   return data;
 });
 ipcMain.handle('meta:search', async (_e, { type, query, year }) => {
+  if (remoteOn()) return remote.post('/api/meta/search', { type, query, year });
   const api = tmdb();
   if (!api.enabled) throw new Error('Configura tu API key de TMDB en Ajustes');
   return api.search(type, query, year);
 });
 ipcMain.handle('meta:identify', async (_e, { itemId, tmdbId }) => {
+  if (remoteOn()) {
+    const it = await remote.post('/api/meta/identify', { itemId, tmdbId });
+    send('library:updated', await remoteFetch());
+    return it;
+  }
   const it = library.data.items.find(i => i.id === itemId);
   if (!it) throw new Error('Elemento no encontrado');
   await fetchItem(tmdb(), it, tmdbId);
@@ -810,10 +907,16 @@ ipcMain.handle('play', async (_e, { itemId, episodeId, fromStart }) => {
   if (!it) throw new Error('Elemento no encontrado');
   const mpv = findMpv(settings.data.mpvPath, process.resourcesPath);
   if (!mpv) return { ok: false, error: 'mpv-missing' };
-  const playlist = buildPlaylist(it, episodeId, fromStart);
-  if (!playlist.length || !fs.existsSync(playlist[0].path)) return { ok: false, error: 'No se encuentra el archivo de vídeo. ¿Está conectado el disco?' };
-  userState.data.lastPlayed[itemId] = { episodeId: episodeId || null, at: Date.now() };
-  userState.save();
+  let playlist;
+  if (remoteOn()) {
+    try { playlist = await remotePlaylist(it, { itemId, episodeId, fromStart }); }
+    catch (e) { return { ok: false, error: e.message }; }
+  } else {
+    playlist = buildPlaylist(it, episodeId, fromStart);
+    if (!playlist.length || !fs.existsSync(playlist[0].path)) return { ok: false, error: 'No se encuentra el archivo de vídeo. ¿Está conectado el disco?' };
+    userState.data.lastPlayed[itemId] = { episodeId: episodeId || null, at: Date.now() };
+    userState.save();
+  }
   const uiDir = playerUiDir();
   if (embeddedMode()) {
     playEmbedded({ mpv, playlist, uiDir });
@@ -824,7 +927,29 @@ ipcMain.handle('play', async (_e, { itemId, episodeId, fromStart }) => {
   return { ok: true };
 });
 
+/**
+ * Lista de reproducción de CineLocal Server: el servidor da el punto de reanudación (su progreso) y enlaces
+ * firmados al archivo y a los subtítulos externos, que mpv (y sus miniaturas) abren sin más
+ */
+async function remotePlaylist(it, q) {
+  const r = await remote.post('/api/play', { ...q, client: 'app' });
+  if (!r?.playlist?.length) throw new Error('No se encuentra el vídeo en el servidor');
+  return r.playlist.map(e => {
+    const ep = e.episodeId ? it.episodes.find(x => x.id === e.episodeId) : null;
+    return {
+      path: remote.abs(e.url),
+      title: e.title,
+      start: e.start,
+      subs: (e.subs || []).map(s => ({ path: remote.abs(s.url), lang: s.lang, title: s.title })),
+      discord: mediaInfo(it, ep, ep ? null : lbSlugOf(it)),
+      skip: e.skip,
+      remoteId: e.id
+    };
+  });
+}
+
 ipcMain.handle('progress:mark', (_e, { paths, watched }) => {
+  if (remoteOn()) return remote.post('/api/progress/mark', { paths, watched }).then(p => { if (remoteView) remoteView.progress = p; return p; });
   for (const p of paths) {
     if (watched) progress.data[p] = { pos: 0, dur: progress.data[p]?.dur || 0, watched: true, at: Date.now() };
     else delete progress.data[p];
@@ -834,6 +959,7 @@ ipcMain.handle('progress:mark', (_e, { paths, watched }) => {
 });
 
 ipcMain.handle('favorites:toggle', (_e, id) => {
+  if (remoteOn()) return remote.post('/api/favorites/toggle', { id }).then(f => { if (remoteView) remoteView.favorites = f; return f; });
   const f = new Set(userState.data.favorites);
   f.has(id) ? f.delete(id) : f.add(id);
   userState.data.favorites = [...f];

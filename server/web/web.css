@@ -1,0 +1,76 @@
+/* CineLocal Server: lo que sólo existe en la versión web (reproductor y ajustes de la cuenta) */
+
+/* ---------- reproductor ---------- */
+body.wp-open { overflow: hidden; }
+.wp { position: fixed; inset: 0; z-index: 1000; background: #000; color: #fff; cursor: none; user-select: none; }
+.wp.show, .wp.paused { cursor: default; }
+.wp video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #000; }
+.wp-shade { position: absolute; left: 0; right: 0; pointer-events: none; transition: opacity .25s; opacity: 0; }
+.wp-shade.top { top: 0; height: 160px; background: linear-gradient(rgba(0,0,0,.75), transparent); }
+.wp-shade.bottom { bottom: 0; height: 220px; background: linear-gradient(transparent, rgba(0,0,0,.85)); }
+.wp-top, .wp-center, .wp-bottom { transition: opacity .25s; opacity: 0; pointer-events: none; }
+.wp.show .wp-shade, .wp.paused .wp-shade, .wp.show .wp-top, .wp.paused .wp-top, .wp.show .wp-center, .wp.paused .wp-center,
+.wp.show .wp-bottom, .wp.paused .wp-bottom { opacity: 1; pointer-events: auto; }
+
+.wp-btn { background: none; border: 0; color: #fff; width: 44px; height: 44px; border-radius: 50%; display: inline-grid; place-items: center; cursor: pointer; padding: 0; transition: background .15s, transform .15s; }
+.wp-btn:hover { background: rgba(255,255,255,.12); }
+.wp-btn svg { width: 26px; height: 26px; fill: currentColor; }
+.wp-btn.big { width: 64px; height: 64px; }
+.wp-btn.big svg { width: 38px; height: 38px; }
+.wp-btn.huge { width: 92px; height: 92px; background: rgba(255,255,255,.12); backdrop-filter: blur(6px); }
+.wp-btn.huge:hover { background: rgba(255,255,255,.2); transform: scale(1.05); }
+.wp-btn.huge svg { width: 52px; height: 52px; }
+.wp-btn.hidden { display: none; }
+
+.wp-top { position: absolute; top: 0; left: 0; right: 0; display: flex; align-items: center; gap: 12px; padding: 22px var(--gutter); }
+.wp-title { font-size: clamp(16px, 1.6vw, 22px); font-weight: 600; text-shadow: 0 1px 6px rgba(0,0,0,.6); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wp-center { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); display: flex; align-items: center; gap: clamp(24px, 6vw, 80px); }
+
+.wp-bottom { position: absolute; left: 0; right: 0; bottom: 0; padding: 0 var(--gutter) 18px; }
+.wp-seek { position: relative; padding: 14px 0; cursor: pointer; touch-action: none; }
+.wp-rail { position: relative; height: 4px; border-radius: 2px; background: rgba(255,255,255,.22); transition: height .12s; }
+.wp-seek:hover .wp-rail { height: 7px; }
+.wp-buf { position: absolute; inset: 0 auto 0 0; background: rgba(255,255,255,.35); border-radius: inherit; }
+.wp-fill { position: absolute; inset: 0 auto 0 0; background: var(--grad); border-radius: inherit; }
+.wp-knob { position: absolute; top: 50%; width: 15px; height: 15px; margin: -7.5px 0 0 -7.5px; border-radius: 50%; background: #fff; box-shadow: 0 0 0 4px rgba(168,85,247,.35); transform: scale(0); transition: transform .12s; }
+.wp-seek:hover .wp-knob { transform: scale(1); }
+.wp-tip { position: absolute; bottom: 30px; transform: translateX(-50%); background: rgba(16,16,24,.92); padding: 4px 8px; border-radius: 6px; font-size: 13px; font-variant-numeric: tabular-nums; opacity: 0; pointer-events: none; transition: opacity .12s; }
+.wp-seek:hover .wp-tip { opacity: 1; }
+.wp-row { display: flex; align-items: center; gap: 4px; }
+.wp-time { font-size: 14px; font-variant-numeric: tabular-nums; color: rgba(255,255,255,.85); }
+.wp-spacer { flex: 1; }
+.wp-vol { display: flex; align-items: center; }
+.wp-volbar { width: 0; opacity: 0; transition: width .2s, opacity .2s; accent-color: var(--accent); }
+.wp-vol:hover .wp-volbar, .wp-volbar:focus { width: 96px; opacity: 1; margin: 0 8px 0 2px; }
+
+.wp-subs { position: absolute; left: 6%; right: 6%; bottom: 9%; text-align: center; pointer-events: none; font-size: clamp(18px, 2.6vw, 38px); line-height: 1.3; font-weight: 600; transition: bottom .25s; }
+.wp.show .wp-subs, .wp.paused .wp-subs { bottom: 150px; }
+.wp-subs span { background: rgba(0,0,0,.55); padding: .05em .35em; border-radius: 4px; box-decoration-break: clone; -webkit-box-decoration-break: clone; text-shadow: 0 1px 3px #000; }
+
+.wp-skip { position: absolute; right: var(--gutter); bottom: 120px; z-index: 2; padding: 12px 22px; border-radius: 8px; border: 1px solid rgba(255,255,255,.4); background: rgba(16,16,24,.78); color: #fff; font: 600 15px/1 inherit; font-family: inherit; cursor: pointer; backdrop-filter: blur(6px); }
+.wp-skip:hover { background: #fff; color: #000; }
+.wp-skip.hidden { display: none; }
+
+.wp-menu { position: absolute; right: var(--gutter); bottom: 90px; z-index: 3; min-width: 260px; max-width: min(420px, 90vw); max-height: 60vh; overflow: auto; background: rgba(16,16,24,.96); border: 1px solid var(--line); border-radius: 12px; padding: 6px; box-shadow: 0 20px 50px rgba(0,0,0,.5); }
+.wp-menu.hidden { display: none; }
+.wp-menu-h { font-size: 12px; text-transform: uppercase; letter-spacing: .1em; color: var(--text-3); padding: 10px 12px 6px; }
+.wp-mi { display: block; width: 100%; text-align: left; background: none; border: 0; color: var(--text); padding: 10px 12px 10px 34px; border-radius: 8px; font: inherit; font-size: 14px; cursor: pointer; position: relative; }
+.wp-mi:hover:not(:disabled) { background: rgba(255,255,255,.08); }
+.wp-mi.on::before { content: ''; position: absolute; left: 13px; top: 50%; width: 8px; height: 8px; margin-top: -4px; border-radius: 50%; background: var(--accent); }
+.wp-mi:disabled { color: var(--text-3); cursor: default; }
+
+.wp-spinner { position: absolute; inset: 0; display: none; place-items: center; pointer-events: none; }
+.wp.loading .wp-spinner { display: grid; }
+.wp.loading .wp-center .huge { opacity: 0; }
+.wp-note { position: absolute; top: 90px; left: 50%; transform: translateX(-50%); background: rgba(16,16,24,.9); padding: 10px 16px; border-radius: 8px; font-size: 14px; }
+.wp-note.hidden { display: none; }
+
+@media (max-width: 700px) {
+  .wp-btn.big { width: 52px; height: 52px; }
+  .wp-btn.huge { width: 72px; height: 72px; }
+  .wp-vol .wp-volbar { display: none; }
+}
+
+/* ---------- ajustes: cuenta ---------- */
+.web-only { display: none; }
+body.web .web-only { display: block; }

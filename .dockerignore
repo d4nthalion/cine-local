@@ -1,0 +1,8 @@
+# La imagen de CineLocal Server (server/Dockerfile) sólo necesita esto
+*
+!package.json
+!src/main/**
+!src/renderer/**
+!server/**
+server/data
+server/.env

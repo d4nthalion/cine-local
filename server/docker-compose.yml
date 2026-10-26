@@ -1,0 +1,36 @@
+# CineLocal Server en el NAS. Los valores entre ${…} van en server/.env (ver .env.example).
+services:
+  cinelocal:
+    build:
+      context: ..
+      dockerfile: server/Dockerfile
+    image: cinelocal-server
+    container_name: cinelocal
+    restart: unless-stopped
+    # red del propio NAS: así llega a DSM en 127.0.0.1:5000 para comprobar los usuarios
+    network_mode: host
+    user: "${PUID}:${PGID}"
+    group_add:
+      - "${VIDEO_GID}"          # grupo dueño de /dev/dri/renderD128 (gráfica Intel)
+      - "${SHARE_GID}"          # grupo con permiso en las carpetas compartidas (las ACL de DSM no miran los permisos Unix)
+    devices:
+      - /dev/dri:/dev/dri
+    environment:
+      HOST: "${BIND_HOST:-0.0.0.0}"   # 127.0.0.1 si sólo se entra por el proxy inverso de DSM
+      PORT: "8095"
+      DSM_URL: "http://127.0.0.1:5000"
+      CINELOCAL_ADMINS: "${ADMINS}"
+      CINELOCAL_USERS: "${USERS:-}"
+      CINELOCAL_HWACCEL: "vaapi"
+      TRUST_PROXY: "1"
+    volumes:
+      - "${MEDIA_DIR}:/media:ro"      # la carpeta de vídeo, sólo lectura
+      - ./data:/data                  # ajustes, metadatos, sesiones y progreso
+    # contenedor sin privilegios: sistema de archivos de sólo lectura, sin capacidades extra
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true

@@ -41,6 +41,9 @@ const META_LANGS = [
   ['fr-FR', 'Francés'], ['de-DE', 'Alemán'], ['it-IT', 'Italiano'], ['pt-PT', 'Portugués'], ['pt-BR', 'Portugués (Brasil)']
 ];
 
+// CineLocal Server (server/): la misma interfaz en el navegador, sin mpv, eMule, Discord ni actualizaciones
+const WEB = window.api.platform === 'web';
+
 const S = {
   lib: { items: [], progress: {}, favorites: [] },
   settings: {},
@@ -603,7 +606,10 @@ function setHero(i) {
 
 function banners() {
   let out = '';
-  if (S.lib.error) {
+  if (S.lib.error && S.lib.remote) {
+    out += `<div class="banner"><div class="txt"><b>CineLocal Server.</b> ${esc(S.lib.error)}.${S.lib.items.length ? ' Se muestra lo último que se recibió.' : ''}</div>
+      <button class="btn btn-ghost btn-sm" data-nav="settings">Ajustes</button></div>`;
+  } else if (S.lib.error) {
     out += `<div class="banner"><div class="txt"><b>${S.lib.items.length ? 'Falta una carpeta de la biblioteca.' : 'No se puede leer la biblioteca.'}</b> ${esc(S.lib.error)}. Comprueba que el disco esté conectado o cambia la carpeta en Ajustes.</div>
       <button class="btn btn-ghost btn-sm" data-nav="settings">Ajustes</button></div>`;
   }
@@ -794,7 +800,7 @@ function viewDetail(id) {
               <button data-action="mark-all" data-id="${it.id}" data-watched="${watchedAll ? 0 : 1}">${watchedAll ? I.restart : I.eye}${watchedAll ? 'Marcar como no visto' : 'Marcar como visto'}</button>
               <button data-action="identify" data-id="${it.id}">${I.tag}Corregir coincidencia</button>
               ${S.settings.emuleEnabled ? `<button data-action="emule-find" data-q="${esc(T(it))}">${I.download}Buscar en eMule</button>` : ''}
-              <button data-action="reveal" data-path="${esc(it.type === 'movie' ? it.path : it.episodes[0].path)}">${I.folder}Abrir ubicación</button>
+              ${WEB ? '' : `<button data-action="reveal" data-path="${esc(it.type === 'movie' ? it.path : it.episodes[0].path)}">${I.folder}Abrir ubicación</button>`}
             </div>
           </div>
         </div>
@@ -854,27 +860,30 @@ function viewSettings() {
   const s = S.settings;
   const opt = (list, v) => list.map(([k, l]) => `<option value="${k}" ${k === v ? 'selected' : ''}>${esc(l)}</option>`).join('');
   const sw = (key, on) => `<label class="switch"><input type="checkbox" data-set="${key}" ${on ? 'checked' : ''}><span></span></label>`;
+  const REMOTE = !WEB && !!s.remoteMode;   // la biblioteca viene de CineLocal Server
   return `<div class="page settings">
     <h1 class="page-title">Ajustes</h1>
+    ${WEB ? webAccountHTML() : ''}
 
     <div class="set-group"><h3>Biblioteca</h3>
-      <div class="set-row lib-paths"><div class="lbl"><div class="t">Carpetas de películas y series</div>
+      ${WEB ? '' : remoteSettingsHTML(s, sw)}
+      ${REMOTE ? '' : `<div class="set-row lib-paths"><div class="lbl"><div class="t">Carpetas de películas y series</div>
         <div class="d">Archivos de vídeo sueltos = películas · cada carpeta = una serie (admite subcarpetas por temporada). Una serie repartida en varias carpetas se junta en una sola.${libPaths().length > 1 ? ' Las descargas de eMule se mueven a la primera.' : ''}</div></div>
         <div class="ctl">
           ${libPaths().map((p, i, all) => `<div class="lib-path">
-            <input class="input" data-lib-path="${i}" value="${esc(p)}" placeholder="Ruta de la carpeta">
-            <button class="btn btn-ghost btn-sm" data-action="pick-folder" data-idx="${i}">Examinar</button>
+            <input class="input" data-lib-path="${i}" value="${esc(p)}" placeholder="${WEB ? 'Carpeta en el servidor, p. ej. /media' : 'Ruta de la carpeta'}">
+            ${WEB ? '' : `<button class="btn btn-ghost btn-sm" data-action="pick-folder" data-idx="${i}">Examinar</button>`}
             ${all.length > 1 ? `<button class="icon-btn sm" data-action="remove-lib-path" data-idx="${i}" title="Quitar esta carpeta">${I.close}</button>` : ''}
           </div>`).join('')}
           <button class="btn btn-ghost btn-sm add-path" data-action="add-lib-path">${I.plus}Añadir nueva ruta</button>
-        </div></div>
+        </div></div>`}
       <div class="set-row"><div class="lbl"><div class="t">Escanear de nuevo</div><div class="d">${S.lib.items.length} títulos · último escaneo ${S.lib.scannedAt ? new Date(S.lib.scannedAt).toLocaleString('es-ES') : 'nunca'}</div></div>
         <div class="ctl"><button class="btn btn-ghost btn-sm" data-action="scan">Escanear ahora</button></div></div>
-      <div class="set-row"><div class="lbl"><div class="t">Detectar archivos nuevos automáticamente</div><div class="d">Vigila la carpeta y añade lo nuevo en cuanto termine de copiarse, con aviso en la app y en Windows.</div></div>
+      ${REMOTE ? '' : `<div class="set-row"><div class="lbl"><div class="t">Detectar archivos nuevos automáticamente</div><div class="d">Vigila la carpeta y añade lo nuevo en cuanto termine de copiarse, con aviso en la app y en Windows.</div></div>
         <div class="ctl">${sw('autoWatch', s.autoWatch !== false)}</div></div>
       <div class="set-row"><div class="lbl"><div class="t">Carpetas con un solo vídeo como película</div><div class="d">Si una carpeta contiene un único vídeo sin numeración de episodio, se trata como película en vez de serie.</div></div>
         <div class="ctl">${sw('singleFileFolderAsMovie', s.singleFileFolderAsMovie)}</div></div>
-      <div class="set-row"><div class="lbl"><div class="t">Modo NAS</div><div class="d">CineLocal inicia sesión en el NAS con su propio usuario, sin depender de las credenciales guardadas en el Explorador de Windows. Escribe las carpetas como <code>\\\\NAS\\Multimedia</code> (o <code>\\\\10.8.0.1\\Multimedia</code> si entras por la VPN del Synology).</div></div>
+      ${WEB ? '' : `<div class="set-row"><div class="lbl"><div class="t">Modo NAS</div><div class="d">CineLocal inicia sesión en el NAS con su propio usuario, sin depender de las credenciales guardadas en el Explorador de Windows. Escribe las carpetas como <code>\\\\NAS\\Multimedia</code> (o <code>\\\\10.8.0.1\\Multimedia</code> si entras por la VPN del Synology).</div></div>
         <div class="ctl">${sw('nasMode', s.nasMode)}</div></div>
       ${s.nasMode ? `<div class="set-row nas-row"><div class="lbl"><div class="t">Inicio de sesión en el NAS</div>
         <div class="d">Un usuario del NAS con permiso de lectura en la carpeta (de escritura si eMule mueve ahí las descargas). La contraseña se guarda cifrada con tu cuenta de Windows.</div></div>
@@ -884,18 +893,18 @@ function viewSettings() {
           <input class="input" type="password" data-nas="password" placeholder="${s.nasHasPassword ? 'Contraseña guardada' : 'Contraseña'}">
           <button class="btn btn-ghost btn-sm" data-action="nas-test">Conectar</button>
         </div>
-        <div class="nas-status" id="nasStatus">${nasStatePill()}</div></div>` : ''}
+        <div class="nas-status" id="nasStatus">${nasStatePill()}</div></div>` : ''}`}`}
     </div>
 
     <div class="set-group"><h3>Metadatos (TMDB)</h3>
-      <div class="set-row"><div class="lbl"><div class="t">API key de TMDB</div>
+      ${REMOTE ? `<div class="set-row"><div class="lbl"><div class="t">Los gestiona CineLocal Server</div><div class="d">La clave de TMDB, el idioma y las correcciones se cambian en la web del servidor (Ajustes, con un usuario administrador).</div></div></div>` : `<div class="set-row"><div class="lbl"><div class="t">API key de TMDB</div>
         <div class="d">Gratis en <a data-url="https://www.themoviedb.org/settings/api">themoviedb.org/settings/api</a>. Sirve la “Clave de la API” (v3) o el “Token de acceso de lectura” (v4).</div></div>
         <div class="ctl"><input class="input" type="password" data-set-text="tmdbKey" value="${esc(s.tmdbKey)}" placeholder="Pega aquí tu clave" style="min-width:260px">
         <button class="btn btn-ghost btn-sm" data-action="test-key">Probar</button><span id="keyStatus"></span></div></div>
       <div class="set-row"><div class="lbl"><div class="t">Idioma de los metadatos</div><div class="d">Títulos, sinopsis y nombres de episodios.</div></div>
         <div class="ctl"><select class="select" data-set="metaLang">${opt(META_LANGS, s.metaLang)}</select></div></div>
       <div class="set-row"><div class="lbl"><div class="t">Volver a descargar todos los metadatos</div><div class="d">Útil si cambias de idioma o TMDB ha actualizado información. Se conservan las correcciones manuales.</div></div>
-        <div class="ctl"><button class="btn btn-ghost btn-sm" data-action="refresh-meta">Actualizar</button></div></div>
+        <div class="ctl"><button class="btn btn-ghost btn-sm" data-action="refresh-meta">Actualizar</button></div></div>`}
     </div>
 
     <div class="set-group"><h3>Audio y subtítulos</h3>
@@ -907,7 +916,9 @@ function viewSettings() {
         <div class="ctl"><select class="select" data-set="subMode">${opt([['always', 'Siempre'], ['foreign', 'Sólo si el audio está en otro idioma'], ['off', 'Nunca (activables durante la reproducción)']], s.subMode)}</select></div></div>
     </div>
 
-    <div class="set-group"><h3>Reproducción</h3>
+    ${WEB ? `<div class="set-group"><h3>Reproducción</h3>
+      <div class="set-row"><div class="lbl"><div class="t">Reproducir el siguiente episodio automáticamente</div></div><div class="ctl">${sw('autoplayNext', s.autoplayNext)}</div></div>
+    </div>` : `<div class="set-group"><h3>Reproducción</h3>
       ${window.api.platform === 'win32' ? `<div class="set-row"><div class="lbl"><div class="t">Dónde se reproduce</div><div class="d">Dentro de CineLocal, el vídeo ocupa la ventana de la app y al terminar vuelves a la ficha. En ventana aparte, mpv abre su propia ventana.</div></div>
         <div class="ctl"><select class="select" data-set="playerMode">${opt([['embedded', 'Dentro de CineLocal'], ['window', 'En ventana aparte']], s.playerMode || 'embedded')}</select></div></div>` : ''}
       <div class="set-row"><div class="lbl"><div class="t">Interfaz del reproductor</div><div class="d">La moderna es al estilo de Netflix: al mover el ratón aparecen el botón grande de pausa, la barra de tiempo con miniaturas y los controles de audio, subtítulos y episodios. La clásica usa tu propia configuración de mpv.</div></div>
@@ -920,33 +931,43 @@ function viewSettings() {
         <div class="ctl"><span class="status-pill ${S.lib.mpv ? 'ok' : 'bad'}">${S.lib.mpv ? 'Listo' : 'No encontrado'}</span><button class="btn btn-ghost btn-sm" data-action="pick-mpv">Seleccionar mpv.exe</button></div></div>
       <div class="set-row"><div class="lbl"><div class="t">Argumentos extra de mpv</div><div class="d">Avanzado. Ej.: <code>--volume=80 --sub-scale=1.1</code></div></div>
         <div class="ctl"><input class="input" data-set-text="extraMpvArgs" value="${esc(s.extraMpvArgs)}" placeholder="--opcion=valor"></div></div>
-    </div>
+    </div>`}
 
     <div class="set-group" id="platforms"><h3>Mis plataformas</h3>
       ${platformsSettingsHTML()}
     </div>
 
-    <div class="set-group" id="letterboxd"><h3>Letterboxd</h3>
+    ${WEB ? '' : `<div class="set-group" id="letterboxd"><h3>Letterboxd</h3>
       ${letterboxdSettingsHTML(s, sw)}
     </div>
 
     <div class="set-group"><h3>Descargas (eMule)</h3>
       ${emuleSettingsHTML(s, sw)}
-    </div>
+    </div>`}
 
     ${window.api.platform === 'win32' ? `<div class="set-group" id="discord"><h3>Discord</h3>
       ${discordSettingsHTML(s, sw)}
     </div>
 
-    ` : ''}<div class="set-group"><h3>Aplicación</h3>
+    ` : ''}${WEB ? '' : `<div class="set-group"><h3>Aplicación</h3>
       <div class="set-row"><div class="lbl"><div class="t">Iniciar en pantalla completa</div><div class="d">Pulsa F11 en cualquier momento para entrar o salir.</div></div><div class="ctl">${sw('startFullscreen', s.startFullscreen)}</div></div>
       <div class="set-row"><div class="lbl"><div class="t">Pantalla completa ahora</div></div><div class="ctl"><button class="btn btn-ghost btn-sm" data-action="fullscreen">Alternar (F11)</button></div></div>
     </div>
 
     <div class="set-group" id="updates"><h3>Actualizaciones</h3>
       ${updateSettingsHTML(s, sw)}
-    </div>
+    </div>`}
   </div>`;
+}
+
+/** Web: quién ha iniciado sesión, con qué servidor, y cerrar sesión */
+function webAccountHTML() {
+  const me = S.me || {};
+  return `<div class="set-group" id="account"><h3>Cuenta</h3>
+      <div class="set-row"><div class="lbl"><div class="t">${esc(me.user || '')}${me.admin ? ' · administrador' : ''}</div>
+        <div class="d">CineLocal Server ${esc(me.version || '')} · conversión de vídeo con ${me.hwaccel === 'vaapi' ? 'la gráfica del NAS' : 'el procesador del NAS'}.${me.admin ? '' : ' Sólo un administrador puede cambiar la biblioteca y los metadatos; el progreso y Mi lista son tuyos.'}</div></div>
+        <div class="ctl"><button class="btn btn-ghost btn-sm" data-action="logout">Cerrar sesión</button></div></div>
+    </div>`;
 }
 
 // ---------------------------------------------------------------- descargas (eMule)
@@ -1393,6 +1414,29 @@ function discordSettingsHTML(s, sw) {
       <div class="ctl">${sw('discordDiscreet', s.discordDiscreet)}</div></div>
     <div class="set-row"><div class="lbl"><div class="t">Estado</div><div class="d" id="discordStatus">${discordStatusHTML()}</div></div></div>`;
 }
+/** CineLocal Server como origen de la biblioteca: el NAS por internet, sin VPN */
+function remoteSettingsHTML(s, sw) {
+  const t = S.remoteTest;
+  const status = t === 'running' ? '<span class="status-pill"><span class="spinner sm"></span>Conectando…</span>'
+    : t?.error ? `<span class="status-pill bad">${esc(t.error)}</span>`
+    : S.lib.remote && S.lib.error ? `<span class="status-pill bad">${esc(S.lib.error)}</span>`
+    : s.remoteConnected ? `<span class="status-pill ok">Conectado</span> · ${esc(s.remoteUser)} en ${esc(s.remoteUrl)}` : '';
+  return `<div class="set-row"><div class="lbl"><div class="t">Usar CineLocal Server</div>
+      <div class="d">La biblioteca de tu NAS a través de internet, sin VPN. El progreso y Mi lista se comparten con la web del servidor y con tus otros dispositivos.</div></div>
+      <div class="ctl">${sw('remoteMode', s.remoteMode)}</div></div>
+    ${s.remoteMode ? `<div class="set-row nas-row"><div class="lbl"><div class="t">Conexión con el servidor</div>
+      <div class="d">Entra con tu usuario de DSM. La contraseña no se guarda: sólo la sesión, cifrada con tu cuenta de Windows, durante 30 días.</div></div>
+      <div class="ctl">
+        <input class="input" data-remote="url" value="${esc(s.remoteUrl)}" placeholder="https://cine.tudominio.com" spellcheck="false">
+        <input class="input" data-remote="user" value="${esc(s.remoteUser)}" placeholder="Usuario" spellcheck="false">
+        <input class="input" type="password" data-remote="password" placeholder="Contraseña">
+        <input class="input ${S.remoteOtp ? '' : 'hidden'}" data-remote="otp" placeholder="Código de verificación" inputmode="numeric" autocomplete="one-time-code">
+        <button class="btn btn-ghost btn-sm" data-action="remote-login">Conectar</button>
+        ${s.remoteConnected ? '<button class="btn btn-ghost btn-sm" data-action="remote-logout">Cerrar sesión</button>' : ''}
+      </div>
+      <div class="nas-status" id="remoteStatus">${status}</div></div>` : ''}`;
+}
+
 /** Estado de la sesión en el NAS: la prueba en curso o, si no, el último escaneo */
 function nasStatePill() {
   const t = S.nasTest, n = S.lib.nas;
@@ -1564,7 +1608,7 @@ async function play(itemId, episodeId, fromStart) {
   if (!r.ok) {
     if (r.error === 'mpv-missing') mpvHelp();
     else toast(r.error, 'error');
-  } else {
+  } else if (!r.web) {
     toast('Abriendo reproductor…');
   }
 }
@@ -1658,7 +1702,8 @@ async function saveSetting(key, value) {
   S.settings = await window.api.setSettings({ [key]: value });
   if (key === 'region') S.providerList = null;   // recargar la lista del nuevo país (los ids de TMDB son los mismos en todos)
   if (key === 'nasMode') { S.nasTest = null; S.lib = await window.api.getLibrary(); }
-  if (key === 'subLang' || key === 'emuleEnabled' || key === 'playerMode' || key === 'region' || key === 'nasMode') render(true);
+  if (key === 'remoteMode') { S.remoteTest = null; S.lib = await window.api.getLibrary(); }
+  if (key === 'subLang' || key === 'emuleEnabled' || key === 'playerMode' || key === 'region' || key === 'nasMode' || key === 'remoteMode') render(true);
   if (key === 'lbUser') { setLb(await window.api.letterboxd.get()); paintLbStatus(); }
   if (key.startsWith('emule')) paintEmule();
   if (key === 'emuleEnabled' && value) loadEmuleInfo();
@@ -1835,6 +1880,7 @@ document.addEventListener('click', async (e) => {
       S.lib.progress = await window.api.markProgress({ paths, watched: action.dataset.watched === '1' });
       render(true);
     } else if (a === 'fullscreen') window.api.toggleFullscreen();
+    else if (a === 'logout') window.api.logout();
     else if (a === 'pick-folder') {
       const p = await window.api.pickFolder();
       if (p) { const list = libPaths(); list[+action.dataset.idx || 0] = p; await saveLibPaths(list); }
@@ -1861,6 +1907,23 @@ document.addEventListener('click', async (e) => {
       S.discordTest = r; paintDiscord();
       clearTimeout(S.discordTestTimer);
       S.discordTestTimer = setTimeout(() => { S.discordTest = null; paintDiscord(); }, r.ok ? 15000 : 8000);
+    }
+    else if (a === 'remote-login') {
+      const val = k => $(`[data-remote="${k}"]`).value.trim();
+      const q = { url: val('url'), user: val('user'), password: $('[data-remote="password"]').value, otp: val('otp') };
+      if (!q.password) { S.remoteTest = { error: 'Escribe tu contraseña de DSM' }; render(true); return; }
+      S.remoteTest = 'running'; $('#remoteStatus').innerHTML = '<span class="status-pill"><span class="spinner sm"></span>Conectando…</span>';
+      const r = await window.api.remote.login(q);
+      S.remoteOtp = !!r.otp || (S.remoteOtp && !r.ok);
+      S.remoteTest = r.ok ? null : { error: r.error };
+      if (r.ok) { S.settings = r.settings; S.lib = await window.api.getLibrary(); toast(`Conectado a CineLocal Server: ${S.lib.items.length} títulos`, 'ok'); }
+      render(true);
+    }
+    else if (a === 'remote-logout') {
+      S.settings = await window.api.remote.logout();
+      S.remoteTest = null;
+      S.lib = await window.api.getLibrary();
+      render(true);
     }
     else if (a === 'nas-test') {
       // sólo se guarda lo que conecta, para no escanear con datos a medias
@@ -2071,6 +2134,7 @@ window.api.onMetaProgress((p) => {
 // ---------------------------------------------------------------- arranque
 (async function init() {
   if (window.api.platform === 'win32') document.body.classList.add('win');
+  if (WEB) { document.body.classList.add('web'); S.me = await window.api.me(); }
   document.body.classList.toggle('fullscreen', await window.api.isFullscreen());
   S.settings = await window.api.getSettings();
   S.lib = await window.api.getLibrary();

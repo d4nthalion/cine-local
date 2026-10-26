@@ -178,6 +178,14 @@ Pruebas, sin publicar ni instalar nada (antes, `npm run dist`):
 * Aviso de la portable (incluido descartar una release de Android): `npx electron test/update-test.js <carpetaTemporal> <carpetaCapturas> portable`.
 * Qué release elige en el repositorio real (sólo lectura): `npx electron test/update-test.js <carpetaTemporal> <carpetaCapturas> github`.
 
+## CineLocal Server (NAS, sin VPN)
+
+En [`server/`](server/README.md) está **CineLocal Server**: la misma interfaz como servicio web del NAS (contenedor Docker en Synology), alternativa a Video Station / DS Video. Se entra con los usuarios de DSM y cada uno tiene su progreso y su lista. En el navegador, el vídeo se envía tal cual o se reempaqueta o convierte con la gráfica del NAS.
+
+La app de escritorio también puede usarlo como origen: *Ajustes → Biblioteca → Usar CineLocal Server*, con la dirección del servidor (por ejemplo `https://nas.synology.me:5443`) y el usuario de DSM. La biblioteca, el progreso y Mi lista vienen del servidor, y mpv reproduce el archivo original con enlaces firmados. No hace falta VPN. La contraseña no se guarda: solo la sesión, cifrada, durante 30 días. Con la opción desactivada, vuelven las carpetas locales.
+
+Para que un usuario de DSM que no es administrador pueda entrar, necesita permiso en *Panel de control → Privilegios de aplicaciones → DSM*. Instalación, seguridad y puertos: [`server/README.md`](server/README.md).
+
 ## Android
 
 En [`android/`](android/README.md) está **CineLocal para Android** (móvil): lee la biblioteca directamente de la carpeta compartida del PC (`\\MI-PC\Peliculas`), con la misma forma de reconocer películas y series, metadatos de TMDB y reproductor propio (LibVLC). Se descarga como `CineLocal-android-<versión>.apk` desde las releases `android-v…`.
