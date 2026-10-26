@@ -58,7 +58,7 @@ data class SmbCredentials(val user: String, val password: String) {
 }
 
 /** Lectura de la biblioteca en una carpeta compartida de Windows (SMB 2/3) */
-class SmbLibrary(private val location: SmbLocation, private val credentials: SmbCredentials) {
+class SmbLibrary(private val location: SmbLocation, private val credentials: SmbCredentials) : FileSource {
 
     private val client = SMBClient(
         SmbConfig.builder()
@@ -99,7 +99,8 @@ class SmbLibrary(private val location: SmbLocation, private val credentials: Smb
      * Devuelve el tamaño del archivo en el PC si se copió entero, o null si se paró.
      * Se lee justo hasta ese tamaño: algunos servidores no contestan a una lectura más allá del final.
      */
-    fun download(relPath: String, dest: File, offset: Long, onChunk: (Long) -> Boolean): Long? {
+    override fun download(path: String, dest: File, offset: Long, onChunk: (Long) -> Boolean): Long? {
+        val relPath = path
         try {
             connect().forceClosing { conn ->
                 val session = conn.authenticate(credentials.toAuth())

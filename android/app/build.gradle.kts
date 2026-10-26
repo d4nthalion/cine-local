@@ -13,8 +13,8 @@ android {
         applicationId = "com.cinelocal.android"
         minSdk = 26
         targetSdk = 36
-        versionCode = 12
-        versionName = "0.9.0"
+        versionCode = 14
+        versionName = "0.10.0"
 
         // LibVLC trae librerías nativas por arquitectura: móviles actuales (arm64) y el emulador (x86_64)
         ndk { abiFilters += listOf("arm64-v8a", "x86_64") }

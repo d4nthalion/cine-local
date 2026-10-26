@@ -41,7 +41,12 @@ data class LibraryItem(
 }
 
 @Serializable
-data class LibraryData(val items: List<LibraryItem> = emptyList(), val scannedAt: Long = 0, val error: String? = null)
+data class LibraryData(
+    val items: List<LibraryItem> = emptyList(),
+    val scannedAt: Long = 0,
+    val error: String? = null,
+    val links: Map<String, String> = emptyMap()   // CineLocal Server: ruta del archivo → enlace firmado (vídeo y subtítulos)
+)
 
 @Serializable
 data class CastMember(val name: String, val character: String? = null, val photo: String? = null)
@@ -111,6 +116,10 @@ data class UserState(
 data class Settings(
     val libraryPath: String = "",        // \\EQUIPO\Carpeta o smb://equipo/carpeta
     val nasMode: Boolean = false,        // la carpeta está en un NAS: el usuario y la contraseña son los del NAS
+    val serverMode: Boolean = false,     // la biblioteca viene de CineLocal Server (el NAS por HTTPS, sin VPN)
+    val serverUrl: String = "",          // https://danthalion.synology.me:5443
+    val serverUser: String = "",
+    val serverToken: String = "",        // sesión del servidor (30 días); la contraseña no se guarda
     val smbUser: String = "",
     val smbPassword: String = "",
     val tmdbKey: String = "",
@@ -128,7 +137,8 @@ data class Settings(
     val autoUpdate: Boolean = true,      // buscar actualizaciones en GitHub al abrir la app
     val downloadWifiOnly: Boolean = true // descargar para ver sin conexión solo con Wi-Fi
 ) {
-    val configured get() = libraryPath.isNotBlank()
+    val server get() = serverMode && serverUrl.isNotBlank() && serverToken.isNotBlank()
+    val configured get() = if (serverMode) server else libraryPath.isNotBlank()
     val ntfyReady get() = ntfyTopic.isNotBlank()
 }
 

@@ -53,12 +53,18 @@ import com.cinelocal.android.ui.title
  * - Se copian a "<archivo>.part" y se renombran al terminar; si se corta, se reanuda desde el tamaño del .part.
  * - downloads.json guarda la cola y el estado de cada vídeo. El trabajo lo hace [DownloadService] (servicio en primer plano).
  */
+/** De dónde se copian los archivos: la carpeta compartida (SMB) o CineLocal Server (HTTPS) */
+fun interface FileSource {
+    /** Copia [path] al final de [dest] desde [offset]; devuelve el tamaño total si terminó o null si se paró */
+    fun download(path: String, dest: File, offset: Long, onChunk: (Long) -> Boolean): Long?
+}
+
 class DownloadManager(
     private val context: Context,
     scope: CoroutineScope,
     dir: File,
     private val settings: () -> Settings,
-    private val smb: () -> SmbLibrary
+    private val source: () -> FileSource
 ) {
     val index = JsonStore(File(dir, "downloads.json"), DownloadIndex.serializer(), DownloadIndex(), scope)
 
@@ -268,7 +274,7 @@ class DownloadManager(
             val tmp = partFile(s)
             try {
                 tmp.delete()
-                if (smb().download(s, tmp, 0) { job.isActive } != null) tmp.renameTo(sd)
+                if (source().download(s, tmp, 0) { job.isActive } != null) tmp.renameTo(sd)
             } catch (e: IOException) {
                 if (!isTransient(e)) Log.w(TAG, "Subtítulo no descargado: $s", e) else throw e
             }
@@ -282,7 +288,7 @@ class DownloadManager(
         var lastTick = 0L
         var lastBytes = offset
         var lastAt = SystemClock.elapsedRealtime()
-        val remoteSize = smb().download(f.path, part, offset) { total ->
+        val remoteSize = source().download(f.path, part, offset) { total ->
             val now = SystemClock.elapsedRealtime()
             if (now - lastTick >= 700) {
                 lastTick = now
@@ -337,7 +343,7 @@ class DownloadManager(
         /** Mensaje en español para la pantalla de Descargas */
         fun friendly(e: Throwable): String = when {
             diskFull(e) -> "No queda espacio en el móvil. Libera espacio y vuelve a intentarlo."
-            isTransient(e) -> "No se puede conectar con el PC. Comprueba que está encendido y en la misma red."
+            isTransient(e) -> "No se puede conectar con la biblioteca. Comprueba que el PC o el NAS está encendido y que tienes conexión."
             else -> e.message ?: e.javaClass.simpleName
         }
     }

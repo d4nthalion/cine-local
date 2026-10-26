@@ -79,6 +79,7 @@ Al abrir, la app mira en GitHub si hay una versión nueva (como mucho una vez ca
    * Cuenta de Microsoft: usuario = correo, contraseña = la de Microsoft (no el PIN).
    * Si el servidor SMB no usa el puerto 445: `\\EQUIPO:4445\Carpeta` o `smb://equipo:4445/Carpeta`.
    * Sin usuario se entra como invitado (solo si el PC tiene desactivado el *uso compartido con protección por contraseña*).
+   * **CineLocal Server (sin VPN):** activa **Usar CineLocal Server**, escribe la dirección del servidor (con su puerto, p. ej. `https://nas.synology.me:5443`) y tu usuario de DSM → **Conectar** → **Guardar**. La biblioteca, los metadatos, el progreso y Mi lista vienen del servidor (`data/CineServer.kt`). LibVLC abre enlaces firmados al archivo y a sus subtítulos externos, y las descargas para ver sin conexión también salen del servidor. El progreso se sincroniza: lo visto sin conexión se sube al volver. La biblioteca de la carpeta de red se guarda aparte y vuelve al desactivar la opción. La versión de depuración admite servidores por HTTP (`src/debug/AndroidManifest.xml`), para probar con el emulador contra `http://10.0.2.2:8095`.
    * **Biblioteca en un NAS:** activa **Modo NAS** y usa la carpeta compartida del NAS (`\\NAS\Multimedia`) con un usuario del NAS (de DSM en un Synology). Fuera de casa, conecta la VPN del NAS y escribe la carpeta con su IP dentro de la VPN (`\\10.8.0.1\Multimedia`).
 3. Pon tu **API key de TMDB** (gratis en themoviedb.org → Ajustes → API) y guarda.
 

@@ -68,6 +68,7 @@ import com.cinelocal.android.core.Languages
 import com.cinelocal.android.core.Letterboxd
 import com.cinelocal.android.core.Settings
 import com.cinelocal.android.core.Space
+import com.cinelocal.android.data.CineServer
 import com.cinelocal.android.data.Ntfy
 import com.cinelocal.android.data.UpdatePhase
 import com.cinelocal.android.repo
@@ -104,6 +105,10 @@ fun SettingsScreen(nav: Nav) {
     var tmdbTest by remember { mutableStateOf<Pair<Boolean, String>?>(null) }
     var showToken by remember { mutableStateOf(false) }
     var ntfyTest by remember { mutableStateOf<Pair<Boolean, String>?>(null) }
+    var serverPass by remember { mutableStateOf("") }
+    var otp by remember { mutableStateOf("") }
+    var needOtp by remember { mutableStateOf(false) }
+    var serverTest by remember { mutableStateOf<Pair<Boolean, String>?>(null) }
     val dirty = s != saved
     val scroll = rememberScrollState()
 
@@ -114,6 +119,54 @@ fun SettingsScreen(nav: Nav) {
         Column(Modifier.weight(1f).verticalScroll(scroll).padding(horizontal = 16.dp)) {
             Header("Biblioteca")
             Group {
+                SwitchRow("Usar CineLocal Server", "La biblioteca de tu NAS por internet, sin VPN", s.serverMode) { s = s.copy(serverMode = it) }
+            }
+            if (s.serverMode) {
+                Group(top = 12.dp) {
+                    Field("Dirección del servidor", s.serverUrl, "https://nas.synology.me:5443") { s = s.copy(serverUrl = it.trim()) }
+                    Sep()
+                    Field("Usuario de DSM", s.serverUser, "") { s = s.copy(serverUser = it) }
+                    Sep()
+                    Field("Contraseña", serverPass, "", password = true, showPass = showPass, onTogglePass = { showPass = !showPass }) { serverPass = it }
+                    if (needOtp) {
+                        Sep()
+                        Field("Código de verificación en dos pasos", otp, "123456") { otp = it.trim() }
+                    }
+                    Sep()
+                    ActionRow(if (s.serverToken.isNotBlank()) "Volver a conectar" else "Conectar", enabled = serverPass.isNotEmpty(), result = serverTest) {
+                        serverTest = null
+                        scope.launch {
+                            try {
+                                val token = repo.serverLogin(s.serverUrl, s.serverUser, serverPass, otp)
+                                s = s.copy(serverUrl = CineServer.normUrl(s.serverUrl), serverToken = token)
+                                repo.saveSettings(s)
+                                serverPass = ""; otp = ""; needOtp = false
+                                serverTest = true to "Conectado"
+                            } catch (e: CineServer.LoginException) {
+                                needOtp = needOtp || e.otp
+                                serverTest = false to (e.message ?: "No se pudo iniciar sesión")
+                            } catch (e: Exception) {
+                                serverTest = false to (e.message ?: e.javaClass.simpleName)
+                            }
+                        }
+                    }
+                    if (s.serverToken.isNotBlank()) {
+                        Sep()
+                        ActionRow("Cerrar sesión", color = CL.text2) {
+                            scope.launch {
+                                repo.serverLogout()
+                                s = s.copy(serverToken = "")
+                                repo.saveSettings(s)
+                                serverTest = null
+                            }
+                        }
+                    }
+                }
+                Help(
+                    if (s.serverToken.isNotBlank()) "Conectado como ${s.serverUser}. La biblioteca, el progreso y Mi lista son los del servidor: lo que veas aquí sigue en el PC y en la web."
+                    else "Entra con tu usuario de DSM. La contraseña no se guarda: sólo la sesión, durante 30 días."
+                )
+            } else Group(top = 12.dp) {
                 SwitchRow("Modo NAS", "La biblioteca está en un NAS (Synology…) en vez de en el PC", s.nasMode) { s = s.copy(nasMode = it) }
                 Sep()
                 Field("Carpeta de red", s.libraryPath, if (s.nasMode) "\\\\NAS\\Multimedia" else "\\\\MI-PC\\Peliculas") { s = s.copy(libraryPath = it) }
@@ -134,7 +187,8 @@ fun SettingsScreen(nav: Nav) {
                     }
                 }
             }
-            if (s.nasMode) {
+            if (s.serverMode) Unit
+            else if (s.nasMode) {
                 Help("Carpeta compartida del NAS donde están las películas y series. En el Synology: Panel de control → Carpeta compartida, y SMB activado en Servicios de archivos.")
                 Help("Fuera de casa, conecta la VPN del NAS y escribe la carpeta con su IP dentro de la VPN, por ejemplo \\\\10.8.0.1\\Multimedia.", top = 6.dp)
             } else {
@@ -434,8 +488,8 @@ private fun Help(text: String, top: androidx.compose.ui.unit.Dp = 8.dp) = Text(
 
 /** Grupo de ajustes: fondo bg2 con radio 8 */
 @Composable
-private fun Group(content: @Composable ColumnScope.() -> Unit) {
-    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(CL.bg2), content = content)
+private fun Group(top: androidx.compose.ui.unit.Dp = 0.dp, content: @Composable ColumnScope.() -> Unit) {
+    Column(Modifier.padding(top = top).fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(CL.bg2), content = content)
 }
 
 /** Separador interno con sangría de 16 dp */

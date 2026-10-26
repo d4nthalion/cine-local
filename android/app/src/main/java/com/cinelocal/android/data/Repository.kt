@@ -32,6 +32,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.builtins.serializer
 import java.io.File
@@ -75,8 +76,13 @@ class Repository(private val context: Context) {
 
     // ---------------------------------------------------------------- descargas y modo sin conexión
 
-    /** Descargas para ver sin el PC (cola, servicio y archivos locales) */
-    val downloads = DownloadManager(context, scope, dir, { settings.value }) { SmbLibrary(location(), credentials()) }
+    /** Descargas para ver sin el PC (cola, servicio y archivos locales), desde la carpeta de red o desde CineLocal Server */
+    val downloads = DownloadManager(context, scope, dir, { settings.value }) {
+        if (settings.value.server) FileSource { path, dest, offset, onChunk ->
+            val url = library.value.links[path] ?: throw IOException("Vuelve a cargar la biblioteca para descargar este archivo")
+            server().download(url, dest, offset, onChunk)
+        } else SmbLibrary(location(), credentials())
+    }
 
     /** El último escaneo no pudo leer la carpeta compartida: solo se puede ver lo descargado */
     val offline: StateFlow<Boolean> = library.flow.map { it.error != null && it.items.isNotEmpty() }
@@ -143,7 +149,7 @@ class Repository(private val context: Context) {
 
     /** Marca como vistas las películas de la biblioteca vistas en Letterboxd, si no tienen progreso en CineLocal */
     fun markLetterboxdWatched() {
-        if (!settings.value.lbMarkWatched) return
+        if (!settings.value.lbMarkWatched || settings.value.server) return
         // de lo guardado, no de lbEntries: justo después de sincronizar aún puede tener la lista anterior
         val seen = letterboxd.entries().filter { it.film.watched }.mapNotNull { it.tmdbId }.toSet()
         val now = System.currentTimeMillis()
@@ -173,8 +179,10 @@ class Repository(private val context: Context) {
     fun saveSettings(new: Settings) {
         val old = settings.value
         settings.set(new)
-        val libraryChanged = old.libraryPath != new.libraryPath || old.smbUser != new.smbUser || old.smbPassword != new.smbPassword
-        if (old.libraryPath != new.libraryPath) library.set(LibraryData())
+        if (old.server != new.server) swapLibrary(toServer = new.server)
+        val libraryChanged = old.libraryPath != new.libraryPath || old.smbUser != new.smbUser || old.smbPassword != new.smbPassword ||
+            old.server != new.server || old.serverUrl != new.serverUrl || old.serverToken != new.serverToken
+        if (old.libraryPath != new.libraryPath && !new.server) library.set(LibraryData())
         if (libraryChanged) scan()
         else if (old.tmdbKey != new.tmdbKey || old.metaLang != new.metaLang) fetchMissingMetadata()
         if (Letterboxd.cleanUser(old.lbUser) != Letterboxd.cleanUser(new.lbUser)) {
@@ -182,6 +190,80 @@ class Repository(private val context: Context) {
             if (new.lbUser.isNotBlank()) letterboxd.sync(new.lbUser, full = true)
         }
         if (!old.lbMarkWatched && new.lbMarkWatched) markLetterboxdWatched()
+    }
+
+    // ---------------------------------------------------------------- CineLocal Server
+
+    private fun server(s: Settings = settings.value) = CineServer(s.serverUrl, s.serverToken)
+
+    /** Inicia sesión en el servidor con el usuario de DSM; devuelve el token (lanza CineServer.LoginException) */
+    suspend fun serverLogin(url: String, user: String, password: String, otp: String?): String = withContext(Dispatchers.IO) {
+        CineServer(url).login(user, password, otp)
+    }
+
+    suspend fun serverLogout() = withContext(Dispatchers.IO) { server().logout() }
+
+    // La biblioteca, los metadatos, el progreso y Mi lista de la carpeta de red se guardan aparte mientras se usa
+    // el servidor (y al revés), para que cambiar de origen no mezcle ni pierda nada
+    private val stash = mapOf(
+        true to Stash(store("library.server.json", LibraryData.serializer(), LibraryData()), store("metadata.server.json", MapSerializer(String.serializer(), MetaEntry.serializer()), emptyMap()),
+            store("progress.server.json", MapSerializer(String.serializer(), Progress.serializer()), emptyMap()), store("favorites.server.json", ListSerializer(String.serializer()), emptyList())),
+        false to Stash(store("library.local.json", LibraryData.serializer(), LibraryData()), store("metadata.local.json", MapSerializer(String.serializer(), MetaEntry.serializer()), emptyMap()),
+            store("progress.local.json", MapSerializer(String.serializer(), Progress.serializer()), emptyMap()), store("favorites.local.json", ListSerializer(String.serializer()), emptyList()))
+    )
+
+    private class Stash(
+        val library: JsonStore<LibraryData>, val metadata: JsonStore<Map<String, MetaEntry>>,
+        val progress: JsonStore<Map<String, Progress>>, val favorites: JsonStore<List<String>>
+    )
+
+    private fun swapLibrary(toServer: Boolean) {
+        stash.getValue(!toServer).apply {
+            library.set(this@Repository.library.value); metadata.set(this@Repository.metadata.value)
+            progress.set(this@Repository.progress.value); favorites.set(userState.value.favorites)
+        }
+        stash.getValue(toServer).apply {
+            this@Repository.library.set(library.value); this@Repository.metadata.set(metadata.value)
+            this@Repository.progress.set(progress.value); userState.update { it.copy(favorites = favorites.value) }
+        }
+        onlyDownloaded.value = false
+    }
+
+    /** Ruta del archivo → id del vídeo en el servidor (película o episodio) */
+    private fun serverId(path: String): String? {
+        for (it in library.value.items) {
+            if (it.isMovie) { if (it.path == path) return it.id } else it.episodes.firstOrNull { e -> e.path == path }?.let { e -> return e.id }
+        }
+        return null
+    }
+
+    private val progressSent = HashMap<String, Long>()
+
+    /** Envía el progreso al servidor como mucho cada 10 s por archivo (siempre si se ha terminado) */
+    private fun syncProgress(path: String, p: Progress, force: Boolean) {
+        if (!settings.value.server) return
+        val now = System.currentTimeMillis()
+        if (!force && now - (progressSent[path] ?: 0) < 10_000) return
+        progressSent[path] = now
+        val id = serverId(path) ?: return
+        scope.launch(Dispatchers.IO) {
+            runCatching { if (p.watched) server().mark(listOf(path), true) else server().reportProgress(id, p.pos, p.dur) }
+        }
+    }
+
+    /** Biblioteca del servidor. El progreso se junta con el del móvil: lo más reciente de cada archivo gana */
+    private fun scanServer() {
+        val r = server().library()
+        val now = System.currentTimeMillis()
+        val lang = settings.value.metaLang
+        library.set(LibraryData(r.items, now, r.error, r.links))
+        metadata.set(r.items.associate { it.id to MetaEntry(r.meta[it.id]?.tmdbId, r.meta[it.id], lang, now, seasons = it.seasons) })
+        val local = progress.value
+        val newer = local.filter { (k, v) -> v.at > (r.progress[k]?.at ?: 0) }
+        progress.set(r.progress + newer)
+        // lo visto sin conexión (descargado) sube ahora
+        for ((k, v) in newer) syncProgress(k, v, force = true)
+        userState.update { it.copy(favorites = r.favorites) }
     }
 
     private fun location(s: Settings = settings.value): SmbLocation =
@@ -207,11 +289,13 @@ class Repository(private val context: Context) {
      * al puerto SMB. Hace red: nunca desde el hilo principal.
      */
     fun pcReachable(timeoutMs: Int = 2000): Boolean {
-        val loc = SmbLocation.parse(settings.value.libraryPath) ?: return false
+        val s = settings.value
+        val (host, port) = if (s.server) server(s).hostPort() ?: return false
+            else SmbLocation.parse(s.libraryPath)?.let { it.host to (it.port ?: 445) } ?: return false
         val cm = context.getSystemService(ConnectivityManager::class.java)
         if (cm != null && cm.activeNetwork == null) return false
         return try {
-            Socket().use { it.connect(InetSocketAddress(loc.host, loc.port ?: 445), timeoutMs) }
+            Socket().use { it.connect(InetSocketAddress(host, port), timeoutMs) }
             true
         } catch (_: Exception) {
             false
@@ -219,7 +303,13 @@ class Repository(private val context: Context) {
     }
 
     /** Dirección por SMB para LibVLC. Lanza IOException si la ruta de red de Ajustes no es válida. */
-    fun playbackUri(relPath: String): Uri = SmbLibrary.playbackUri(location(), credentials(), relPath)
+    fun playbackUri(relPath: String): Uri {
+        if (settings.value.server) {
+            val url = library.value.links[relPath] ?: throw IOException("Vuelve a cargar la biblioteca: falta el enlace a este vídeo en el servidor.")
+            return Uri.parse(url)
+        }
+        return SmbLibrary.playbackUri(location(), credentials(), relPath)
+    }
 
     // ---------------------------------------------------------------- escaneo
 
@@ -230,10 +320,14 @@ class Repository(private val context: Context) {
         scanJob = scope.launch {
             _status.update { it.copy(scanning = true) }
             try {
-                val items = withContext(Dispatchers.IO) {
-                    SmbLibrary(location(), credentials()).use { LibraryScanner.scan(it) }
+                if (settings.value.server) {
+                    withContext(Dispatchers.IO) { scanServer() }
+                } else {
+                    val items = withContext(Dispatchers.IO) {
+                        SmbLibrary(location(), credentials()).use { LibraryScanner.scan(it) }
+                    }
+                    library.set(LibraryData(items, System.currentTimeMillis(), null))
                 }
-                library.set(LibraryData(items, System.currentTimeMillis(), null))
                 onlyDownloaded.value = false
             } catch (e: Exception) {
                 // Si el equipo no está encendido, se conserva la biblioteca conocida
@@ -262,6 +356,7 @@ class Repository(private val context: Context) {
 
     fun fetchMissingMetadata(force: Boolean = false) {
         val s = settings.value
+        if (s.server) return   // los metadatos los descarga el servidor
         val api = Tmdb(s.tmdbKey, s.metaLang, s.region)
         if (!api.enabled || metaJob?.isActive == true) return
         metaJob = scope.launch(Dispatchers.IO) {
@@ -301,6 +396,7 @@ class Repository(private val context: Context) {
 
     suspend fun identify(itemId: String, tmdbId: Int) = withContext(Dispatchers.IO) {
         val s = settings.value
+        if (s.server) { server(s).identify(itemId, tmdbId); scanServer(); return@withContext }
         val item = library.value.items.first { it.id == itemId }
         fetchItem(Tmdb(s.tmdbKey, s.metaLang, s.region), item, s.metaLang, tmdbId)
     }
@@ -327,6 +423,7 @@ class Repository(private val context: Context) {
                 at = System.currentTimeMillis()
             ))
         }
+        progress.value[path]?.let { syncProgress(path, it, force = it.watched) }
     }
 
     fun markWatched(paths: List<String>, watched: Boolean) {
@@ -334,12 +431,16 @@ class Repository(private val context: Context) {
             if (watched) all + paths.associateWith { Progress(0.0, all[it]?.dur ?: 0.0, true, System.currentTimeMillis()) }
             else all - paths.toSet()
         }
+        if (settings.value.server) scope.launch(Dispatchers.IO) { runCatching { server().mark(paths, watched) } }
     }
 
     fun isFavorite(id: String) = id in userState.value.favorites
 
-    fun toggleFavorite(id: String) = userState.update { st ->
-        st.copy(favorites = if (id in st.favorites) st.favorites - id else listOf(id) + st.favorites)
+    fun toggleFavorite(id: String) {
+        userState.update { st ->
+            st.copy(favorites = if (id in st.favorites) st.favorites - id else listOf(id) + st.favorites)
+        }
+        if (settings.value.server) scope.launch(Dispatchers.IO) { runCatching { server().toggleFavorite(id) } }
     }
 
     // ---------------------------------------------------------------- peticiones de descarga (ntfy)
