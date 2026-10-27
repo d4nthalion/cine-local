@@ -8,6 +8,7 @@ const { scanLibraries } = require('../src/main/scanner');
 const { TMDB } = require('../src/main/metadata');
 const { LibraryWatcher, isStable } = require('../src/main/watcher');
 const { GENERIC_EPISODE } = require('../src/main/discord');
+const { applyListOp } = require('../src/main/lists');
 const { store } = require('./store');
 
 const DEFAULT_SETTINGS = {
@@ -26,6 +27,8 @@ const DEFAULT_SETTINGS = {
 };
 // lo único que se puede cambiar desde la web (el resto de ajustes de la app de escritorio no aplican aquí)
 const EDITABLE = new Set(Object.keys(DEFAULT_SETTINGS));
+// preferencias de cada usuario: las suyas pisan las del servidor (que quedan como valor por defecto)
+const PREF_KEYS = new Set(['audioLang', 'subLang', 'subMode', 'autoplayNext', 'myProviders']);
 
 const MATCHER_VERSION = 2;
 
@@ -61,21 +64,35 @@ class Library extends EventEmitter {
     const key = String(name).toLowerCase();
     if (!this.users.has(key)) {
       const safe = key.replace(/[^a-z0-9._-]/g, '_');
-      this.users.set(key, store(path.join(this.dir, 'users'), safe + '.json', { progress: {}, favorites: [], lastPlayed: {} }));
+      this.users.set(key, store(path.join(this.dir, 'users'), safe + '.json', { progress: {}, favorites: [], lists: [], lastPlayed: {}, prefs: {} }));
     }
     return this.users.get(key);
   }
 
   // ---------- ajustes ----------
-  publicSettings(isAdmin) {
-    const s = { ...this.settings.data };
+  /** Ajustes del servidor con las preferencias del usuario encima */
+  publicSettings(isAdmin, userName) {
+    const s = { ...this.settings.data, ...(userName ? this.prefs(userName) : {}) };
     if (!isAdmin) s.tmdbKey = s.tmdbKey ? '••••••••' : '';
     return s;
   }
 
+  prefs(userName) {
+    return this.user(userName).data.prefs || {};
+  }
+
+  /** Preferencias propias (cualquier usuario); el resto de claves se ignoran */
+  setPrefs(userName, patch) {
+    const u = this.user(userName);
+    const clean = Object.fromEntries(Object.entries(patch || {}).filter(([k]) => PREF_KEYS.has(k)));
+    u.data.prefs = { ...(u.data.prefs || {}), ...clean };
+    u.save();
+  }
+
   async setSettings(patch) {
     const before = { ...this.settings.data };
-    const clean = Object.fromEntries(Object.entries(patch || {}).filter(([k]) => EDITABLE.has(k)));
+    const clean = Object.fromEntries(Object.entries(patch || {}).filter(([k]) => EDITABLE.has(k) && !PREF_KEYS.has(k)));
+    if (!Object.keys(clean).length) return this.settings.data;
     this.settings.data = { ...this.settings.data, ...clean };
     const s = this.settings.data;
     const roots = x => this.roots(x).join('|');
@@ -116,10 +133,16 @@ class Library extends EventEmitter {
       nas: null,
       progress: u.progress,
       favorites: u.favorites,
+      lists: u.lists || [],
       mpv: 'web',            // en la web no hace falta mpv: no mostrar el aviso
       hasKey: !!this.settings.data.tmdbKey,
       fetching: this.fetching
     };
+  }
+
+  /** Títulos de la biblioteca con su ficha (para dar por conseguidas las peticiones) */
+  withMeta() {
+    return this.library.data.items.map(it => ({ type: it.type, meta: this.metadata.data[it.id]?.meta || null }));
   }
 
   /** Archivo de vídeo por su id (el de la película o el del episodio); nunca por ruta */
@@ -224,7 +247,10 @@ class Library extends EventEmitter {
     if (m.failed) return Date.now() - (m.at || 0) > 1000 * 60 * 60 * 24 * 3;
     if (it.type === 'series') {
       const have = Object.keys(m.meta?.seasons || {}).map(Number);
-      if (it.seasons.some(s => !have.includes(s)) && Date.now() - (m.at || 0) > 1000 * 60 * 60 * 6) return true;
+      // temporada nueva en disco (p. ej. se está copiando la serie): se pide ya; si TMDB no la tiene, se reintenta a las 6 h
+      const missing = it.seasons.filter(s => !have.includes(s));
+      if (missing.some(s => !(m.asked || []).includes(s))) return true;
+      if (missing.length && Date.now() - (m.at || 0) > 1000 * 60 * 60 * 6) return true;
     }
     return false;
   }
@@ -239,7 +265,7 @@ class Library extends EventEmitter {
         this.metadata.data[it.id] = { failed: true, at: Date.now(), lang, matcher: MATCHER_VERSION };
       } else {
         const meta = it.type === 'movie' ? await api.movie(id) : await api.tv(id, it.seasons);
-        this.metadata.data[it.id] = { tmdbId: id, meta, at: Date.now(), lang, matcher: MATCHER_VERSION, manual: !!forcedId || !!prev?.manual };
+        this.metadata.data[it.id] = { tmdbId: id, meta, at: Date.now(), lang, matcher: MATCHER_VERSION, manual: !!forcedId || !!prev?.manual, asked: it.type === 'series' ? it.seasons : undefined };
       }
     } catch (e) {
       if (/no válida/.test(e.message)) throw e;
@@ -312,6 +338,19 @@ class Library extends EventEmitter {
     return data;
   }
 
+  /** Ficha de TMDB de un título que no está en la biblioteca (película o serie, sin temporadas) */
+  async title(type, id) {
+    this.titleCache ||= new Map();
+    const k = `${type}:${id}:${this.settings.data.metaLang}`;
+    const c = this.titleCache.get(k);
+    if (c && Date.now() - c.at < 1000 * 60 * 60 * 12) return c.data;
+    const api = this.requireTmdb();
+    const data = type === 'series' ? await api.tv(id) : await api.movie(id);
+    if (this.titleCache.size > 500) this.titleCache.clear();
+    this.titleCache.set(k, { data, at: Date.now() });
+    return data;
+  }
+
   search({ type, query, year }) {
     return this.requireTmdb().search(type, query, year);
   }
@@ -355,6 +394,14 @@ class Library extends EventEmitter {
     return u.data.progress;
   }
 
+  /** Listas propias del usuario (src/main/lists.js): create · rename · delete · toggle */
+  listOp(userName, q) {
+    const u = this.user(userName);
+    u.data.lists = applyListOp(u.data.lists, q);
+    u.save();
+    return u.data.lists;
+  }
+
   toggleFavorite(userName, id) {
     const u = this.user(userName);
     const f = new Set(u.data.favorites);
@@ -384,7 +431,7 @@ class Library extends EventEmitter {
     if (it.type === 'movie') return [{ id: it.id, itemId, title: it.meta?.title || it.title, start: startOf(it.path), skip: skip('movie') }];
     const eps = it.episodes;
     const idx = Math.max(0, eps.findIndex(e => e.id === episodeId));
-    const list = this.settings.data.autoplayNext ? eps.slice(idx) : [eps[idx]];
+    const list = { ...this.settings.data, ...this.prefs(userName) }.autoplayNext ? eps.slice(idx) : [eps[idx]];
     const series = it.meta?.title || it.title;
     return list.map((e, i) => {
       const em = it.meta?.seasons?.[e.season]?.episodes?.[e.episode];

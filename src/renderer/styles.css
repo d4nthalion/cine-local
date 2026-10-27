@@ -688,3 +688,68 @@ table.srv .srv-act .btn { height: 30px; padding: 0 12px; font-size: 13px; }
 .srv-form label { color: var(--text-3); font-size: 12.5px; white-space: nowrap; }
 .srv-form .input { flex: 1; min-width: 120px; height: 32px; font-size: 13px; }
 .srv-form .btn { height: 32px; padding: 0 12px; font-size: 13px; }
+
+/* listas propias */
+.list-tabs { display: flex; flex-wrap: wrap; gap: 6px; margin: -8px 0 22px; }
+.list-tabs .gchip { font-size: 14px; padding: 7px 12px; }
+.list-tabs .gchip .n { color: var(--text-3); font-weight: 500; margin-left: 4px; }
+.list-tabs .gchip.add { display: inline-flex; align-items: center; gap: 6px; color: var(--accent); }
+.list-tabs .gchip.add svg { width: 16px; height: 16px; fill: currentColor; }
+.list-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin-bottom: 18px; flex-wrap: wrap; }
+.list-head h2 { margin: 0; font-size: 22px; }
+.list-head p { margin: 4px 0 0; color: var(--text-3); font-size: 14px; }
+.list-actions { display: flex; gap: 8px; }
+.card .watched-mark.in-list { left: 8px; right: auto; }
+.lp-row { display: flex; align-items: center; gap: 12px; width: 100%; padding: 11px 24px; background: none; border: 0; color: var(--text); font: inherit; font-size: 15px; text-align: left; cursor: pointer; }
+.lp-row:hover { background: rgba(255,255,255,.05); }
+.lp-check { width: 22px; height: 22px; border-radius: 6px; border: 2px solid var(--text-3); display: grid; place-items: center; flex: none; }
+.lp-row.on .lp-check { background: var(--accent); border-color: var(--accent); }
+.lp-check svg { width: 15px; height: 15px; fill: #fff; }
+.lp-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lp-n { color: var(--text-3); font-size: 13px; }
+.lp-foot { gap: 8px; }
+.lp-foot .input { flex: 1; min-width: 0; }
+
+/* peticiones */
+.req-intro { margin: -14px 0 18px; color: var(--text-3); font-size: 14px; max-width: 760px; }
+.req-search { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 18px; }
+.req-search .input { flex: 1 1 320px; max-width: 520px; }
+.req-results { margin-bottom: 28px; }
+.req-list { display: flex; flex-direction: column; gap: 8px; }
+.req-row { display: grid; grid-template-columns: 56px minmax(0, 1fr) auto auto; align-items: center; gap: 16px; padding: 10px 14px 10px 10px; border-radius: var(--radius); background: var(--bg-2); border: 1px solid var(--line); }
+.req-row.rejected, .req-row.done { opacity: .85; }
+.req-poster { width: 56px; aspect-ratio: 2/3; border-radius: 6px; overflow: hidden; background: var(--bg-3); }
+.req-poster[data-open], .req-poster[data-title-id] { cursor: pointer; }
+.req-poster img, .req-poster .ph { width: 100%; height: 100%; object-fit: cover; display: block; }
+.req-info { min-width: 0; display: flex; flex-direction: column; gap: 3px; align-items: flex-start; }
+.req-title { font-weight: 600; font-size: 15.5px; }
+.req-title span { color: var(--text-3); font-weight: 400; }
+.req-title .req-type { font-size: 12px; margin-left: 6px; padding: 1px 7px; border-radius: 999px; background: rgba(255,255,255,.07); }
+.req-who { color: var(--text-2); font-size: 13.5px; }
+.req-who i { color: var(--text-3); }
+.req-reply { color: var(--text-3); font-size: 13px; }
+.req-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.toast.clickable { cursor: pointer; }
+.toast.request { border-color: rgba(168,85,247,.55); }
+@media (max-width: 720px) {
+  .req-row { grid-template-columns: 48px minmax(0, 1fr); }
+  .req-row .status-pill { grid-column: 2; justify-self: start; }
+  .req-actions { grid-column: 1 / -1; justify-content: flex-start; }
+}
+
+/* inicio de sesión en CineLocal Server (escritorio) */
+body.login-mode .topbar, body.login-mode #view, body.login-mode #metaStatus { display: none; }
+.login-screen { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; padding: 16px; overflow: auto;
+  background: radial-gradient(ellipse at 30% 0%, rgba(139,92,246,.18), transparent 60%), radial-gradient(ellipse at 80% 100%, rgba(236,72,153,.12), transparent 60%), var(--bg); -webkit-app-region: drag; }
+.login-screen.hidden { display: none; }
+.login-card { width: 100%; max-width: 400px; background: rgba(16,16,24,.85); border: 1px solid var(--line); border-radius: 16px; padding: 32px 28px; box-shadow: 0 30px 80px rgba(0,0,0,.45); -webkit-app-region: no-drag; }
+.login-card .brand { display: flex; align-items: center; gap: 10px; font-size: 24px; font-weight: 700; margin-bottom: 6px; cursor: default; }
+.login-card .brand svg { width: 34px; height: 34px; }
+.login-card .brand b { background: var(--grad); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.login-card .sub { margin: 0 0 22px; color: var(--text-3); font-size: 14px; }
+.login-card label { display: block; font-size: 13px; color: var(--text-3); margin: 14px 0 6px; }
+.login-card .input { width: 100%; height: 44px; }
+.login-card .btn { width: 100%; margin-top: 24px; justify-content: center; height: 46px; }
+.login-card .err { margin-top: 16px; padding: 10px 12px; border-radius: 8px; background: rgba(239,68,68,.12); color: #fca5a5; font-size: 14px; white-space: pre-line; }
+.login-card .server-line { margin-top: 18px; font-size: 13px; color: var(--text-3); }
+.login-card .server-line button { background: none; border: 0; padding: 0; color: var(--accent); font: inherit; cursor: pointer; }

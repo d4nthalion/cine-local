@@ -1,68 +1,53 @@
 const { app, BrowserWindow, ipcMain, dialog, shell, Menu, nativeTheme, net, Notification, clipboard, safeStorage } = require('electron');
 const path = require('path');
 const fs = require('fs');
-const { scanLibraries } = require('./scanner');
-const { TMDB } = require('./metadata');
 const { Player, findMpv } = require('./player');
 const { WinEmbed } = require('./winembed');
-const { findExternalSubs } = require('./subs');
-const { LibraryWatcher, isStable } = require('./watcher');
 const emule = require('./emule');
 const { EmuleService } = require('./emule/service');
 const { LetterboxdService, keyOf: lbKey } = require('./letterboxd');
 const { Updater } = require('./updater');
-const { DiscordPresence, mediaInfo, GENERIC_EPISODE } = require('./discord');
+const { DiscordPresence, mediaInfo } = require('./discord');
 const { IntroDB, flatten: flattenSegments } = require('./introdb');
-const { NasSession, cleanHost, keyOf: nasKey } = require('./nas');
+const { NasSession, cleanHost } = require('./nas');
 const { RemoteServer, normUrl } = require('./remote');
 
 app.setAppUserModelId('com.cinelocal.app');
 if (!app.requestSingleInstanceLock()) { app.quit(); process.exit(0); }
 
 const DATA = app.getPath('userData');
-const DEFAULT_LIBRARY = process.platform === 'win32' ? 'D:\\Películas y Series' : path.join(app.getPath('videos'));
 
+// La biblioteca, los metadatos, el progreso, las listas y las preferencias de audio y subtítulos son de
+// CineLocal Server (cada usuario de DSM tiene los suyos). Aquí sólo queda lo propio de este PC.
 const DEFAULT_SETTINGS = {
-  libraryPath: DEFAULT_LIBRARY,   // carpeta principal (ahí mueve eMule las descargas)
-  extraLibraryPaths: [],          // más carpetas de películas y series
-  tmdbKey: '',
-  metaLang: 'es-ES',
-  audioLang: 'spa',
-  subLang: 'spa',
-  subMode: 'foreign',          // always | foreign | off
   playerFullscreen: true,
   playerUi: 'modern',          // modern (uosc) | classic (OSC de mpv)
   playerMode: 'embedded',      // embedded (dentro de CineLocal) | window (ventana propia de mpv)
   startFullscreen: false,
   minimizeOnPlay: false,
-  autoplayNext: true,
-  autoWatch: true,               // detectar archivos nuevos automáticamente
-  singleFileFolderAsMovie: false,
   mpvPath: '',
   extraMpvArgs: '',
-  emuleEnabled: false,
+  emuleEnabled: false,           // sólo administradores
   emulePort: 4711,
   emulePassword: '',
   emulePath: '',
-  emuleMoveToLibrary: true,      // mover los vídeos terminados a la biblioteca
+  emuleMoveToLibrary: true,      // copiar los vídeos terminados a la carpeta del NAS
+  emuleDest: '',                 // carpeta de la biblioteca en el NAS vista desde Windows: \\NAS\Multimedia
   emuleSearchMethod: 'global',
-  myProviders: [],               // plataformas contratadas: [{ id, name }] (ids de TMDB)
-  region: 'ES',                   // país de las plataformas (independiente del idioma de los metadatos)
+  nasUser: '',                   // usuario del NAS para copiar ahí las descargas (net use)
+  nasPasswordEnc: '',            // contraseña cifrada con safeStorage (nunca se envía a la ventana)
   lbUser: '',                    // usuario de Letterboxd
-  lbMarkWatched: true,           // marcar como vistas las películas que ya has visto en Letterboxd
   autoUpdate: true,              // buscar actualizaciones al abrir (se descargan solas y se instalan al cerrar)
   discordEnabled: false,         // mostrar en Discord lo que estás viendo (Rich Presence)
   discordClientId: '',           // ID de la aplicación creada en discord.com/developers
   discordDiscreet: false,        // sin título ni póster: «Viendo una película» / «Viendo una serie»
-  nasMode: false,                // iniciar sesión en el NAS con un usuario propio (net use) antes de leer la biblioteca
-  nasHost: '',                   // nombre o IP del NAS (\\NAS, o 10.8.0.1 por la VPN)
-  nasUser: '',
-  nasPasswordEnc: '',            // contraseña cifrada con safeStorage (nunca se envía a la ventana)
-  remoteMode: false,             // la biblioteca viene de CineLocal Server (NAS) en vez de carpetas
-  remoteUrl: '',                 // https://cine.dominio.com
+  remoteUrl: '',                 // CineLocal Server: https://cine.dominio.com
   remoteUser: '',
   remoteTokenEnc: ''             // token de la sesión, cifrado (la contraseña no se guarda)
 };
+// ajustes que guarda el servidor (los de la biblioteca y TMDB sólo los cambia un administrador)
+const SERVER_KEYS = new Set(['libraryPath', 'extraLibraryPaths', 'tmdbKey', 'metaLang', 'audioLang', 'subLang', 'subMode',
+  'autoplayNext', 'autoWatch', 'singleFileFolderAsMovie', 'myProviders', 'region']);
 
 // ---------- persistencia sencilla en JSON ----------
 function store(name, fallback) {
@@ -87,10 +72,10 @@ function store(name, fallback) {
 }
 
 const settings = store('settings.json', DEFAULT_SETTINGS);
-const library = store('library.json', { items: [], scannedAt: 0, error: null });
-const metadata = store('metadata.json', {});
-const progress = store('progress.json', {});
-const userState = store('state.json', { favorites: [], lastPlayed: {} });
+// ajustes de cuando la biblioteca era local (carpetas, TMDB, Modo NAS…): ahora son del servidor y no deben taparlos
+if (Object.keys(settings.data).some(k => !(k in DEFAULT_SETTINGS))) {
+  settings.data = Object.fromEntries(Object.entries(settings.data).filter(([k]) => k in DEFAULT_SETTINGS));
+}
 const emuleState = store('emule.json', { tracked: {} });
 const lbStore = store('letterboxd.json', { films: {}, ids: {}, user: '', syncedAt: 0, fullAt: 0, source: null });
 const introStore = store('introdb.json', { entries: {} });
@@ -177,48 +162,17 @@ app.on('second-instance', () => {
   if (!win.isVisible()) win.show();
   win.focus();
 });
-app.whenReady().then(() => { configureRemote(); createWindow(); restartWatcher(); emuleService.restart(); if (embeddedMode()) winEmbed.start(); setTimeout(autoSyncLetterboxd, 15000); setTimeout(() => updater.start(), 10000); });
+app.whenReady().then(() => { configureRemote(); createWindow(); startSession(); if (embeddedMode()) winEmbed.start(); setTimeout(autoSyncLetterboxd, 15000); setTimeout(() => updater.start(), 10000); });
 app.on('window-all-closed', () => {
   player.stop();
   winEmbed.stop();
-  watcher.stop();
   emuleService.stop();
   discord.shutdown();
-  for (const s of [settings, library, metadata, progress, userState, emuleState, lbStore, introStore]) s.flushSync();
+  for (const s of [settings, emuleState, lbStore, introStore]) s.flushSync();
   app.quit();
 });
 
-// ---------- biblioteca ----------
-function tmdb() {
-  return new TMDB(settings.data.tmdbKey, settings.data.metaLang || 'es-ES', (u, o) => net.fetch(u, o), settings.data.region || 'ES');
-}
-
-function view() {
-  if (remoteOn()) {
-    const v = remoteView || { items: [], scannedAt: 0, error: null, progress: {}, favorites: [], hasKey: true, fetching: false };
-    return { ...v, error: remoteError || v.error, nas: null, remote: true, mpv: findMpv(settings.data.mpvPath, process.resourcesPath) };
-  }
-  const items = library.data.items.map(it => {
-    const m = metadata.data[it.id];
-    return { ...it, meta: m && !m.failed ? m.meta : null, metaFailed: !!m?.failed };
-  });
-  return {
-    items,
-    scannedAt: library.data.scannedAt,
-    error: library.data.error,
-    nas: nasStatus,
-    progress: progress.data,
-    favorites: userState.data.favorites,
-    mpv: findMpv(settings.data.mpvPath, process.resourcesPath),
-    hasKey: !!settings.data.tmdbKey,
-    fetching
-  };
-}
-
-// ---------- modo NAS ----------
-const nas = new NasSession();
-let nasStatus = null;   // resultado del último inicio de sesión en el NAS
-
+// ---------- secretos ----------
 function encryptSecret(v) {
   if (!v) return '';
   return safeStorage.isEncryptionAvailable() ? 'enc:' + safeStorage.encryptString(v).toString('base64') : 'plain:' + v;
@@ -228,28 +182,33 @@ function decryptSecret(v) {
   if (v.startsWith('plain:')) return v.slice(6);
   try { return safeStorage.decryptString(Buffer.from(v.slice(4), 'base64')); } catch { return ''; }
 }
-function nasConfig(s = settings.data, password) {
-  return { host: s.nasHost, user: (s.nasUser || '').trim(), password: password ?? decryptSecret(s.nasPasswordEnc), roots: libraryRoots(s) };
-}
-/** Ajustes que ve la ventana: sin la contraseña del NAS ni el token del servidor */
-function publicSettings(s = settings.data) {
-  const { nasPasswordEnc, remoteTokenEnc, ...rest } = s;
-  return { ...rest, nasHasPassword: !!nasPasswordEnc, remoteConnected: !!remoteTokenEnc };
-}
 
-// ---------- CineLocal Server (biblioteca en el NAS, sin VPN) ----------
+// ---------- CineLocal Server ----------
 const remote = new RemoteServer({ fetch: (u, o) => net.fetch(u, o) });
-let remoteView = null;    // última biblioteca recibida del servidor
+let remoteView = null;      // última biblioteca recibida del servidor
 let remoteError = null;
+let me = null;              // { user, role, admin, … } de /api/me
+let serverSettings = {};    // ajustes del servidor con las preferencias del usuario encima
 
-const remoteOn = () => !!settings.data.remoteMode && remote.ready;
+const isAdmin = () => !!me?.admin;
+
 function configureRemote(s = settings.data) {
-  remote.configure({ url: s.remoteUrl, token: s.remoteMode ? decryptSecret(s.remoteTokenEnc) : '' });
+  remote.configure({ url: s.remoteUrl, token: decryptSecret(s.remoteTokenEnc) });
 }
 
-async function remoteFetch(path = '/api/library', method = 'GET') {
+/** Con la sesión abierta: quién soy, mis ajustes y la biblioteca; y eMule si soy administrador */
+async function startSession() {
+  if (!remote.ready) { me = null; serverSettings = {}; remoteView = null; emuleService.restart(); return; }
+  me = await remote.get('/api/me').catch(() => me);
+  serverSettings = await remote.get('/api/settings').catch(() => serverSettings);
+  await remoteFetch();
+  emuleService.restart();
+  send('library:updated', view());
+}
+
+async function remoteFetch(p = '/api/library', method = 'GET') {
   try {
-    remoteView = await remote.request(method, path);
+    remoteView = await remote.request(method, p);
     remoteError = null;
   } catch (e) {
     remoteError = e.message;
@@ -257,12 +216,33 @@ async function remoteFetch(path = '/api/library', method = 'GET') {
   return view();
 }
 
+function view() {
+  const v = remoteView || { items: [], scannedAt: 0, error: null, progress: {}, favorites: [], lists: [], hasKey: true, fetching: false };
+  return { ...v, error: remoteError || v.error, nas: null, remote: true, mpv: findMpv(settings.data.mpvPath, process.resourcesPath) };
+}
+
+/** Ajustes que ve la ventana: los de este PC (sin secretos) y los del servidor */
+function publicSettings() {
+  const { nasPasswordEnc, remoteTokenEnc, ...rest } = settings.data;
+  return { ...serverSettings, ...rest, nasHasPassword: !!nasPasswordEnc, loggedIn: remote.ready };
+}
+
+/** Lo que necesita mpv: idiomas y reproducción automática del usuario (servidor) y opciones de este PC */
+const playSettings = () => ({ ...serverSettings, ...settings.data });
+
 remote.on('event', (ev, data) => {
   if (ev === 'library:updated') { remoteView = data; remoteError = null; send('library:updated', view()); }
   else if (ev === 'progress:updated') { if (remoteView) remoteView.progress = data; send('progress:updated', data); }
-  else send(ev, data);   // meta:progress, toast, library:new
+  else send(ev, data);   // meta:progress, toast, library:new, requests:updated
 });
-remote.on('unauthorized', () => { remoteError = 'La sesión de CineLocal Server ha caducado: vuelve a conectar en Ajustes'; send('library:updated', view()); });
+// sesión caducada o cerrada en el servidor (o el usuario ha salido del grupo de CineLocal): a la pantalla de inicio de sesión
+remote.on('unauthorized', () => {
+  settings.data = { ...settings.data, remoteTokenEnc: '' };
+  configureRemote();
+  me = null; remoteView = null;
+  emuleService.restart();
+  send('session:expired', 'La sesión ha caducado o ya no tienes acceso. Vuelve a iniciar sesión.');
+});
 remote.on('offline', () => { remoteError = 'No se puede conectar con CineLocal Server'; send('library:updated', view()); });
 remote.on('online', () => { if (remoteError) remoteFetch().then(v => send('library:updated', v)); });
 
@@ -274,215 +254,6 @@ function reportRemoteProgress(id, pos, dur, force) {
   remoteProgress.last.set(id, Date.now());
   remoteProgress.pending = null;
   remote.post('/api/progress', { id, pos, dur }).catch(() => {});
-}
-
-// ---------- escaneo + detección de novedades ----------
-const watcher = new LibraryWatcher();
-watcher.on('change', () => scan());
-
-/** Todas las carpetas de la biblioteca: la principal y las añadidas */
-function libraryRoots(s = settings.data) {
-  const seen = new Set();
-  return [s.libraryPath, ...(s.extraLibraryPaths || [])]
-    .map(p => (p || '').trim()).filter(Boolean)
-    .filter(p => { const k = path.resolve(p).toLowerCase(); return !seen.has(k) && seen.add(k); });
-}
-const isUnder = (p, root) => { const rel = path.relative(root, p); return !!rel && !rel.startsWith('..') && !path.isAbsolute(rel); };
-const rootOf = p => libraryRoots().find(r => isUnder(p, r)) || settings.data.libraryPath;
-
-// carpetas recién añadidas: lo que se encuentre en ellas al escanearlas por primera vez no se anuncia como novedad
-const silentRoots = new Set();
-
-function restartWatcher() {
-  watcher.stop();
-  if (settings.data.autoWatch !== false && !remoteOn()) watcher.start(libraryRoots());
-}
-
-let scanning = null;
-let rescan = false;
-
-function scan() {
-  if (remoteOn()) return remoteFetch('/api/scan', 'POST');   // el servidor escanea su carpeta
-  if (scanning) { rescan = true; return scanning; }
-  scanning = doScan().finally(() => {
-    scanning = null;
-    if (rescan) { rescan = false; scan(); }
-  });
-  return scanning;
-}
-
-async function doScan() {
-  if (settings.data.nasMode) {
-    const wasOpen = !!nas.key;
-    nasStatus = await nas.ensure(nasConfig());
-    if (nasStatus.ok && !wasOpen && nas.key) restartWatcher();   // las carpetas del NAS ya se pueden vigilar
-  } else nasStatus = null;
-  const prevItems = library.data.items || [];
-  const hadLibrary = prevItems.length > 0;
-  const known = new Set();
-  for (const it of prevItems) {
-    if (it.type === 'movie') known.add(it.path);
-    else for (const e of it.episodes) known.add(e.path);
-  }
-  const prevIds = new Set(prevItems.map(i => i.id));
-
-  const roots = libraryRoots();
-  const r = roots.length
-    ? scanLibraries(roots, { singleFileFolderAsMovie: settings.data.singleFileFolderAsMovie })
-    : { ok: false, items: [], failed: [{ root: '', error: 'No hay ninguna carpeta de biblioteca configurada' }] };
-  // Carpeta que no está (disco desconectado): se conserva lo que ya se conocía de ella
-  if (r.ok && r.failed.length) {
-    const ids = new Set(r.items.map(i => i.id));
-    for (const it of prevItems) if (!ids.has(it.id) && r.failed.some(f => isUnder(it.path, f.root))) r.items.push(it);
-    r.items.sort((a, b) => a.title.localeCompare(b.title, 'es', { numeric: true }));
-  }
-  r.error = r.failed.map(f => f.error).join(' · ') || null;
-  if (nasStatus && !nasStatus.ok) r.error = 'NAS: ' + nasStatus.error + (r.error ? ' · ' + r.error : '');
-  else if (r.failed.length) nas.reset();   // quizá se cerró la sesión (NAS reiniciado, VPN caída): reabrirla la próxima vez
-
-  // Los archivos nuevos que aún se están copiando/descargando se dejan para más tarde
-  let pending = false;
-  const items = [];
-  for (const it of r.items) {
-    if (it.type === 'movie') {
-      if (known.has(it.path) || isStable(it.path)) items.push(it); else pending = true;
-    } else {
-      const eps = it.episodes.filter(e => known.has(e.path) || isStable(e.path));
-      if (eps.length < it.episodes.length) pending = true;
-      if (eps.length) items.push({ ...it, episodes: eps, seasons: [...new Set(eps.map(e => e.season))].sort((a, b) => a - b) });
-    }
-  }
-  if (pending) watcher.schedule(8000);
-
-  // Novedades respecto al último escaneo (no en la primera ejecución)
-  const added = [];
-  if (hadLibrary && r.ok) {
-    for (const it of items) {
-      if ([...silentRoots].some(root => isUnder(it.path, root))) continue;
-      if (it.type === 'movie') { if (!known.has(it.path)) added.push({ it, eps: null, newShow: false }); }
-      else {
-        const eps = it.episodes.filter(e => !known.has(e.path));
-        if (eps.length) added.push({ it, eps, newShow: !prevIds.has(it.id) });
-      }
-    }
-  }
-
-  // Si el disco no está, no borrar la biblioteca conocida
-  if (!r.ok && hadLibrary) {
-    library.data = { ...library.data, error: r.error };
-  } else {
-    library.data = { items, scannedAt: Date.now(), error: r.error };
-  }
-  for (const root of silentRoots) if (!r.failed.some(f => f.root === root)) silentRoots.delete(root);
-  send('library:updated', view());
-  if (added.length) announceNew(added);
-  fetchMissingMetadata();
-  return view();
-}
-
-async function announceNew(added) {
-  const api = tmdb();
-  if (api.enabled) {
-    for (const a of added) if (needsFetch(a.it, settings.data.metaLang)) await fetchItem(api, a.it).catch(() => {});
-  }
-  const list = added.map(({ it, eps, newShow }) => {
-    const m = metadata.data[it.id]?.meta;
-    const title = m?.title || it.title;
-    let sub = it.type === 'movie' ? 'Película' : 'Serie nueva';
-    if (it.type === 'series' && !newShow) {
-      sub = eps.length === 1 ? `Nuevo episodio · T${eps[0].season}:E${eps[0].episode}` : `${eps.length} episodios nuevos`;
-    }
-    return { id: it.id, title, sub, poster: m?.poster ? m.poster.replace('/w500/', '/w185/') : null };
-  });
-  send('library:new', list);
-
-  if (Notification.isSupported() && win && !win.isFocused()) {
-    const n = new Notification({
-      title: list.length === 1 ? 'Nuevo en CineLocal' : `${list.length} novedades en CineLocal`,
-      body: list.slice(0, 4).map(x => `${x.title} — ${x.sub}`).join('\n') + (list.length > 4 ? '\n…' : ''),
-      icon: path.join(__dirname, '..', '..', 'build', 'icon.png'),
-      silent: false
-    });
-    n.on('click', () => {
-      if (!win) return;
-      if (win.isMinimized()) win.restore();
-      win.show(); win.focus();
-      send('open-item', list[0].id);
-    });
-    n.show();
-  }
-}
-
-let fetching = false;
-let fetchAgain = false;
-
-const MATCHER_VERSION = 2;
-
-function needsFetch(it, lang) {
-  const m = metadata.data[it.id];
-  if (!m) return true;
-  if (!m.manual && m.matcher !== MATCHER_VERSION) return true;
-  if (m.lang !== lang && !m.failed) return true;
-  // fichas antiguas sin datos de dirección (foto/id): recargar detalles (no se vuelve a buscar)
-  if (it.type === 'movie' && !m.failed && m.meta && !Array.isArray(m.meta.directors)) return true;
-  if (m.failed) return Date.now() - (m.at || 0) > 1000 * 60 * 60 * 24 * 3; // reintenta a los 3 días
-  if (it.type === 'series') {
-    const have = Object.keys(m.meta?.seasons || {}).map(Number);
-    if (it.seasons.some(s => !have.includes(s)) && Date.now() - (m.at || 0) > 1000 * 60 * 60 * 6) return true;
-  }
-  return false;
-}
-
-async function fetchItem(api, it, forcedId) {
-  const lang = settings.data.metaLang;
-  try {
-    const prev = metadata.data[it.id];
-    // Las coincidencias automáticas antiguas se recalculan con el buscador mejorado
-    let id = forcedId || (prev?.manual || prev?.matcher === MATCHER_VERSION ? prev?.tmdbId : null);
-    if (!id) id = await api.findBest(it.type, it.title, it.year);
-    if (!id) {
-      metadata.data[it.id] = { failed: true, at: Date.now(), lang, matcher: MATCHER_VERSION };
-    } else {
-      const meta = it.type === 'movie' ? await api.movie(id) : await api.tv(id, it.seasons);
-      metadata.data[it.id] = { tmdbId: id, meta, at: Date.now(), lang, matcher: MATCHER_VERSION, manual: !!forcedId || !!prev?.manual };
-    }
-  } catch (e) {
-    if (/no válida/.test(e.message)) throw e;
-    console.warn('Metadatos:', it.title, e.message);
-  }
-  metadata.save();
-}
-
-async function fetchMissingMetadata(force = false) {
-  if (remoteOn()) return;   // los metadatos los descarga el servidor
-  const api = tmdb();
-  if (!api.enabled) return;
-  if (fetching) { fetchAgain = true; return; }
-  fetching = true;
-  try {
-    const lang = settings.data.metaLang;
-    const todo = library.data.items.filter(it => force || needsFetch(it, lang));
-    let done = 0;
-    send('meta:progress', { done, total: todo.length });
-    const queue = [...todo];
-    const worker = async () => {
-      while (queue.length) {
-        const it = queue.shift();
-        await fetchItem(api, it);
-        done++;
-        send('meta:progress', { done, total: todo.length, title: it.title });
-        if (done % 6 === 0) send('library:updated', view());
-      }
-    };
-    await Promise.all([worker(), worker(), worker(), worker()]);
-  } catch (e) {
-    send('toast', { type: 'error', text: e.message });
-  } finally {
-    fetching = false;
-    send('meta:progress', null);
-    send('library:updated', view());
-    if (fetchAgain) { fetchAgain = false; fetchMissingMetadata(); }
-  }
 }
 
 // ---------- reproducción ----------
@@ -510,36 +281,6 @@ function playerUiDir() {
   }
 }
 
-function buildPlaylist(item, episodeId, fromStart) {
-  const prog = progress.data;
-  const startOf = p => {
-    const pr = prog[p];
-    if (fromStart || !pr || pr.watched) return 0;
-    return pr.pos > 10 && pr.dur - pr.pos > 30 ? pr.pos : 0;
-  };
-  if (item.type === 'movie') {
-    const t = item.meta?.title || item.title;
-    return [{ path: item.path, title: t, start: startOf(item.path), subs: findExternalSubs(rootOf(item.path), item), discord: mediaInfo(item, null, lbSlugOf(item)),
-      skip: item.meta?.tmdbId ? { type: 'movie', tmdbId: item.meta.tmdbId } : null }];
-  }
-  const eps = item.episodes;
-  let idx = Math.max(0, eps.findIndex(e => e.id === episodeId));
-  const list = settings.data.autoplayNext ? eps.slice(idx) : [eps[idx]];
-  const series = item.meta?.title || item.title;
-  return list.map((e, i) => {
-    const em = item.meta?.seasons?.[e.season]?.episodes?.[e.episode];
-    const code = `T${e.season}:E${e.episode}`;
-    return {
-      path: e.path,
-      // sin el nombre genérico que da TMDB cuando no está traducido ("Episode 3")
-      title: `${series} · ${code}${em?.name && !GENERIC_EPISODE.test(em.name.trim()) ? ' · ' + em.name : ''}`,
-      start: i === 0 ? startOf(e.path) : 0,
-      discord: mediaInfo(item, e),
-      skip: item.meta?.tmdbId ? { type: 'tv', tmdbId: item.meta.tmdbId, season: e.season, episode: e.episode } : null
-    };
-  });
-}
-
 /** Ficha de la película en Letterboxd, si la conocemos (botón de Discord) */
 function lbSlugOf(item) {
   const id = item.meta?.tmdbId;
@@ -549,14 +290,9 @@ function lbSlugOf(item) {
 }
 
 player.on('progress', ({ path: p, pos, dur }) => {
-  // vídeo de CineLocal Server: el progreso se guarda en el servidor (y llega de vuelta por sus eventos)
+  // el progreso se guarda en el servidor (y llega de vuelta por sus eventos)
   const remoteId = (player.state.playlist || []).find(i => i.path === p)?.remoteId;
-  if (remoteId) return reportRemoteProgress(remoteId, pos, dur);
-  const prev = progress.data[p] || {};
-  const watched = dur > 0 && (pos / dur >= 0.92 || dur - pos < 120 && dur > 600);
-  progress.data[p] = { pos: watched ? 0 : pos, dur, watched: watched || (prev.watched && pos < 30), at: Date.now() };
-  progress.save();
-  send('progress:updated', progress.data);
+  if (remoteId) reportRemoteProgress(remoteId, pos, dur);
 });
 // Integrado: la pantalla completa la piden mpv (tecla f, botón de uosc, Esc) o la app (F11).
 // embedded.fs es el estado acordado; los cambios que coinciden con él son ecos y se ignoran.
@@ -634,7 +370,7 @@ player.on('loaded', async ({ path: p, mpvPath, dur }) => {
   const next = list[idx + 1];
   if (next?.skip && introDb.cached(next.skip) === undefined) {
     introPrefetch = setTimeout(() => {
-      if (player.playing && player.state.playlist === list) introDb.get(next.skip, { durationMs: (progress.data[next.path]?.dur || 0) * 1000 }).catch(() => {});
+      if (player.playing && player.state.playlist === list) introDb.get(next.skip, {}).catch(() => {});
     }, 60e3);
   }
 });
@@ -676,7 +412,7 @@ async function playEmbedded({ mpv, playlist, uiDir }) {
   const wasFullscreen = win.isFullScreen();
   embedded = { hwnd, wasFullscreen, fs: settings.data.playerFullscreen !== false || wasFullscreen };
   if (embedded.fs && !wasFullscreen) win.setFullScreen(true);
-  player.play({ mpv, playlist, settings: settings.data, uiDir, wid: hwnd });
+  player.play({ mpv, playlist, settings: playSettings(), uiDir, wid: hwnd });
   win.focus();
   if (await winEmbed.raiseWhenReady(hwnd)) {
     // mpv deshabilita su ventana incrustada justo después de crearla (y así no recibiría el ratón):
@@ -689,37 +425,73 @@ async function playEmbedded({ mpv, playlist, uiDir }) {
   const was = embedded.wasFullscreen;
   embedded = null;
   if (win.isFullScreen() !== was) win.setFullScreen(was);
-  player.play({ mpv, playlist, settings: settings.data, uiDir });
+  player.play({ mpv, playlist, settings: playSettings(), uiDir });
   send('toast', { type: 'error', text: 'No se pudo integrar el reproductor en la ventana; se abre en una ventana aparte.' });
 }
 
-// ---------- eMule ----------
+// ---------- eMule (sólo administradores) ----------
+// Al terminar, el vídeo se copia a la carpeta de la biblioteca en el NAS (\\NAS\Multimedia); el servidor lo ve solo.
+const nas = new NasSession();
 const emuleService = new EmuleService({
-  getSettings: () => settings.data,
-  getItems: () => view().items,
-  state: emuleState
+  getSettings: () => ({ ...settings.data, emuleEnabled: settings.data.emuleEnabled && isAdmin(), libraryPath: settings.data.emuleDest }),
+  // series de la biblioteca con su carpeta vista desde Windows, para dejar cada episodio junto a los demás
+  getItems: () => view().items.map(it => ({ ...it, path: uncPathOf(it.path) })).filter(it => it.path),
+  state: emuleState,
+  // antes de copiar: sesión en el NAS con el usuario de Ajustes (si se ha puesto uno)
+  prepare: async () => {
+    const s = settings.data;
+    if (!s.nasUser) return;
+    const r = await nas.ensure({ host: cleanHost(s.emuleDest), user: s.nasUser, password: decryptSecret(s.nasPasswordEnc), roots: [s.emuleDest] });
+    if (!r.ok) throw new Error('NAS: ' + r.error);
+  }
 });
+/** Ruta del servidor (/media/Series/X) → la misma carpeta desde Windows (\\NAS\Multimedia\Series\X) */
+function uncPathOf(serverPath) {
+  const base = (serverSettings.libraryPath || '/media').replace(/\/+$/, '');
+  const dest = settings.data.emuleDest;
+  if (!dest || !serverPath?.startsWith(base + '/')) return null;
+  return path.join(dest, ...serverPath.slice(base.length + 1).split('/'));
+}
 emuleService.on('update', snap => send('emule:update', snap));
 emuleService.on('completed', ({ name, moved, problem }) => {
-  if (moved) scan();
-  const text = moved ? `Descarga terminada: ${name}\nMovida a la biblioteca`
-    : problem ? `Descarga terminada: ${name}\nNo se pudo mover a la biblioteca: ${problem}` : `Descarga terminada: ${name}`;
+  const text = moved ? `Descarga terminada: ${name}\nCopiada al NAS; aparecerá en la biblioteca en unos segundos`
+    : problem ? `Descarga terminada: ${name}\nNo se pudo copiar al NAS: ${problem}` : `Descarga terminada: ${name}`;
   send('toast', { type: problem ? 'error' : 'ok', text });
-  // Si se ha movido, el aviso de "Nuevo en CineLocal" llega con el escaneo; si no, avisar aquí
+  // Si se ha copiado, el aviso de "Nuevo en CineLocal" llega del servidor; si no, avisar aquí
   if (!moved && Notification.isSupported() && win && !win.isFocused()) {
     new Notification({ title: 'Descarga terminada', body: name, icon: path.join(__dirname, '..', '..', 'build', 'icon.png') }).show();
   }
 });
+/** Como ipcMain.handle, pero sólo para administradores de CineLocal */
+function adminHandle(ch, fn) {
+  ipcMain.handle(ch, (...a) => {
+    if (!isAdmin()) throw new Error('Sólo un administrador de CineLocal puede usar eMule');
+    return fn(...a);
+  });
+}
 
 // ---------- Letterboxd ----------
+// Las búsquedas en TMDB para emparejar las películas pasan por el servidor (la clave de TMDB está allí)
+const serverTmdb = () => ({
+  enabled: remote.ready,
+  language: serverSettings.metaLang || 'es-ES',
+  search: (type, query, year) => remote.post('/api/meta/search', { type, query, year }),
+  // sólo se usa para el póster y el título de una película por su id
+  get: async (p) => {
+    const id = +(p.match(/^\/movie\/(\d+)/)?.[1] || 0);
+    if (!id) return null;
+    const d = await remote.get('/api/title/movie/' + id);
+    return { title: d.title, poster_path: d.poster ? d.poster.replace(/^https:\/\/image\.tmdb\.org\/t\/p\/[^/]+/, '') : null };
+  }
+});
 const letterboxd = new LetterboxdService({
   store: lbStore,
-  tmdb: () => tmdb(),
+  tmdb: serverTmdb,
   // título+año de las películas de la biblioteca -> id de TMDB (evita búsquedas para lo que ya tienes)
   libraryIndex: () => {
     const m = new Map();
-    for (const it of library.data.items) {
-      const meta = it.type === 'movie' && metadata.data[it.id]?.meta;
+    for (const it of view().items) {
+      const meta = it.type === 'movie' && it.meta;
       if (!meta?.tmdbId) continue;
       for (const t of [meta.title, meta.originalTitle, it.title]) if (t) m.set(lbKey(t, meta.year), meta.tmdbId);
     }
@@ -727,19 +499,7 @@ const letterboxd = new LetterboxdService({
   }
 });
 letterboxd.on('status', st => send('letterboxd:status', st));
-letterboxd.on('updated', () => { markLetterboxdWatched(); send('letterboxd:update', letterboxd.snapshot()); });
-
-/** Las películas de la biblioteca que ya has visto en Letterboxd se marcan como vistas (sin tocar las que tienen progreso) */
-function markLetterboxdWatched() {
-  if (!settings.data.lbMarkWatched || remoteOn()) return;
-  const seen = new Set(letterboxd.snapshot().films.filter(f => f.watched && f.tmdbId).map(f => f.tmdbId));
-  let n = 0;
-  for (const it of library.data.items) {
-    const id = it.type === 'movie' && metadata.data[it.id]?.meta?.tmdbId;
-    if (id && seen.has(id) && !progress.data[it.path]) { progress.data[it.path] = { pos: 0, dur: 0, watched: true, at: Date.now(), lb: true }; n++; }
-  }
-  if (n) { progress.save(); send('progress:updated', progress.data); }
-}
+letterboxd.on('updated', () => send('letterboxd:update', letterboxd.snapshot()));
 
 /** Al abrir: sincronización completa si hace más de 3 días; si no, sólo lo último (RSS) */
 function autoSyncLetterboxd() {
@@ -763,143 +523,76 @@ const updater = new Updater({
 });
 
 // ---------- IPC ----------
-ipcMain.handle('settings:get', () => ({ ...publicSettings(), defaults: DEFAULT_SETTINGS }));
+ipcMain.handle('settings:get', () => publicSettings());
 ipcMain.handle('settings:set', async (_e, patch) => {
   const before = { ...settings.data };
   patch = { ...patch };
   if ('nasPassword' in patch) { patch.nasPasswordEnc = encryptSecret(patch.nasPassword); delete patch.nasPassword; }
-  delete patch.nasHasPassword;
-  // el token sólo lo pone remote:login
-  delete patch.remoteTokenEnc; delete patch.remoteConnected;
-  settings.data = { ...settings.data, ...patch };
+  for (const k of ['nasHasPassword', 'remoteTokenEnc', 'loggedIn', 'remoteUrl', 'remoteUser']) delete patch[k];
+  // lo del servidor, al servidor (cada usuario sus preferencias; un administrador, también la biblioteca)
+  const toServer = Object.fromEntries(Object.entries(patch).filter(([k]) => SERVER_KEYS.has(k)));
+  if (Object.keys(toServer).length) serverSettings = await remote.post('/api/settings', toServer);
+  const local = Object.fromEntries(Object.entries(patch).filter(([k]) => !SERVER_KEYS.has(k)));
+  settings.data = { ...settings.data, ...local };
   const s = settings.data;
-  if (before.remoteMode !== s.remoteMode || before.remoteUrl !== s.remoteUrl) {
-    configureRemote(s);
-    remoteView = null;
-    restartWatcher();
-    await scan();
-  }
-  const nasChanged = ['nasMode', 'nasHost', 'nasUser', 'nasPasswordEnc'].some(k => before[k] !== s[k]);
-  // la sesión que acaba de abrir «Conectar» con estos mismos datos se conserva
-  if (nasChanged) { nasStatus = null; if (!s.nasMode || nas.key !== nasKey(nasConfig(s))) await nas.disconnect(); }
-  const oldRoots = libraryRoots(before), newRoots = libraryRoots(s);
-  const rootsChanged = oldRoots.join('|') !== newRoots.join('|');
-  // carpeta nueva: lo que ya tenga no es una novedad
-  for (const r of newRoots) if (!oldRoots.includes(r)) silentRoots.add(r);
-  if (rootsChanged || before.autoWatch !== s.autoWatch) restartWatcher();
-  if (rootsChanged || nasChanged || before.singleFileFolderAsMovie !== s.singleFileFolderAsMovie) await scan();
-  else if (before.tmdbKey !== s.tmdbKey || before.metaLang !== s.metaLang) fetchMissingMetadata();
+  if (['nasUser', 'nasPasswordEnc', 'emuleDest'].some(k => before[k] !== s[k])) await nas.disconnect();
   if (['emuleEnabled', 'emulePort', 'emulePassword'].some(k => before[k] !== s[k])) emuleService.restart();
   if (before.lbUser !== s.lbUser) {
     if (lbStore.data.user && lbStore.data.user !== s.lbUser) letterboxd.reset();
     if (s.lbUser) letterboxd.sync(s.lbUser, { full: true }).catch(() => {});
   }
-  if (!before.lbMarkWatched && s.lbMarkWatched) markLetterboxdWatched();
   if (['discordEnabled', 'discordClientId', 'discordDiscreet'].some(k => before[k] !== s[k])) discord.configure(discordConfig(s));
-  return publicSettings(s);
+  return publicSettings();
 });
-// Prueba con lo escrito en Ajustes (contraseña vacía = la guardada) y dice si se ve la biblioteca
-ipcMain.handle('nas:test', async (_e, { host, user, password }) => {
-  const s = { ...settings.data, nasHost: host, nasUser: user };
-  const cfg = nasConfig(s, password || undefined);
+// Carpeta del NAS para eMule: inicia sesión con el usuario escrito (contraseña vacía = la guardada) y comprueba que se ve
+adminHandle('nas:test', async (_e, { dest, user, password }) => {
+  const host = cleanHost(dest);
+  if (!/^\\\\[^\\]+\\[^\\]+/.test(dest || '')) return { ok: false, error: 'Escribe la carpeta como \\\\NAS\\Multimedia' };
   await nas.disconnect();
-  const r = await nas.connect(cleanHost(host), cfg);
-  if (!r.ok) return r;
-  const h = cleanHost(host).toLowerCase();
-  const onNas = cfg.roots.filter(p => p.toLowerCase().startsWith(`\\\\${h}\\`));
-  const missing = onNas.filter(p => !fs.existsSync(p));
-  return { ...r, roots: onNas.length, missing };
+  if (user) {
+    const r = await nas.connect(host, { host, user, password: password || decryptSecret(settings.data.nasPasswordEnc), roots: [dest] });
+    if (!r.ok) return r;
+  }
+  if (!fs.existsSync(dest)) return { ok: false, error: `No se puede abrir ${dest}. ¿Estás en casa o con la VPN conectada?` };
+  return { ok: true };
 });
-ipcMain.handle('tmdb:test', async (_e, key) => {
-  try { await new TMDB(key, 'es-ES', (u, o) => net.fetch(u, o)).test(); return { ok: true }; }
-  catch (e) { return { ok: false, error: e.message }; }
-});
+ipcMain.handle('tmdb:test', async (_e, key) => remote.post('/api/tmdb/test', { key }));
 
-ipcMain.handle('library:get', async () => (remoteOn() && !remoteView ? remoteFetch() : view()));
-ipcMain.handle('library:scan', () => scan());
-ipcMain.handle('library:refreshMeta', () => {
-  if (remoteOn()) return remote.post('/api/meta/refresh');
-  fetchMissingMetadata(true); return true;
-});
-
-// Iniciar sesión en CineLocal Server: se guarda el token (cifrado), nunca la contraseña
+// ---------- sesión en CineLocal Server ----------
+ipcMain.handle('session:get', () => ({ loggedIn: remote.ready, url: settings.data.remoteUrl, user: settings.data.remoteUser }));
+// Iniciar sesión: se guarda el token (cifrado), nunca la contraseña
 ipcMain.handle('remote:login', async (_e, { url, user, password, otp }) => {
   const r = await remote.login(url, { user: String(user || '').trim(), password, otp });
   if (!r.ok) return { ok: false, error: r.error, otp: !!r.otp };
-  settings.data = { ...settings.data, remoteMode: true, remoteUrl: normUrl(url), remoteUser: r.user, remoteTokenEnc: encryptSecret(r.token) };
+  settings.data = { ...settings.data, remoteUrl: normUrl(url), remoteUser: r.user, remoteTokenEnc: encryptSecret(r.token) };
   configureRemote();
   remoteView = null;
-  restartWatcher();
-  const v = await remoteFetch();
-  send('library:updated', v);
+  await startSession();
   return { ok: true, user: r.user, admin: r.admin, settings: publicSettings() };
 });
 ipcMain.handle('remote:logout', async () => {
   if (remote.ready) await remote.post('/api/logout').catch(() => {});
   settings.data = { ...settings.data, remoteTokenEnc: '' };
   configureRemote();
-  remoteView = null;
-  restartWatcher();
-  await scan();
+  await startSession();
   return publicSettings();
 });
+ipcMain.handle('remote:me', () => me);
 
-const people = store('people.json', {});
-ipcMain.handle('meta:person', async (_e, id) => {
-  if (remoteOn()) return remote.get('/api/person/' + encodeURIComponent(id)).catch(() => null);
-  const c = people.data[id];
-  // las fichas guardadas antes de añadir la popularidad se vuelven a pedir
-  if (c && Date.now() - c.at < 1000 * 60 * 60 * 24 * 30 && c.lang === settings.data.metaLang && Array.isArray(c.data?.films) && c.data.films.every(f => 'popularity' in f)) return c.data;
-  const api = tmdb();
-  if (!api.enabled) return null;
-  try {
-    const data = await api.person(id);
-    people.data[id] = { data, at: Date.now(), lang: settings.data.metaLang };
-    people.save();
-    return data;
-  } catch { return c?.data || null; }
-});
-let providerListCache = null;
-ipcMain.handle('meta:providerList', async () => {
-  if (remoteOn()) return remote.get('/api/providers');
-  const k = (settings.data.region || 'ES') + ':' + settings.data.metaLang;
-  if (providerListCache?.k === k && Date.now() - providerListCache.at < 1000 * 60 * 60 * 24) return providerListCache.data;
-  const api = tmdb();
-  if (!api.enabled) throw new Error('Configura tu API key de TMDB en Ajustes');
-  const data = await api.providerList();
-  providerListCache = { k, data, at: Date.now() };
-  return data;
-});
-const providersCache = new Map();
-ipcMain.handle('meta:providers', async (_e, movieId) => {
-  if (remoteOn()) return remote.get('/api/providers/' + encodeURIComponent(movieId));
-  const k = movieId + ':' + (settings.data.region || 'ES');
-  const c = providersCache.get(k);
-  if (c && Date.now() - c.at < 1000 * 60 * 60 * 12) return c.data;
-  const api = tmdb();
-  if (!api.enabled) throw new Error('Configura tu API key de TMDB en Ajustes');
-  const data = await api.watchProviders(movieId);
-  providersCache.set(k, { data, at: Date.now() });
-  return data;
-});
-ipcMain.handle('meta:search', async (_e, { type, query, year }) => {
-  if (remoteOn()) return remote.post('/api/meta/search', { type, query, year });
-  const api = tmdb();
-  if (!api.enabled) throw new Error('Configura tu API key de TMDB en Ajustes');
-  return api.search(type, query, year);
-});
+// ---------- biblioteca (del servidor) ----------
+ipcMain.handle('library:get', async () => (remote.ready && !remoteView ? remoteFetch() : view()));
+ipcMain.handle('library:scan', () => (isAdmin() ? remoteFetch('/api/scan', 'POST') : remoteFetch()));
+ipcMain.handle('library:refreshMeta', () => remote.post('/api/meta/refresh'));
+ipcMain.handle('meta:person', (_e, id) => remote.get('/api/person/' + encodeURIComponent(id)).catch(() => null));
+ipcMain.handle('meta:providerList', () => remote.get('/api/providers'));
+ipcMain.handle('meta:providers', (_e, movieId) => remote.get('/api/providers/' + encodeURIComponent(movieId)));
+ipcMain.handle('meta:search', (_e, { type, query, year }) => remote.post('/api/meta/search', { type, query, year }));
+// ficha de TMDB de un título que no está en la biblioteca (para entrar igualmente a verla)
+ipcMain.handle('meta:title', (_e, { type, id }) => remote.get(`/api/title/${type === 'series' ? 'series' : 'movie'}/${+id}`));
 ipcMain.handle('meta:identify', async (_e, { itemId, tmdbId }) => {
-  if (remoteOn()) {
-    const it = await remote.post('/api/meta/identify', { itemId, tmdbId });
-    send('library:updated', await remoteFetch());
-    return it;
-  }
-  const it = library.data.items.find(i => i.id === itemId);
-  if (!it) throw new Error('Elemento no encontrado');
-  await fetchItem(tmdb(), it, tmdbId);
-  const v = view();
-  send('library:updated', v);
-  return v.items.find(i => i.id === itemId);
+  const it = await remote.post('/api/meta/identify', { itemId, tmdbId });
+  send('library:updated', await remoteFetch());
+  return it;
 });
 
 ipcMain.handle('play', async (_e, { itemId, episodeId, fromStart }) => {
@@ -908,20 +601,13 @@ ipcMain.handle('play', async (_e, { itemId, episodeId, fromStart }) => {
   const mpv = findMpv(settings.data.mpvPath, process.resourcesPath);
   if (!mpv) return { ok: false, error: 'mpv-missing' };
   let playlist;
-  if (remoteOn()) {
-    try { playlist = await remotePlaylist(it, { itemId, episodeId, fromStart }); }
-    catch (e) { return { ok: false, error: e.message }; }
-  } else {
-    playlist = buildPlaylist(it, episodeId, fromStart);
-    if (!playlist.length || !fs.existsSync(playlist[0].path)) return { ok: false, error: 'No se encuentra el archivo de vídeo. ¿Está conectado el disco?' };
-    userState.data.lastPlayed[itemId] = { episodeId: episodeId || null, at: Date.now() };
-    userState.save();
-  }
+  try { playlist = await remotePlaylist(it, { itemId, episodeId, fromStart }); }
+  catch (e) { return { ok: false, error: e.message }; }
   const uiDir = playerUiDir();
   if (embeddedMode()) {
     playEmbedded({ mpv, playlist, uiDir });
   } else {
-    player.play({ mpv, playlist, settings: settings.data, uiDir });
+    player.play({ mpv, playlist, settings: playSettings(), uiDir });
     if (settings.data.minimizeOnPlay && win) setTimeout(() => win.minimize(), 1200);
   }
   return { ok: true };
@@ -934,6 +620,7 @@ ipcMain.handle('play', async (_e, { itemId, episodeId, fromStart }) => {
 async function remotePlaylist(it, q) {
   const r = await remote.post('/api/play', { ...q, client: 'app' });
   if (!r?.playlist?.length) throw new Error('No se encuentra el vídeo en el servidor');
+  if (r.prefs) serverSettings = { ...serverSettings, ...r.prefs };
   return r.playlist.map(e => {
     const ep = e.episodeId ? it.episodes.find(x => x.id === e.episodeId) : null;
     return {
@@ -948,33 +635,29 @@ async function remotePlaylist(it, q) {
   });
 }
 
-ipcMain.handle('progress:mark', (_e, { paths, watched }) => {
-  if (remoteOn()) return remote.post('/api/progress/mark', { paths, watched }).then(p => { if (remoteView) remoteView.progress = p; return p; });
-  for (const p of paths) {
-    if (watched) progress.data[p] = { pos: 0, dur: progress.data[p]?.dur || 0, watched: true, at: Date.now() };
-    else delete progress.data[p];
-  }
-  progress.save();
-  return progress.data;
+ipcMain.handle('progress:mark', async (_e, { paths, watched }) => {
+  const p = await remote.post('/api/progress/mark', { paths, watched });
+  if (remoteView) remoteView.progress = p;
+  return p;
 });
-
-ipcMain.handle('favorites:toggle', (_e, id) => {
-  if (remoteOn()) return remote.post('/api/favorites/toggle', { id }).then(f => { if (remoteView) remoteView.favorites = f; return f; });
-  const f = new Set(userState.data.favorites);
-  f.has(id) ? f.delete(id) : f.add(id);
-  userState.data.favorites = [...f];
-  userState.save();
-  return userState.data.favorites;
+ipcMain.handle('requests:get', () => remote.get('/api/requests'));
+ipcMain.handle('requests:op', (_e, q) => remote.post('/api/requests', q));
+// Listas propias (además de Mi lista): crear, renombrar, borrar y añadir o quitar títulos
+ipcMain.handle('lists:op', async (_e, q) => {
+  const lists = await remote.post('/api/lists', q);
+  if (remoteView) remoteView.lists = lists;
+  return lists;
+});
+ipcMain.handle('favorites:toggle', async (_e, id) => {
+  const f = await remote.post('/api/favorites/toggle', { id });
+  if (remoteView) remoteView.favorites = f;
+  return f;
 });
 
 ipcMain.handle('window:toggleFullscreen', () => { win.setFullScreen(!win.isFullScreen()); return win.isFullScreen(); });
 ipcMain.handle('window:setFullscreen', (_e, v) => { win.setFullScreen(!!v); return win.isFullScreen(); });
 ipcMain.handle('window:isFullscreen', () => win.isFullScreen());
 
-ipcMain.handle('dialog:pickFolder', async () => {
-  const r = await dialog.showOpenDialog(win, { properties: ['openDirectory'], defaultPath: settings.data.libraryPath });
-  return r.canceled ? null : r.filePaths[0];
-});
 ipcMain.handle('dialog:pickMpv', async () => {
   const r = await dialog.showOpenDialog(win, {
     properties: ['openFile'],
@@ -1010,30 +693,30 @@ ipcMain.handle('letterboxd:import', async () => {
 ipcMain.handle('letterboxd:clear', () => { letterboxd.reset(); return letterboxd.snapshot(); });
 
 ipcMain.handle('emule:get', () => emuleService.snapshot);
-ipcMain.handle('emule:info', async () => ({ ...(await emule.inspect(settings.data.emulePath)), templatePath: emuleTemplatePath() }));
-ipcMain.handle('emule:test', async (_e, { port, password }) => {
+adminHandle('emule:info', async () => ({ ...(await emule.inspect(settings.data.emulePath)), templatePath: emuleTemplatePath() }));
+adminHandle('emule:test', async (_e, { port, password }) => {
   try { await new emule.EmuleClient({ port, password }).transfers(); return { ok: true }; }
   catch (e) { return { ok: false, code: e.code, error: e.message }; }
 });
-ipcMain.handle('emule:launch', async () => {
+adminHandle('emule:launch', async () => {
   const inst = await emule.findInstall(settings.data.emulePath);
   if (!inst) return { ok: false, error: 'No se encuentra emule.exe. Selecciónalo en Ajustes.' };
   if (!(await emule.isRunning())) emule.startEmule(inst.exe);
   setTimeout(() => emuleService.tick(), 4000);
   return { ok: true };
 });
-ipcMain.handle('emule:refresh', () => emuleService.refresh().catch(() => emuleService.snapshot));
-ipcMain.handle('emule:connect', () => emuleService.run(c => c.connect()).then(() => true));
-ipcMain.handle('emule:servers', () => emuleService.query(c => c.servers()));
-ipcMain.handle('emule:connectServer', (_e, a = {}) => emuleService.run(c => c.connectServer(a.ip, a.port)));
-ipcMain.handle('emule:disconnect', () => emuleService.run(c => c.disconnectServer()));
-ipcMain.handle('emule:kad', (_e, a = {}) => emuleService.run(c => c.kad(a.op, a.ip, a.port)));
-ipcMain.handle('emule:updateServerMet', (_e, url) => emuleService.run(c => c.updateServerMet(url)));
-ipcMain.handle('emule:search', (_e, q) => emuleService.run(c => c.search({ method: settings.data.emuleSearchMethod, ...q })));
-ipcMain.handle('emule:results', () => emuleService.run(c => c.searchResults()));
-ipcMain.handle('emule:download', (_e, hash) => emuleService.run(c => c.download(hash)).then(() => true));
-ipcMain.handle('emule:addLink', (_e, link) => emuleService.run(c => c.addLink(link)).then(() => true));
-ipcMain.handle('emule:op', (_e, { hash, op }) => emuleService.run(c => c.fileOp(hash, op)).then(() => true));
+adminHandle('emule:refresh', () => emuleService.refresh().catch(() => emuleService.snapshot));
+adminHandle('emule:connect', () => emuleService.run(c => c.connect()).then(() => true));
+adminHandle('emule:servers', () => emuleService.query(c => c.servers()));
+adminHandle('emule:connectServer', (_e, a = {}) => emuleService.run(c => c.connectServer(a.ip, a.port)));
+adminHandle('emule:disconnect', () => emuleService.run(c => c.disconnectServer()));
+adminHandle('emule:kad', (_e, a = {}) => emuleService.run(c => c.kad(a.op, a.ip, a.port)));
+adminHandle('emule:updateServerMet', (_e, url) => emuleService.run(c => c.updateServerMet(url)));
+adminHandle('emule:search', (_e, q) => emuleService.run(c => c.search({ method: settings.data.emuleSearchMethod, ...q })));
+adminHandle('emule:results', () => emuleService.run(c => c.searchResults()));
+adminHandle('emule:download', (_e, hash) => emuleService.run(c => c.download(hash)).then(() => true));
+adminHandle('emule:addLink', (_e, link) => emuleService.run(c => c.addLink(link)).then(() => true));
+adminHandle('emule:op', (_e, { hash, op }) => emuleService.run(c => c.fileOp(hash, op)).then(() => true));
 ipcMain.handle('dialog:pickEmule', async () => {
   const r = await dialog.showOpenDialog(win, { properties: ['openFile'], filters: [{ name: 'eMule', extensions: ['exe'] }] });
   return r.canceled ? null : r.filePaths[0];

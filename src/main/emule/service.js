@@ -12,9 +12,11 @@ class EmuleService extends EventEmitter {
   /**
    * getSettings(): ajustes actuales · getItems(): elementos de la biblioteca
    * state: almacén persistente { tracked: {hash: true} } con las descargas vistas sin terminar
+   * prepare(): antes de mover un vídeo a la biblioteca (p. ej. iniciar sesión en el NAS); si falla, no se mueve
    */
-  constructor({ getSettings, getItems, state }) {
+  constructor({ getSettings, getItems, state, prepare = async () => {} }) {
     super();
+    this.prepare = prepare;
     this.getSettings = getSettings;
     this.getItems = getItems;
     this.state = state;
@@ -114,6 +116,7 @@ class EmuleService extends EventEmitter {
     if (s.emuleMoveToLibrary !== false && s.libraryPath) {
       try {
         if (!this.incoming) this.incoming = (await inspect(s.emulePath)).incoming || [];
+        await this.prepare();
         const r = await organize({ name: d.name, incomingDirs: this.incoming, root: s.libraryPath, items: this.getItems() });
         moved = r.dest || null;
         if (r.skipped && isVideo(d.name)) problem = r.skipped;

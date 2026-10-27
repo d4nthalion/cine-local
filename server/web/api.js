@@ -26,7 +26,7 @@
   // eventos en vivo del servidor (biblioteca, metadatos, progreso desde otro dispositivo…)
   function connect() {
     const es = new EventSource('/api/events');
-    for (const ev of ['library:updated', 'meta:progress', 'progress:updated', 'toast', 'library:new']) {
+    for (const ev of ['library:updated', 'meta:progress', 'progress:updated', 'toast', 'library:new', 'requests:updated']) {
       es.addEventListener(ev, e => emit(ev, JSON.parse(e.data)));
     }
     es.onerror = () => { es.close(); setTimeout(connect, 5000); };
@@ -55,6 +55,7 @@
     getProviders: id => get('/api/providers/' + encodeURIComponent(id)),
     getProviderList: () => get('/api/providers'),
     searchMeta: q => post('/api/meta/search', q),
+    getTitle: q => get('/api/title/' + (q.type === 'series' ? 'series' : 'movie') + '/' + encodeURIComponent(q.id)),
     identify: q => post('/api/meta/identify', q),
     // en la web se reproduce en el navegador (web/player.js) en vez de con mpv
     play: async q => {
@@ -64,6 +65,8 @@
     },
     markProgress: q => post('/api/progress/mark', q),
     toggleFavorite: id => post('/api/favorites/toggle', { id }),
+    lists: { op: q => post('/api/lists', q) },
+    requests: { get: () => get('/api/requests'), op: q => post('/api/requests', q) },
     toggleFullscreen: () => setFs(!document.fullscreenElement),
     setFullscreen: v => setFs(!!v),
     isFullscreen: async () => !!document.fullscreenElement,
@@ -95,6 +98,7 @@
     onFullscreen: on('window:fullscreen'),
     onToast: on('toast'),
     onNewItems: on('library:new'),
+    onRequests: on('requests:updated'),
     onOpenItem: on('open-item')
   };
 })();

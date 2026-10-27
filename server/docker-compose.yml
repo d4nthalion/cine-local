@@ -21,11 +21,18 @@ services:
       DSM_URL: "http://127.0.0.1:5000"
       CINELOCAL_ADMINS: "${ADMINS}"
       CINELOCAL_USERS: "${USERS:-}"
+      # grupos de DSM que dan acceso: administradores (corregir fichas, peticiones, ajustes) y usuarios
+      # la copia de /etc/group que deja cada minuto la tarea programada de DSM (DSM sustituye el archivo al cambiar
+      # un grupo, y un archivo montado suelto se quedaría con la versión vieja); si aún no existe, el montado
+      CINELOCAL_GROUP_FILE: "/data/group,/host/group"
+      CINELOCAL_ADMIN_GROUP: "${ADMIN_GROUP:-cinelocal-admin}"
+      CINELOCAL_USER_GROUP: "${USER_GROUP:-cinelocal-user}"
       CINELOCAL_HWACCEL: "vaapi"
       TRUST_PROXY: "1"
     volumes:
       - "${MEDIA_DIR}:/media:ro"      # la carpeta de vídeo, sólo lectura
       - ./data:/data                  # ajustes, metadatos, sesiones y progreso
+      - /etc/group:/host/group:ro     # grupos del NAS: quién es administrador o usuario de CineLocal
     # contenedor sin privilegios: sistema de archivos de sólo lectura, sin capacidades extra
     read_only: true
     tmpfs:

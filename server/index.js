@@ -5,6 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const { Library } = require('./library');
 const { Auth } = require('./auth');
+const { Requests } = require('./requests');
 const media = require('./media');
 const { store } = require('./store');
 const { IntroDB, flatten } = require('../src/main/introdb');
@@ -26,10 +27,16 @@ const auth = new Auth({
   store: store(DATA, 'sessions.json', { sessions: {} }),
   allowed: list(env.CINELOCAL_USERS),
   admins: list(env.CINELOCAL_ADMINS),
+  // grupos de DSM: «cinelocal-admin» y «cinelocal-user» deciden quién entra y qué puede hacer
+  groupFile: env.CINELOCAL_GROUP_FILE || null,
+  adminGroup: env.CINELOCAL_ADMIN_GROUP || 'cinelocal-admin',
+  userGroup: env.CINELOCAL_USER_GROUP || 'cinelocal-user',
   // sólo para desarrollo: sin DSM, todo el mundo entra como este usuario
-  devUser: env.CINELOCAL_AUTH === 'none' ? (env.CINELOCAL_DEV_USER || 'dev') : null
+  devUser: env.CINELOCAL_AUTH === 'none' ? (env.CINELOCAL_DEV_USER || 'dev') : null,
+  devRole: env.CINELOCAL_DEV_ROLE === 'user' ? 'user' : 'admin'
 });
 if (auth.devUser) console.warn(`¡Atención! CINELOCAL_AUTH=none: no se pide contraseña (usuario «${auth.devUser}»). Sólo para desarrollo.`);
+const requests = new Requests(DATA);
 const introDb = new IntroDB({ fetch: globalThis.fetch, store: store(DATA, 'introdb.json', { entries: {} }), userAgent: `CineLocal-Server/${VERSION}` });
 
 // ---------- utilidades HTTP ----------
@@ -114,7 +121,26 @@ let libTimer = null;
 library.on('library', () => {
   // varias actualizaciones seguidas (metadatos) se juntan en una
   clearTimeout(libTimer);
-  libTimer = setTimeout(() => broadcast('library:updated', user => library.view(user)), 250);
+  libTimer = setTimeout(() => {
+    broadcast('library:updated', user => library.view(user));
+    requests.matchLibrary(library.withMeta());
+  }, 250);
+});
+
+// peticiones: cada uno recibe las suyas (los administradores, todas) y los avisos que le tocan
+const requestsView = user => ({ items: requests.list(user, auth.isAdmin(user)), pending: auth.isAdmin(user) ? requests.pendingCount() : 0 });
+const sendTo = (pick, event, dataFor) => {
+  for (const c of clients) if (pick(c.user)) c.res.write(`event: ${event}\ndata: ${JSON.stringify(dataFor(c.user))}\n\n`);
+};
+requests.on('changed', () => broadcast('requests:updated', requestsView));
+requests.on('created', ({ request, by }) => sendTo(
+  u => auth.isAdmin(u) && u.toLowerCase() !== by.toLowerCase(), 'toast',
+  () => ({ type: 'request', text: `${by} ha pedido «${request.title}»${request.year ? ` (${request.year})` : ''}`, action: 'requests' })
+));
+requests.on('resolved', r => {
+  const names = new Set(r.users.map(u => u.name));
+  const text = r.status === 'done' ? `Ya está en la biblioteca: «${r.title}», que pediste` : `Tu petición de «${r.title}» se ha rechazado${r.reply ? ': ' + r.reply : ''}`;
+  sendTo(u => names.has(u.toLowerCase()), 'toast', () => ({ type: r.status === 'done' ? 'ok' : 'info', text }));
 });
 library.on('meta:progress', p => broadcast('meta:progress', p));
 library.on('toast', t => broadcast('toast', t));
@@ -130,7 +156,7 @@ route('POST', '/api/login', async (req, res) => {
   const r = await auth.login({ user: b.user, password: b.password, otp: b.otp }, clientIp(req));
   if (!r.ok) return json(res, r.status || (r.otp ? 401 : 403), { ok: false, error: r.error, otp: !!r.otp });
   // las apps (escritorio, Android) guardan el token y lo envían como «Authorization: Bearer»; el navegador, en la cookie
-  if (b.client === 'app') return json(res, 200, { ok: true, user: r.user, token: r.token, admin: auth.isAdmin(r.user) });
+  if (b.client === 'app') return json(res, 200, { ok: true, user: r.user, token: r.token, admin: auth.isAdmin(r.user), role: auth.role(r.user) });
   res.setHeader('Set-Cookie', sessionCookie(req, r.token, 30 * 86400));
   json(res, 200, { ok: true, user: r.user });
 }, { public: true });
@@ -141,15 +167,20 @@ route('POST', '/api/logout', (req, res) => {
   json(res, 200, { ok: true });
 }, { public: true });
 
-route('GET', '/api/me', (req, res, { user }) => json(res, 200, { user, admin: auth.isAdmin(user), version: VERSION, hwaccel: media.HWACCEL }));
+route('GET', '/api/me', (req, res, { user }) => json(res, 200, {
+  user, role: auth.role(user), admin: auth.isAdmin(user), version: VERSION, hwaccel: media.HWACCEL,
+  groups: auth.groupsActive() ? { admin: auth.adminGroup, user: auth.userGroup } : null
+}));
 
-route('GET', '/api/settings', (req, res, { user }) => json(res, 200, library.publicSettings(auth.isAdmin(user))));
+route('GET', '/api/settings', (req, res, { user }) => json(res, 200, library.publicSettings(auth.isAdmin(user), user)));
+// cada usuario cambia sus preferencias (idiomas, plataformas…); la biblioteca y TMDB, sólo un administrador
 route('POST', '/api/settings', async (req, res, { user }) => {
   const patch = await readBody(req);
   if (patch.tmdbKey === '••••••••') delete patch.tmdbKey;
-  await library.setSettings(patch);
-  json(res, 200, library.publicSettings(auth.isAdmin(user)));
-}, { admin: true });
+  library.setPrefs(user, patch);
+  if (auth.isAdmin(user)) await library.setSettings(patch);
+  json(res, 200, library.publicSettings(auth.isAdmin(user), user));
+});
 route('POST', '/api/tmdb/test', async (req, res) => {
   const { key } = await readBody(req);
   try { await new (require('../src/main/metadata').TMDB)(key, 'es-ES').test(); json(res, 200, { ok: true }); }
@@ -178,11 +209,16 @@ function withLinks(v, user) {
     ? { ...it, ...link(it.id, it.path) }
     : { ...it, episodes: it.episodes.map(e => ({ ...e, ...link(e.id, e.path) })) });
 }
-route('POST', '/api/scan', async (req, res, { user }) => { await library.scan(); json(res, 200, library.view(user)); });
+route('POST', '/api/scan', async (req, res, { user }) => { await library.scan(); json(res, 200, library.view(user)); }, { admin: true });
 route('POST', '/api/meta/refresh', (req, res) => { library.fetchMissingMetadata(true); json(res, 200, true); }, { admin: true });
 route('GET', '/api/person/:id', async (req, res, { p }) => json(res, 200, await library.person(+p.id)));
 route('GET', '/api/providers', async (req, res) => json(res, 200, await library.providerList()));
 route('GET', '/api/providers/:id', async (req, res, { p }) => json(res, 200, await library.providers(+p.id)));
+route('GET', '/api/title/:type/:id', async (req, res, { p }) => {
+  if (!['movie', 'series'].includes(p.type) || !/^\d{1,9}$/.test(p.id)) throw httpError(400, 'Título no válido');
+  try { json(res, 200, await library.title(p.type, +p.id)); }
+  catch (e) { throw e.status ? e : httpError(/404|not be found/i.test(e.message) ? 404 : 502, e.message); }
+});
 route('POST', '/api/meta/search', async (req, res) => json(res, 200, await library.search(await readBody(req))));
 route('POST', '/api/meta/identify', async (req, res, { user }) => json(res, 200, await library.identify(await readBody(req), user)), { admin: true });
 
@@ -192,7 +228,7 @@ route('POST', '/api/play', async (req, res, { user }) => {
   if (!playlist?.length) return json(res, 404, { ok: false, error: 'Elemento no encontrado' });
   if (!fs.existsSync(library.file(playlist[0].id)?.path || '')) return json(res, 404, { ok: false, error: 'No se encuentra el archivo de vídeo en el servidor' });
   library.setLastPlayed(user, q.itemId, q.episodeId);
-  const s = library.settings.data;
+  const s = library.publicSettings(false, user);
   // las apps reproducen con mpv / LibVLC: enlaces firmados al archivo tal cual y a los subtítulos externos
   if (q.client === 'app') {
     for (const e of playlist) {
@@ -216,6 +252,22 @@ route('POST', '/api/progress/mark', async (req, res, { user }) => {
   json(res, 200, prog);
 });
 route('POST', '/api/favorites/toggle', async (req, res, { user }) => json(res, 200, library.toggleFavorite(user, (await readBody(req)).id)));
+route('POST', '/api/lists', async (req, res, { user }) => {
+  try { json(res, 200, library.listOp(user, await readBody(req))); }
+  catch (e) { throw e.status ? e : httpError(400, e.message); }
+});
+route('GET', '/api/requests', (req, res, { user }) => json(res, 200, requestsView(user)));
+route('POST', '/api/requests', async (req, res, { user }) => {
+  const b = await readBody(req, 16384);
+  const admin = auth.isAdmin(user);
+  if (b.op === 'create') requests.create(user, b.entry);
+  else if (b.op === 'cancel') requests.cancel(user, String(b.id));
+  else if (b.op === 'resolve' && admin) requests.resolve(user, String(b.id), b);
+  else if (b.op === 'remove' && admin) requests.remove(String(b.id));
+  else throw httpError(admin ? 400 : 403, admin ? 'Operación no válida' : 'Sólo un administrador puede hacer esto');
+  json(res, 200, requestsView(user));
+});
+
 route('GET', '/api/segments', async (req, res, { q }) => {
   const skip = { type: q.get('type'), tmdbId: +q.get('tmdbId'), ...(q.get('season') && { season: +q.get('season'), episode: +q.get('episode') }) };
   const dur = +q.get('dur') || 0;
@@ -304,7 +356,7 @@ server.listen(PORT, HOST, () => {
 });
 
 for (const sig of ['SIGTERM', 'SIGINT']) process.on(sig, () => {
-  for (const s of [library.settings, library.library, library.metadata, library.people, auth.store]) s.flushSync();
+  for (const s of [library.settings, library.library, library.metadata, library.people, auth.store, requests.store]) s.flushSync();
   for (const u of library.users.values()) u.flushSync();
   process.exit(0);
 });

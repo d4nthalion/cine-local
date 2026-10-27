@@ -1,6 +1,7 @@
 // Inicio de sesión con los usuarios de DSM (como Video Station) y sesiones propias de CineLocal.
 // La contraseña sólo se usa para preguntar a DSM si es válida; no se guarda en ningún sitio.
 const crypto = require('crypto');
+const fs = require('fs');
 
 // Errores de SYNO.API.Auth
 const DSM_ERRORS = {
@@ -31,14 +32,21 @@ class Auth {
   /**
    * dsmUrl: http://127.0.0.1:5000 dentro del NAS
    * store: { data, save() } con las sesiones abiertas
-   * allowed: lista de usuarios permitidos (vacía = todos los de DSM)
+   * groupFile: /etc/group del NAS (montado de sólo lectura). Con los grupos de DSM [adminGroup] y [userGroup] creados,
+   *   el grupo decide quién entra y qué puede hacer; sin ellos, se usan allowed / admins como antes
+   * allowed: lista de usuarios permitidos (vacía = todos los de DSM) · admins: administradores
    */
-  constructor({ dsmUrl, store, allowed = [], admins = [], devUser = null }) {
+  constructor({ dsmUrl, store, allowed = [], admins = [], devUser = null, devRole = 'admin', groupFile = null, adminGroup = 'cinelocal-admin', userGroup = 'cinelocal-user' }) {
     this.dsmUrl = dsmUrl.replace(/\/+$/, '');
     this.store = store;
     this.allowed = allowed.map(u => u.toLowerCase());
     this.admins = admins.map(u => u.toLowerCase());
     this.devUser = devUser;
+    this.devRole = devRole;
+    this.groupFile = groupFile;
+    this.adminGroup = adminGroup.toLowerCase();
+    this.userGroup = userGroup.toLowerCase();
+    this.groupCache = null;   // { at, groups: Map(nombre → Set(usuarios)) }
     this.fails = [];   // { ip, at }
     if (!this.store.data.sessions) this.store.data.sessions = {};
     this.prune();
@@ -54,7 +62,7 @@ class Auth {
     if (this.fails.filter(f => f.ip === ip).length >= FAILS_PER_IP || this.fails.length >= FAILS_GLOBAL) {
       return { ok: false, error: 'Demasiados intentos fallidos. Espera unos minutos.', status: 429 };
     }
-    if (this.allowed.length && !this.allowed.includes(user.toLowerCase())) {
+    if (!this.groupsActive() && this.allowed.length && !this.allowed.includes(user.toLowerCase())) {
       this.fails.push({ ip, at: now });
       return { ok: false, error: DSM_ERRORS[400] };
     }
@@ -70,6 +78,9 @@ class Auth {
     }
     // sólo queríamos saber si la contraseña es buena: se cierra la sesión de DSM enseguida
     this.dsmLogout(r.data.sid).catch(() => {});
+    // la contraseña es buena, pero sin grupo de CineLocal no se entra (se dice después de comprobarla: así no se
+    // puede averiguar quién está en los grupos sin saber su contraseña)
+    if (!this.role(user)) return { ok: false, error: `Tu usuario no tiene acceso a CineLocal: pide que te añadan al grupo «${this.userGroup}» del NAS` };
     return { ok: true, ...this.open(user) };
   }
 
@@ -86,7 +97,8 @@ class Auth {
     if (!token) return null;
     const s = this.store.data.sessions[hash(token)];
     if (!s || s.exp < Date.now()) return null;
-    return s.user;
+    // quien sale del grupo pierde el acceso enseguida, aunque tenga la sesión abierta
+    return this.role(s.user) ? s.user : null;
   }
 
   /**
@@ -106,8 +118,7 @@ class Auth {
     const got = Buffer.from(sig);
     if (got.length !== good.length || !crypto.timingSafeEqual(got, good)) return null;
     // un enlace de alguien a quien ya no se deja entrar deja de valer
-    if (this.allowed.length && !this.allowed.includes(user.toLowerCase())) return null;
-    return user;
+    return this.role(user) ? user : null;
   }
 
   mac(text) {
@@ -122,7 +133,52 @@ class Auth {
   }
 
   isAdmin(user) {
-    return !!user && (user === this.devUser || this.admins.includes(user.toLowerCase()));
+    return this.role(user) === 'admin';
+  }
+
+  /** 'admin', 'user' o null (no puede entrar) */
+  role(user) {
+    if (!user) return null;
+    if (this.devUser) return user === this.devUser ? this.devRole : null;
+    const name = user.toLowerCase();
+    const groups = this.groups();
+    if (groups.has(this.adminGroup) || groups.has(this.userGroup)) {
+      if (groups.get(this.adminGroup)?.has(name)) return 'admin';
+      return groups.get(this.userGroup)?.has(name) ? 'user' : null;
+    }
+    // todavía no se han creado los grupos en DSM: como antes
+    if (this.admins.includes(name)) return 'admin';
+    return !this.allowed.length || this.allowed.includes(name) ? 'user' : null;
+  }
+
+  groupsActive() {
+    const g = this.groups();
+    return g.has(this.adminGroup) || g.has(this.userGroup);
+  }
+
+  /**
+   * Grupos del NAS (/etc/group: «nombre:x:gid:usuario1,usuario2»), releídos cada 30 s.
+   * groupFile puede ser una lista separada por comas: se usa el primero que exista (la copia que deja
+   * la tarea programada de DSM en /data, y si aún no está, el /etc/group montado)
+   */
+  groups() {
+    if (!this.groupFile) return new Map();
+    if (this.groupCache && Date.now() - this.groupCache.at < 30e3) return this.groupCache.groups;
+    const groups = new Map();
+    const files = this.groupFile.split(',').map(f => f.trim()).filter(Boolean);
+    const file = files.find(f => fs.existsSync(f)) || files[0];
+    try {
+      for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
+        const [name, , , members = ''] = line.split(':');
+        if (name) groups.set(name.toLowerCase(), new Set(members.split(',').map(m => m.trim().toLowerCase()).filter(Boolean)));
+      }
+    } catch (e) {
+      // sin poder leerlo no se deja entrar a nadie por grupo; se avisa una vez
+      if (!this.groupWarned) { console.warn('No se puede leer', file, e.message); this.groupWarned = true; }
+      if (this.groupCache) return this.groupCache.groups;
+    }
+    this.groupCache = { at: Date.now(), groups };
+    return groups;
   }
 
   prune() {

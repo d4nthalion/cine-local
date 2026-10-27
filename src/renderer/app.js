@@ -62,6 +62,9 @@ const S = {
   season: {},
   query: '',
   tmdbSearch: { q: '', busy: false, results: [], error: null },   // películas de TMDB cuando la biblioteca no tiene nada
+  requests: { items: [], pending: 0 },                             // peticiones (las mías; un administrador, todas)
+  reqSearch: { q: '', type: 'movie', busy: false, results: [], error: null },
+  titles: {},                                                      // fichas de TMDB de lo que no está en la biblioteca
   emule: {
     snap: { ok: false, code: 'disabled', downloads: [] },
     info: null,
@@ -92,6 +95,25 @@ const T = (it) => it.meta?.title || it.title;
 const Y = (it) => it.meta?.year || it.year;
 const prog = (p) => S.lib.progress[p];
 const isFav = (id) => S.lib.favorites.includes(id);
+
+// ---------------------------------------------------------------- listas propias (src/main/lists.js)
+const listsOf = () => S.lib.lists || [];
+/** Entrada de lista de un título de la biblioteca: por su ficha de TMDB, que vale aunque el archivo cambie */
+function entryOf(it) {
+  const t = it.meta?.tmdbId;
+  return t ? { key: `${it.type}:${t}`, tmdb: t, type: it.type, title: T(it), year: Y(it), poster: it.meta?.poster || null }
+    : { key: 'id:' + it.id, id: it.id, type: it.type, title: T(it), year: Y(it) };
+}
+/** El título de la biblioteca de una entrada, si lo tienes */
+const ownedOf = (e) => e.tmdb ? S.lib.items.find(i => i.type === e.type && i.meta?.tmdbId === e.tmdb) : byId(e.id);
+const inAnyList = (key) => listsOf().some(l => l.items.some(x => x.key === key));
+/** Tarjeta de una entrada: la tuya si la tienes; si no, la de «Dónde verla» */
+function listEntryCard(e) {
+  const it = ownedOf(e);
+  if (it) return card(it);
+  return missingCard({ id: e.type === 'movie' ? e.tmdb : null, title: e.title, year: e.year, poster: e.poster },
+    { sub: [e.year, 'No la tienes'].filter(Boolean).join(' · '), entry: e });
+}
 const DAY = 864e5;
 
 function hue(str) { let h = 0; for (const c of str) h = (h * 31 + c.charCodeAt(0)) >>> 0; return h % 360; }
@@ -218,15 +240,20 @@ function lbBadge(lb) {
   return `<span class="lb-badge" title="Tu nota en Letterboxd">${lb.rating ? `<b>${lbStars(lb.rating)}</b>` : ''}${lb.liked ? '<i>♥</i>' : ''}</span>`;
 }
 /** Película que no está en la biblioteca: "Dónde verla" y, si eMule está activo, buscarla */
-function missingCard(f, { tag = '', sub } = {}) {
+function missingCard(f, { tag = '', sub, entry } = {}) {
   const ph = { title: f.title, year: f.year, type: 'movie', meta: null };
   const lb = lbOf(f.id);
-  const open = f.id ? `data-providers="${f.id}" data-ptitle="${esc(f.title)}" data-palt="${esc(f.originalTitle || '')}"` : (f.url ? `data-lb-url="${esc(f.url)}"` : '');
+  const tmdbE = entry?.tmdb ? entry : f.id ? { tmdb: f.id, type: 'movie' } : null;
+  const open = tmdbE ? `data-title-type="${tmdbE.type}" data-title-id="${tmdbE.tmdb}"` : (f.url ? `data-lb-url="${esc(f.url)}"` : '');
   const line = sub ?? [f.year, lb?.watched ? 'Vista' : '', f.rating ? '★ ' + f.rating.toFixed(1) : ''].filter(Boolean).join(' · ');
+  // también se puede guardar en una lista aunque no la tengas
+  const e = entry || (f.id ? { key: `movie:${f.id}`, tmdb: f.id, type: 'movie', title: f.title, year: f.year || null, poster: f.poster || null } : null);
+  const saved = e && inAnyList(e.key);
   return `<div class="card missing" tabindex="0" ${open}>
     <div class="art">${f.poster ? `<img loading="lazy" src="${esc(f.poster)}" alt="">` : placeholder(ph)}
       ${tag}${lbBadge(lb)}
-      <div class="missing-hover"><span>${I.eye}${f.id ? 'Dónde verla' : 'Ver en Letterboxd'}</span>${S.settings.emuleEnabled ? `<button class="mh-emule" data-action="emule-find" data-q="${esc(f.title)}" data-alt="${esc(f.originalTitle || '')}">${I.download}Buscar en eMule</button>` : ''}</div>
+      ${saved ? `<span class="watched-mark in-list" title="En una de tus listas">${I.check}</span>` : ''}
+      <div class="missing-hover">${tmdbE || f.url ? `<span>${I.info}${tmdbE ? 'Ver ficha' : 'Ver en Letterboxd'}</span>` : ''}${requestButton(e)}${e ? `<button class="mh-emule" data-action="lists-pick" data-entry="${esc(JSON.stringify(e))}">${saved ? I.check : I.plus}${saved ? 'En tus listas' : 'Guardar en lista'}</button>` : ''}${emuleOn() ? `<button class="mh-emule" data-action="emule-find" data-q="${esc(f.title)}" data-alt="${esc(f.originalTitle || '')}">${I.download}Buscar en eMule</button>` : ''}</div>
     </div>
     <div class="cap"><div class="t">${esc(f.title)}</div><div class="s">${esc(line || 'Sin fecha')}</div></div>
   </div>`;
@@ -497,7 +524,7 @@ function providersHTML(r, title) {
 async function showProviders(movieId, title, alt) {
   const m = modal(`<div class="modal-head"><h2>Dónde ver “${esc(title)}”</h2><p>Disponibilidad en plataformas de tu país</p></div>
     <div class="modal-list prov-body"><p class="filmo-note">Consultando…</p></div>
-    <div class="modal-foot prov-foot"><span class="prov-credit">Datos de JustWatch vía TMDB</span>${S.settings.emuleEnabled ? `<button class="btn btn-accent btn-sm" data-action="emule-find" data-q="${esc(title)}" data-alt="${esc(alt || '')}">${I.download}Buscar en eMule</button>` : ''}<button class="btn btn-ghost btn-sm" data-action="close-modal">Cerrar</button></div>`);
+    <div class="modal-foot prov-foot"><span class="prov-credit">Datos de JustWatch vía TMDB</span>${emuleOn() ? `<button class="btn btn-accent btn-sm" data-action="emule-find" data-q="${esc(title)}" data-alt="${esc(alt || '')}">${I.download}Buscar en eMule</button>` : ''}<button class="btn btn-ghost btn-sm" data-action="close-modal">Cerrar</button></div>`);
   const body = $('.prov-body', m);
   try {
     const r = await window.api.getProviders(movieId);
@@ -543,6 +570,7 @@ function viewHome() {
   rows += row('Continuar viendo', cont.map(wideCard).join(''), 'cont');
   rows += row('Añadido recientemente', recent.map(card).join(''), 'recent');
   if (favs.length) rows += row('Mi lista', favs.map(card).join(''), 'favs', 'list');
+  for (const l of listsOf()) if (l.items.length) rows += row(l.name, l.items.slice(0, 30).map(listEntryCard).join(''), 'list-' + l.id, 'list:' + l.id);
   const wl = watchlistEntries();
   if (wl.length) {
     // primero las que ya puedes ver
@@ -606,14 +634,10 @@ function setHero(i) {
 
 function banners() {
   let out = '';
-  if (S.lib.error && S.lib.remote) {
-    out += `<div class="banner"><div class="txt"><b>CineLocal Server.</b> ${esc(S.lib.error)}.${S.lib.items.length ? ' Se muestra lo último que se recibió.' : ''}</div>
-      <button class="btn btn-ghost btn-sm" data-nav="settings">Ajustes</button></div>`;
-  } else if (S.lib.error) {
-    out += `<div class="banner"><div class="txt"><b>${S.lib.items.length ? 'Falta una carpeta de la biblioteca.' : 'No se puede leer la biblioteca.'}</b> ${esc(S.lib.error)}. Comprueba que el disco esté conectado o cambia la carpeta en Ajustes.</div>
-      <button class="btn btn-ghost btn-sm" data-nav="settings">Ajustes</button></div>`;
+  if (S.lib.error) {
+    out += `<div class="banner"><div class="txt"><b>CineLocal Server.</b> ${esc(S.lib.error)}.${S.lib.items.length ? ' Se muestra lo último que se recibió.' : ''}</div></div>`;
   }
-  if (!S.lib.hasKey) {
+  if (!S.lib.hasKey && isAdmin()) {
     out += `<div class="banner"><div class="txt"><b>Añade tu API key de TMDB</b> para ver carátulas, sinopsis, reparto y nombres de episodios. Es gratuita.</div>
       <button class="btn btn-accent btn-sm" data-nav="settings">Configurar</button></div>`;
   }
@@ -628,11 +652,11 @@ function viewEmpty() {
   return `<div class="page">${banners()}<div class="empty">
     <div class="big-ico">${I.film}</div>
     <h2>Tu biblioteca está vacía</h2>
-    <p>CineLocal busca en ${libPaths().filter(Boolean).map(p => `<b>${esc(p)}</b>`).join(', ') || 'ninguna carpeta'}.<br>Los archivos de vídeo sueltos se muestran como películas y cada carpeta como una serie.</p>
-    <div class="actions" style="justify-content:center">
+    <p>${isAdmin() ? `CineLocal Server busca en ${libPaths().filter(Boolean).map(p => `<b>${esc(p)}</b>`).join(', ') || 'ninguna carpeta'}.<br>Los archivos de vídeo sueltos se muestran como películas y cada carpeta como una serie.` : 'Todavía no hay nada en la biblioteca del servidor.'}</p>
+    ${canManage() ? `<div class="actions" style="justify-content:center">
       <button class="btn btn-primary" data-action="scan">Escanear ahora</button>
       <button class="btn btn-ghost" data-nav="settings">Cambiar carpeta</button>
-    </div></div></div>`;
+    </div>` : ''}</div></div>`;
 }
 
 const isSeen = it => it.type === 'movie' ? !!prog(it.path)?.watched : it.episodes.every(e => prog(e.path)?.watched);
@@ -688,12 +712,245 @@ function viewWatchlist() {
   </div>`;
 }
 
+/** Listas: Mi lista y las propias, una por pestaña */
 function viewList() {
   const favs = S.lib.favorites.map(byId).filter(Boolean);
-  return `<div class="page"><h1 class="page-title">Mi lista<span class="count">${favs.length}</span></h1>
-    ${favs.length ? `<div class="grid">${favs.map(card).join('')}</div>`
-      : `<div class="empty"><div class="big-ico">${I.plus}</div><h2>Aún no has añadido nada</h2><p>Pulsa el botón + en cualquier película o serie para guardarla aquí.</p></div>`}
+  const lists = listsOf();
+  const l = lists.find(x => x.id === S.listTab);
+  const tabs = `<div class="list-tabs">
+      <button class="gchip ${l ? '' : 'on'}" data-list-tab="">Mi lista <span class="n">${favs.length}</span></button>
+      ${lists.map(x => `<button class="gchip ${x === l ? 'on' : ''}" data-list-tab="${esc(x.id)}">${esc(x.name)} <span class="n">${x.items.length}</span></button>`).join('')}
+      <button class="gchip add" data-action="list-new">${I.plus}Nueva lista</button>
+    </div>`;
+  if (!l) {
+    return `<div class="page"><h1 class="page-title">Listas</h1>${tabs}
+      ${favs.length ? `<div class="grid">${favs.map(card).join('')}</div>`
+        : `<div class="empty"><div class="big-ico">${I.plus}</div><h2>Aún no has añadido nada</h2><p>Pulsa el botón + en cualquier película o serie para guardarla en Mi lista o en otra de tus listas.</p></div>`}
+    </div>`;
+  }
+  const owned = l.items.filter(ownedOf).length;
+  return `<div class="page"><h1 class="page-title">Listas</h1>${tabs}
+    <div class="list-head"><div><h2>${esc(l.name)}</h2><p>${l.items.length} ${l.items.length === 1 ? 'título' : 'títulos'}${l.items.length ? ` · ${owned} en tu biblioteca` : ''}</p></div>
+      <div class="list-actions"><button class="btn btn-ghost btn-sm" data-action="list-rename" data-list="${esc(l.id)}">Renombrar</button>
+      <button class="btn btn-ghost btn-sm" data-action="list-delete" data-list="${esc(l.id)}">Eliminar</button></div></div>
+    ${l.items.length ? `<div class="grid filmo">${l.items.map(listEntryCard).join('')}</div>`
+      : `<div class="empty"><div class="big-ico">${I.plus}</div><h2>Lista vacía</h2><p>Pulsa + en una película o serie, o «Guardar en lista» en una película que no tengas (en la filmografía de un director o al buscar), y elige esta lista.</p></div>`}
   </div>`;
+}
+
+// ---------------------------------------------------------------- elegir listas para un título
+/** Ventana «Guardar en una lista»: itemId sólo si está en la biblioteca (Mi lista guarda títulos tuyos) */
+function openListPicker(entry, itemId) {
+  S.picker = { entry, itemId };
+  modal(`<div class="modal-head"><h2>Guardar en una lista</h2><p>${esc(entry.title)}${entry.year ? ` (${entry.year})` : ''}</p></div>
+    <div class="modal-list" id="listPicker"></div>
+    <div class="modal-foot lp-foot">
+      <input class="input" data-list-new-name maxlength="60" placeholder="Nueva lista…" spellcheck="false">
+      <button class="btn btn-accent btn-sm" data-action="list-create">Crear</button>
+      <button class="btn btn-ghost btn-sm" data-action="close-modal">Hecho</button>
+    </div>`);
+  paintListPicker();
+  $('[data-list-new-name]').addEventListener('keydown', e => { if (e.key === 'Enter') $('[data-action="list-create"]').click(); });
+}
+
+function paintListPicker() {
+  const box = $('#listPicker');
+  if (!box || !S.picker) return;
+  const { entry, itemId } = S.picker;
+  const row = (on, attrs, name, n) => `<button class="lp-row ${on ? 'on' : ''}" ${attrs}><span class="lp-check">${on ? I.check : ''}</span><span class="lp-name">${esc(name)}</span><span class="lp-n">${n}</span></button>`;
+  box.innerHTML = (itemId ? row(isFav(itemId), `data-action="pick-fav" data-id="${esc(itemId)}"`, 'Mi lista', S.lib.favorites.length) : '')
+    + listsOf().map(l => row(l.items.some(x => x.key === entry.key), `data-action="pick-list" data-list="${esc(l.id)}"`, l.name, l.items.length)).join('')
+    + (!itemId && !listsOf().length ? '<p class="filmo-note">Aún no tienes listas: escribe un nombre abajo y pulsa Crear.</p>' : '');
+}
+
+async function listOp(q) {
+  try {
+    S.lib.lists = await window.api.lists.op(q);
+    return true;
+  } catch (e) {
+    toast(errText(e), 'error');
+    return false;
+  }
+}
+
+/** Nombre para una lista nueva o para renombrar */
+function askListName(title, value = '', placeholder = 'Nombre de la lista') {
+  return new Promise(resolve => {
+    const m = modal(`<div class="modal-head"><h2>${esc(title)}</h2></div>
+      <div class="modal-list" style="padding:0 24px 8px"><input class="input" data-list-name maxlength="300" value="${esc(value)}" placeholder="${esc(placeholder)}" style="width:100%"></div>
+      <div class="modal-foot" style="gap:10px"><button class="btn btn-ghost btn-sm" data-r="0">Cancelar</button><button class="btn btn-accent btn-sm" data-r="1">Guardar</button></div>`);
+    const input = $('[data-list-name]', m);
+    const done = ok => { const v = input.value.trim(); closeModal(); resolve(ok && v ? v : null); };
+    m.addEventListener('click', e => { const b = e.target.closest('[data-r]'); if (b) done(b.dataset.r === '1'); });
+    input.addEventListener('keydown', e => { if (e.key === 'Enter') done(true); if (e.key === 'Escape') done(false); });
+    setTimeout(() => { input.focus(); input.select(); }, 30);
+  });
+}
+
+// ---------------------------------------------------------------- peticiones (CineLocal Server)
+/** Hay peticiones cuando la biblioteca es la del servidor */
+const hasRequests = () => !!window.api.requests && !!S.me;
+const isAdmin = () => !!S.me?.admin;
+/** Corregir fichas, escanear, carpetas y TMDB: en el servidor, sólo un administrador */
+const canManage = () => isAdmin();
+/** eMule: sólo en el escritorio y sólo para administradores */
+const emuleOn = () => !WEB && !!S.settings.emuleEnabled && isAdmin();
+
+/** Quién soy en CineLocal Server (web, o escritorio conectado al servidor): rol, peticiones y botones de administrador */
+async function refreshMe() {
+  S.me = WEB ? await window.api.me() : await window.api.remote.me().catch(() => null);
+  $('#btnScan').classList.toggle('hidden', !canManage());
+  $('#navRequests').classList.toggle('hidden', !hasRequests());
+  if (hasRequests()) await loadRequests(); else setRequests(null);
+}
+const REQ_STATUS = { pending: 'Pendiente', done: 'Conseguida', rejected: 'Rechazada' };
+/** Mi petición de un título («movie:438631»), o null */
+const myRequest = (key) => S.requests.items.find(r => r.key === key && r.mine) || null;
+
+async function loadRequests() {
+  if (!hasRequests()) return;
+  try { setRequests(await window.api.requests.get()); } catch {}
+}
+function setRequests(v) {
+  S.requests = v || { items: [], pending: 0 };
+  const b = $('#reqBadge');
+  if (b) { b.textContent = S.requests.pending || ''; b.classList.toggle('hidden', !S.requests.pending); }
+}
+
+async function requestOp(q) {
+  try {
+    setRequests(await window.api.requests.op(q));
+    return true;
+  } catch (e) {
+    toast(errText(e), 'error');
+    return false;
+  }
+}
+
+/** Botón de pedir (o «Pedida», que lleva a Peticiones) para un título que no está en la biblioteca */
+function requestButton(e, cls = 'mh-emule') {
+  if (!hasRequests() || !e?.tmdb) return '';
+  const r = myRequest(e.key);
+  if (r) return `<button class="${cls}" data-nav="requests">${I.check}${r.status === 'pending' ? 'Pedida' : REQ_STATUS[r.status]}</button>`;
+  return `<button class="${cls}" data-action="request" data-entry="${esc(JSON.stringify(e))}">${I.download}Pedir</button>`;
+}
+
+function viewRequests() {
+  const all = S.requests.items;
+  const tab = S.reqTab || 'pending';
+  const pending = all.filter(r => r.status === 'pending');
+  const list = tab === 'pending' ? pending : all.filter(r => r.status !== 'pending');
+  const admin = isAdmin();
+  const t = S.reqSearch;
+  return `<div class="page requests"><h1 class="page-title">Peticiones${pending.length ? `<span class="count">${pending.length}</span>` : ''}</h1>
+    <p class="req-intro">${admin ? 'Lo que piden los usuarios y no está en la biblioteca. Al añadirlo a la biblioteca se marca solo como conseguido.' : 'Pide películas y series que no estén en la biblioteca; te avisaremos cuando estén.'}</p>
+    <div class="req-search">
+      <div class="chips">
+        <button class="chip ${t.type === 'movie' ? 'on' : ''}" data-req-type="movie">Película</button>
+        <button class="chip ${t.type === 'series' ? 'on' : ''}" data-req-type="series">Serie</button>
+      </div>
+      <input class="input" id="reqQuery" value="${esc(t.q)}" placeholder="${t.type === 'movie' ? 'Busca una película para pedirla…' : 'Busca una serie para pedirla…'}" spellcheck="false">
+    </div>
+    <div id="reqResults">${reqResultsHTML()}</div>
+    <div class="list-tabs">
+      <button class="gchip ${tab === 'pending' ? 'on' : ''}" data-req-tab="pending">Pendientes <span class="n">${pending.length}</span></button>
+      <button class="gchip ${tab === 'resolved' ? 'on' : ''}" data-req-tab="resolved">Resueltas <span class="n">${all.length - pending.length}</span></button>
+    </div>
+    ${list.length ? `<div class="req-list">${list.map(requestRow).join('')}</div>`
+      : `<div class="empty"><div class="big-ico">${I.download}</div><h2>${tab === 'pending' ? 'No hay peticiones pendientes' : 'Nada resuelto todavía'}</h2>
+        <p>${tab === 'pending' ? 'Busca arriba una película o serie, o pulsa «Pedir» en una que no tengas (al buscar, en la filmografía de un director o en tus listas).' : 'Aquí aparecen las peticiones conseguidas y rechazadas de los últimos 60 días.'}</p></div>`}
+  </div>`;
+}
+
+function reqResultsHTML() {
+  const t = S.reqSearch;
+  if (!t.q.trim()) return '';
+  if (t.busy) return '<p class="filmo-note" style="padding-left:0">Buscando en TMDB…</p>';
+  if (t.error) return `<p class="filmo-note" style="padding-left:0;color:#f87171">${esc(t.error)}</p>`;
+  if (!t.results.length) return '<p class="filmo-note" style="padding-left:0">Nada en TMDB con ese nombre.</p>';
+  return `<div class="grid filmo req-results">${t.results.map(r => {
+    const owned = S.lib.items.find(i => i.type === t.type && i.meta?.tmdbId === r.id);
+    if (owned) return card(owned).replace('<div class="cap">', '<div class="cap"><div class="own-badge">' + I.check + 'Ya está en la biblioteca</div>');
+    const e = { key: `${t.type}:${r.id}`, tmdb: r.id, type: t.type, title: r.title, year: r.year ? +r.year : null, poster: r.poster || null };
+    return missingCard({ ...r, id: t.type === 'movie' ? r.id : null, year: r.year ? +r.year : null }, { entry: e, sub: [r.year, t.type === 'series' ? 'Serie' : ''].filter(Boolean).join(' · ') });
+  }).join('')}</div>`;
+}
+
+let reqSearchTimer = null;
+function searchRequests(q) {
+  S.reqSearch.q = q;
+  clearTimeout(reqSearchTimer);
+  if (!q.trim()) { S.reqSearch.results = []; paintReqResults(); return; }
+  reqSearchTimer = setTimeout(async () => {
+    const { type } = S.reqSearch;
+    S.reqSearch.busy = true; S.reqSearch.error = null; paintReqResults();
+    try {
+      const res = await window.api.searchMeta({ type, query: q.trim() });
+      if (S.reqSearch.q === q && S.reqSearch.type === type) S.reqSearch.results = res.slice(0, 18);
+    } catch (e) { S.reqSearch.error = errText(e); }
+    S.reqSearch.busy = false;
+    paintReqResults();
+  }, 400);
+}
+function paintReqResults() { const box = $('#reqResults'); if (box) box.innerHTML = reqResultsHTML(); }
+
+function requestRow(r) {
+  const admin = isAdmin();
+  const date = ts => new Date(ts).toLocaleDateString('es-ES', { day: 'numeric', month: 'short', year: 'numeric' });
+  const who = admin
+    ? r.users.map(u => `<b>${esc(u.user)}</b>${u.note ? ` <i>«${esc(u.note)}»</i>` : ''}`).join(', ') + ` · ${date(r.at)}`
+    : `Pedida el ${date(r.users.find(u => u.name === S.me?.user?.toLowerCase())?.at || r.at)}${r.users.length > 1 ? ` · también la piden ${r.users.length - 1} más` : ''}`;
+  const owned = S.lib.items.find(i => i.type === r.type && i.meta?.tmdbId === r.tmdb);
+  const resolved = r.status !== 'pending'
+    ? `<div class="req-reply">${REQ_STATUS[r.status]}${r.resolvedAt ? ' el ' + date(r.resolvedAt) : ''}${r.resolvedBy ? ` por ${esc(r.resolvedBy)}` : r.status === 'done' ? ' (al llegar a la biblioteca)' : ''}${r.reply ? ` · «${esc(r.reply)}»` : ''}</div>` : '';
+  const actions = admin
+    ? (r.status === 'pending'
+      ? `${emuleOn() ? `<button class="btn btn-ghost btn-sm" data-action="emule-find" data-q="${esc(r.title)}">${I.download}Buscar en eMule</button>` : ''}
+         <button class="btn btn-accent btn-sm" data-action="req-resolve" data-id="${r.id}" data-status="done">Conseguida</button>
+         <button class="btn btn-ghost btn-sm" data-action="req-resolve" data-id="${r.id}" data-status="rejected">Rechazar</button>`
+      : `<button class="btn btn-ghost btn-sm" data-action="req-resolve" data-id="${r.id}" data-status="pending">Volver a pendiente</button>`)
+      + `<button class="btn btn-ghost btn-sm" data-action="req-remove" data-id="${r.id}">Borrar</button>`
+    : (r.mine && r.status === 'pending' ? `<button class="btn btn-ghost btn-sm" data-action="req-cancel" data-id="${r.id}">Cancelar</button>` : '');
+  return `<div class="req-row ${r.status}">
+    <div class="req-poster" ${owned ? `data-open="${owned.id}"` : `data-title-type="${r.type}" data-title-id="${r.tmdb}"`}>${r.poster ? `<img loading="lazy" src="${esc(r.poster.replace('/w500/', '/w185/').replace('/w342/', '/w185/'))}" alt="">` : placeholder({ title: r.title, type: r.type })}</div>
+    <div class="req-info">
+      <div class="req-title">${esc(r.title)}${r.year ? ` <span>(${r.year})</span>` : ''} <span class="req-type">${r.type === 'series' ? 'Serie' : 'Película'}</span></div>
+      <div class="req-who">${who}</div>
+      ${resolved}
+      ${owned ? `<button class="link-btn" data-open="${owned.id}">Ver en la biblioteca</button>` : ''}
+    </div>
+    <span class="status-pill ${r.status === 'done' ? 'ok' : r.status === 'rejected' ? 'bad' : ''}">${REQ_STATUS[r.status]}</span>
+    <div class="req-actions">${actions}</div>
+  </div>`;
+}
+
+/** Pedir un título: con una nota opcional («la versión extendida», «en español»…) */
+function askRequest(e) {
+  return new Promise(resolve => {
+    const m = modal(`<div class="modal-head"><h2>Pedir «${esc(e.title)}»${e.year ? ` (${e.year})` : ''}</h2>
+        <p>${isAdmin() ? 'Quedará en Peticiones como pendiente.' : 'Los administradores recibirán el aviso; te avisaremos cuando esté en la biblioteca.'}</p></div>
+      <div class="modal-list" style="padding:0 24px 8px"><input class="input" data-req-note maxlength="300" placeholder="Nota (opcional): versión, idioma, calidad…" style="width:100%"></div>
+      <div class="modal-foot" style="gap:10px"><button class="btn btn-ghost btn-sm" data-r="0">Cancelar</button><button class="btn btn-accent btn-sm" data-r="1">Pedir</button></div>`);
+    const input = $('[data-req-note]', m);
+    const done = ok => { const v = input.value.trim(); closeModal(); resolve(ok ? { note: v } : null); };
+    m.addEventListener('click', ev => { const b = ev.target.closest('[data-r]'); if (b) done(b.dataset.r === '1'); });
+    input.addEventListener('keydown', ev => { if (ev.key === 'Enter') done(true); if (ev.key === 'Escape') done(false); });
+    setTimeout(() => input.focus(), 30);
+  });
+}
+
+/** Respuesta del administrador al rechazar (opcional) */
+function askReply(title) {
+  return new Promise(resolve => {
+    const m = modal(`<div class="modal-head"><h2>Rechazar «${esc(title)}»</h2><p>Quien la pidió verá el motivo.</p></div>
+      <div class="modal-list" style="padding:0 24px 8px"><input class="input" data-req-reply maxlength="300" placeholder="Motivo (opcional)" style="width:100%"></div>
+      <div class="modal-foot" style="gap:10px"><button class="btn btn-ghost btn-sm" data-r="0">Cancelar</button><button class="btn btn-accent btn-sm" data-r="1">Rechazar</button></div>`);
+    const input = $('[data-req-reply]', m);
+    const done = ok => { const v = input.value.trim(); closeModal(); resolve(ok ? v : null); };
+    m.addEventListener('click', ev => { const b = ev.target.closest('[data-r]'); if (b) done(b.dataset.r === '1'); });
+    input.addEventListener('keydown', ev => { if (ev.key === 'Enter') done(true); if (ev.key === 'Escape') done(false); });
+    setTimeout(() => input.focus(), 30);
+  });
 }
 
 function viewSearch() {
@@ -729,7 +986,7 @@ function tmdbSearchHTML(q) {
   if (t.busy) return `<p class="filmo-note">No está en tu biblioteca. Buscando en TMDB…</p>`;
   if (t.error) return `<div class="empty"><div class="big-ico">${I.search}</div><h2>Sin resultados</h2><p>No está en tu biblioteca y no se ha podido buscar en TMDB: ${esc(t.error)}</p></div>`;
   if (!t.results.length) return `<div class="empty"><div class="big-ico">${I.search}</div><h2>Sin resultados</h2><p>Ni en tu biblioteca ni en TMDB. Prueba con otro título, un actor o un género.</p></div>`;
-  return `<p class="filmo-note" style="padding-left:0">No está en tu biblioteca. Películas de TMDB que coinciden: pulsa para ver dónde verla${S.settings.emuleEnabled ? ' o búscala en eMule' : ''}.</p>
+  return `<p class="filmo-note" style="padding-left:0">No está en tu biblioteca. Películas de TMDB que coinciden: pulsa para ver dónde verla${emuleOn() ? ' o búscala en eMule' : ''}.</p>
     <div class="grid filmo">${t.results.map(r => missingCard({ ...r, year: r.year ? +r.year : null })).join('')}</div>`;
 }
 
@@ -772,8 +1029,8 @@ function viewDetail(id) {
     ${m.originalTitle && m.originalTitle !== m.title ? `<b>Título original</b><span>${esc(m.originalTitle)}</span>` : ''}
     ${it.type === 'movie' ? `<b>Archivo</b><span>${esc(it.path)}</span><b>Tamaño</b><span>${fmtSize(it.size)}</span>`
       : `<b>Carpeta</b><span>${esc(it.path)}</span><b>Tamaño</b><span>${fmtSize(it.episodes.reduce((a, e) => a + e.size, 0))}</span>`}
-    <b>Metadatos</b><span>${it.meta ? `TMDB #${m.tmdbId} · <button class="link-btn" data-action="identify" data-id="${it.id}">Corregir coincidencia</button>`
-      : `${it.metaFailed ? 'No se encontró en TMDB' : 'Sin metadatos'} · <button class="link-btn" data-action="identify" data-id="${it.id}">Identificar manualmente</button>`}</span>
+    <b>Metadatos</b><span>${it.meta ? `TMDB #${m.tmdbId}${canManage() ? ` · <button class="link-btn" data-action="identify" data-id="${it.id}">Corregir coincidencia</button>` : ''}`
+      : `${it.metaFailed ? 'No se encontró en TMDB' : 'Sin metadatos'}${canManage() ? ` · <button class="link-btn" data-action="identify" data-id="${it.id}">Identificar manualmente</button>` : ''}`}</span>
   </div>`;
 
   return `<div class="detail">
@@ -792,17 +1049,92 @@ function viewDetail(id) {
         <div class="actions">
           ${playButtonFor(it)}
           ${restart}
-          <button class="round-btn ${fav ? 'on' : ''}" title="${fav ? 'Quitar de Mi lista' : 'Añadir a Mi lista'}" data-action="fav" data-id="${it.id}">${fav ? I.check : I.plus}</button>
+          <button class="round-btn ${fav || inAnyList(entryOf(it).key) ? 'on' : ''}" title="Guardar en una lista" data-action="lists-pick" data-id="${it.id}">${fav || inAnyList(entryOf(it).key) ? I.check : I.plus}</button>
           ${m.trailer ? `<button class="round-btn" title="Ver tráiler" data-action="trailer" data-url="${esc(m.trailer)}">${I.yt}</button>` : ''}
           <div class="menu-wrap">
             <button class="round-btn" title="Más opciones" data-action="menu">${I.more}</button>
             <div class="menu hidden" id="detailMenu">
               <button data-action="mark-all" data-id="${it.id}" data-watched="${watchedAll ? 0 : 1}">${watchedAll ? I.restart : I.eye}${watchedAll ? 'Marcar como no visto' : 'Marcar como visto'}</button>
-              <button data-action="identify" data-id="${it.id}">${I.tag}Corregir coincidencia</button>
-              ${S.settings.emuleEnabled ? `<button data-action="emule-find" data-q="${esc(T(it))}">${I.download}Buscar en eMule</button>` : ''}
+              ${canManage() ? `<button data-action="identify" data-id="${it.id}">${I.tag}Corregir coincidencia</button>` : ''}
+              ${emuleOn() ? `<button data-action="emule-find" data-q="${esc(T(it))}">${I.download}Buscar en eMule</button>` : ''}
               ${WEB ? '' : `<button data-action="reveal" data-path="${esc(it.type === 'movie' ? it.path : it.episodes[0].path)}">${I.folder}Abrir ubicación</button>`}
             </div>
           </div>
+        </div>
+      </div>
+    </section>
+    <div class="detail-body">${body}</div>
+  </div>`;
+}
+
+// ---------------------------------------------------------------- ficha de un título que no está en la biblioteca
+async function loadTitle(type, id) {
+  const k = `${type}:${id}`;
+  if (S.titles[k] && !S.titles[k].error) return;
+  S.titles[k] = { loading: true };
+  try { S.titles[k] = { data: await window.api.getTitle({ type, id }) }; }
+  catch (e) { S.titles[k] = { error: errText(e) }; }
+  if (S.route.name === 'title' && S.route.type === type && S.route.id === id) render(true);
+}
+
+function viewTitle(type, id) {
+  // si resulta que sí está en la biblioteca, su ficha de siempre
+  const owned = S.lib.items.find(i => i.type === type && i.meta?.tmdbId === id);
+  if (owned) return viewDetail(owned.id);
+  const st = S.titles[`${type}:${id}`];
+  const backBtn = `<button class="back-btn" data-action="back">${I.back}Volver</button>`;
+  if (!st || st.loading) { if (!st) loadTitle(type, id); return `<div class="page">${backBtn}<div class="empty"><div class="spinner"></div></div></div>`; }
+  if (st.error) return `<div class="page">${backBtn}<div class="empty"><h2>No se ha podido cargar la ficha</h2><p>${esc(st.error)}</p><button class="btn btn-ghost" data-action="back">Volver</button></div></div>`;
+  const m = st.data;
+  const e = { key: `${type}:${id}`, tmdb: id, type, title: m.title, year: m.year || null, poster: m.poster || null };
+  const saved = inAnyList(e.key);
+  const req = myRequest(e.key);
+  const lb = type === 'movie' ? lbOf(id) : null;
+  const years = type === 'series' && m.year ? (m.endYear && m.endYear !== m.year ? `${m.year}–${m.endYear}` : m.endYear ? `${m.year}` : `${m.year}–`) : m.year;
+  const line = [
+    m.rating ? `<span class="rating">${I.star}${m.rating.toFixed(1)}</span>` : '',
+    years ? `<span>${years}</span>` : '',
+    m.certification ? `<span class="badge">${esc(m.certification)}</span>` : '',
+    type === 'movie' && m.runtime ? `<span>${fmtRuntime(m.runtime)}</span>` : '',
+    type === 'series' && m.numberOfSeasons ? `<span>${m.numberOfSeasons} ${m.numberOfSeasons === 1 ? 'temporada' : 'temporadas'}</span>` : ''
+  ].filter(Boolean);
+  // sólo se enlaza al director si tiene alguna película en la biblioteca (su página sale de ahí)
+  const known = new Set(type === 'movie' ? allDirectors().map(d => d.key) : []);
+  const credit = type === 'movie'
+    ? (m.directors?.length ? `<b>Dirección</b>${m.directors.map(d => known.has('p' + d.id) ? `<a class="credit-link" data-director="p${d.id}">${esc(d.name)}</a>` : esc(d.name)).join(', ')}` : '')
+    : (m.creators ? `<b>Creada por</b>${esc(m.creators)}` : '') + (m.networks?.length ? `&nbsp;&nbsp;·&nbsp;&nbsp;<b>Cadena</b>${esc(m.networks.join(', '))}` : '');
+  let body = '';
+  if (m.cast?.length) {
+    body += `<h2 class="section-title">Reparto</h2><div class="cast">${m.cast.map(c => `
+      <div class="person"><div class="ph">${c.photo ? `<img loading="lazy" src="${esc(c.photo)}" alt="">` : esc((c.name || '?')[0])}</div>
+      <div class="n">${esc(c.name)}</div><div class="c">${esc(c.character || '')}</div></div>`).join('')}</div>`;
+  }
+  body += `<h2 class="section-title">Información</h2><div class="file-info">
+    ${m.originalTitle && m.originalTitle !== m.title ? `<b>Título original</b><span>${esc(m.originalTitle)}</span>` : ''}
+    ${m.releaseDate ? `<b>Estreno</b><span>${esc(fmtDate(m.releaseDate))}</span>` : ''}
+    <b>En la biblioteca</b><span>No está${req ? ` · ${req.status === 'pending' ? 'la has pedido' : 'petición ' + REQ_STATUS[req.status].toLowerCase()}` : ''}</span>
+    <b>Metadatos</b><span>TMDB #${id}</span>
+  </div>`;
+  return `<div class="detail">
+    ${backBtn}
+    <section class="detail-hero">
+      <div class="bg ${m.backdrop ? '' : 'noimg'}">${m.backdrop ? `<img src="${esc(m.backdrop)}" alt="">` : ''}</div>
+      <div class="content">
+        <div class="kicker">${type === 'movie' ? 'Película' : 'Serie'} · No está en la biblioteca</div>
+        ${m.logo ? `<img class="title-logo" src="${esc(m.logo)}" alt="${esc(m.title)}">` : `<h1 class="title-text">${esc(m.title)}</h1>`}
+        ${line.length ? `<div class="meta-line">${line.join('<i class="dot"></i>')}</div>` : ''}
+        ${m.genres?.length ? `<div class="genres">${m.genres.map(g => `<span>${esc(g)}</span>`).join('')}</div>` : ''}
+        ${m.tagline ? `<p class="tagline">${esc(m.tagline)}</p>` : ''}
+        ${m.overview ? `<p class="overview">${esc(m.overview)}</p>` : ''}
+        ${credit ? `<div class="credits-line">${credit}</div>` : ''}
+        ${lbLine(lb)}
+        <div class="actions">
+          ${hasRequests() ? (req ? `<button class="btn btn-ghost" data-nav="requests">${I.check}${req.status === 'pending' ? 'Pedida' : REQ_STATUS[req.status]}</button>`
+            : `<button class="btn btn-primary" data-action="request" data-entry="${esc(JSON.stringify(e))}">${I.download}Pedir</button>`) : ''}
+          ${type === 'movie' ? `<button class="btn btn-ghost" data-providers="${id}" data-ptitle="${esc(m.title)}" data-palt="${esc(m.originalTitle || '')}">${I.eye}Dónde verla</button>` : ''}
+          <button class="round-btn ${saved ? 'on' : ''}" title="Guardar en una lista" data-action="lists-pick" data-entry="${esc(JSON.stringify(e))}">${saved ? I.check : I.plus}</button>
+          ${m.trailer ? `<button class="round-btn" title="Ver tráiler" data-action="trailer" data-url="${esc(m.trailer)}">${I.yt}</button>` : ''}
+          ${emuleOn() ? `<button class="round-btn" title="Buscar en eMule" data-action="emule-find" data-q="${esc(m.title)}" data-alt="${esc(m.originalTitle || '')}">${I.download}</button>` : ''}
         </div>
       </div>
     </section>
@@ -860,52 +1192,38 @@ function viewSettings() {
   const s = S.settings;
   const opt = (list, v) => list.map(([k, l]) => `<option value="${k}" ${k === v ? 'selected' : ''}>${esc(l)}</option>`).join('');
   const sw = (key, on) => `<label class="switch"><input type="checkbox" data-set="${key}" ${on ? 'checked' : ''}><span></span></label>`;
-  const REMOTE = !WEB && !!s.remoteMode;   // la biblioteca viene de CineLocal Server
   return `<div class="page settings">
     <h1 class="page-title">Ajustes</h1>
-    ${WEB ? webAccountHTML() : ''}
+    ${accountHTML()}
 
-    <div class="set-group"><h3>Biblioteca</h3>
-      ${WEB ? '' : remoteSettingsHTML(s, sw)}
-      ${REMOTE ? '' : `<div class="set-row lib-paths"><div class="lbl"><div class="t">Carpetas de películas y series</div>
-        <div class="d">Archivos de vídeo sueltos = películas · cada carpeta = una serie (admite subcarpetas por temporada). Una serie repartida en varias carpetas se junta en una sola.${libPaths().length > 1 ? ' Las descargas de eMule se mueven a la primera.' : ''}</div></div>
+    ${isAdmin() ? `<div class="set-group"><h3>Biblioteca del servidor</h3>
+      <div class="set-row lib-paths"><div class="lbl"><div class="t">Carpetas de películas y series</div>
+        <div class="d">Carpetas dentro del contenedor de CineLocal Server. Archivos de vídeo sueltos = películas · cada carpeta = una serie (admite subcarpetas por temporada). Una serie repartida en varias carpetas se junta en una sola.</div></div>
         <div class="ctl">
           ${libPaths().map((p, i, all) => `<div class="lib-path">
-            <input class="input" data-lib-path="${i}" value="${esc(p)}" placeholder="${WEB ? 'Carpeta en el servidor, p. ej. /media' : 'Ruta de la carpeta'}">
-            ${WEB ? '' : `<button class="btn btn-ghost btn-sm" data-action="pick-folder" data-idx="${i}">Examinar</button>`}
+            <input class="input" data-lib-path="${i}" value="${esc(p)}" placeholder="Carpeta en el servidor, p. ej. /media">
             ${all.length > 1 ? `<button class="icon-btn sm" data-action="remove-lib-path" data-idx="${i}" title="Quitar esta carpeta">${I.close}</button>` : ''}
           </div>`).join('')}
           <button class="btn btn-ghost btn-sm add-path" data-action="add-lib-path">${I.plus}Añadir nueva ruta</button>
-        </div></div>`}
+        </div></div>
       <div class="set-row"><div class="lbl"><div class="t">Escanear de nuevo</div><div class="d">${S.lib.items.length} títulos · último escaneo ${S.lib.scannedAt ? new Date(S.lib.scannedAt).toLocaleString('es-ES') : 'nunca'}</div></div>
         <div class="ctl"><button class="btn btn-ghost btn-sm" data-action="scan">Escanear ahora</button></div></div>
-      ${REMOTE ? '' : `<div class="set-row"><div class="lbl"><div class="t">Detectar archivos nuevos automáticamente</div><div class="d">Vigila la carpeta y añade lo nuevo en cuanto termine de copiarse, con aviso en la app y en Windows.</div></div>
+      <div class="set-row"><div class="lbl"><div class="t">Detectar archivos nuevos automáticamente</div><div class="d">El servidor vigila la carpeta y añade lo nuevo en cuanto termine de copiarse, con aviso a todos.</div></div>
         <div class="ctl">${sw('autoWatch', s.autoWatch !== false)}</div></div>
       <div class="set-row"><div class="lbl"><div class="t">Carpetas con un solo vídeo como película</div><div class="d">Si una carpeta contiene un único vídeo sin numeración de episodio, se trata como película en vez de serie.</div></div>
         <div class="ctl">${sw('singleFileFolderAsMovie', s.singleFileFolderAsMovie)}</div></div>
-      ${WEB ? '' : `<div class="set-row"><div class="lbl"><div class="t">Modo NAS</div><div class="d">CineLocal inicia sesión en el NAS con su propio usuario, sin depender de las credenciales guardadas en el Explorador de Windows. Escribe las carpetas como <code>\\\\NAS\\Multimedia</code> (o <code>\\\\10.8.0.1\\Multimedia</code> si entras por la VPN del Synology).</div></div>
-        <div class="ctl">${sw('nasMode', s.nasMode)}</div></div>
-      ${s.nasMode ? `<div class="set-row nas-row"><div class="lbl"><div class="t">Inicio de sesión en el NAS</div>
-        <div class="d">Un usuario del NAS con permiso de lectura en la carpeta (de escritura si eMule mueve ahí las descargas). La contraseña se guarda cifrada con tu cuenta de Windows.</div></div>
-        <div class="ctl">
-          <input class="input" data-nas="host" value="${esc(s.nasHost)}" placeholder="NAS o 10.8.0.1" spellcheck="false">
-          <input class="input" data-nas="user" value="${esc(s.nasUser)}" placeholder="Usuario" spellcheck="false">
-          <input class="input" type="password" data-nas="password" placeholder="${s.nasHasPassword ? 'Contraseña guardada' : 'Contraseña'}">
-          <button class="btn btn-ghost btn-sm" data-action="nas-test">Conectar</button>
-        </div>
-        <div class="nas-status" id="nasStatus">${nasStatePill()}</div></div>` : ''}`}`}
     </div>
 
     <div class="set-group"><h3>Metadatos (TMDB)</h3>
-      ${REMOTE ? `<div class="set-row"><div class="lbl"><div class="t">Los gestiona CineLocal Server</div><div class="d">La clave de TMDB, el idioma y las correcciones se cambian en la web del servidor (Ajustes, con un usuario administrador).</div></div></div>` : `<div class="set-row"><div class="lbl"><div class="t">API key de TMDB</div>
+      <div class="set-row"><div class="lbl"><div class="t">API key de TMDB</div>
         <div class="d">Gratis en <a data-url="https://www.themoviedb.org/settings/api">themoviedb.org/settings/api</a>. Sirve la “Clave de la API” (v3) o el “Token de acceso de lectura” (v4).</div></div>
         <div class="ctl"><input class="input" type="password" data-set-text="tmdbKey" value="${esc(s.tmdbKey)}" placeholder="Pega aquí tu clave" style="min-width:260px">
         <button class="btn btn-ghost btn-sm" data-action="test-key">Probar</button><span id="keyStatus"></span></div></div>
-      <div class="set-row"><div class="lbl"><div class="t">Idioma de los metadatos</div><div class="d">Títulos, sinopsis y nombres de episodios.</div></div>
+      <div class="set-row"><div class="lbl"><div class="t">Idioma de los metadatos</div><div class="d">Títulos, sinopsis y nombres de episodios, para todos los usuarios.</div></div>
         <div class="ctl"><select class="select" data-set="metaLang">${opt(META_LANGS, s.metaLang)}</select></div></div>
       <div class="set-row"><div class="lbl"><div class="t">Volver a descargar todos los metadatos</div><div class="d">Útil si cambias de idioma o TMDB ha actualizado información. Se conservan las correcciones manuales.</div></div>
-        <div class="ctl"><button class="btn btn-ghost btn-sm" data-action="refresh-meta">Actualizar</button></div></div>`}
-    </div>
+        <div class="ctl"><button class="btn btn-ghost btn-sm" data-action="refresh-meta">Actualizar</button></div></div>
+    </div>` : ''}
 
     <div class="set-group"><h3>Audio y subtítulos</h3>
       <div class="set-row"><div class="lbl"><div class="t">Idioma de audio preferido</div><div class="d">Se selecciona automáticamente si el archivo tiene esa pista; si no, se usa la pista por defecto.</div></div>
@@ -939,11 +1257,11 @@ function viewSettings() {
 
     ${WEB ? '' : `<div class="set-group" id="letterboxd"><h3>Letterboxd</h3>
       ${letterboxdSettingsHTML(s, sw)}
-    </div>
-
-    <div class="set-group"><h3>Descargas (eMule)</h3>
-      ${emuleSettingsHTML(s, sw)}
     </div>`}
+
+    ${!WEB && isAdmin() ? `<div class="set-group"><h3>Descargas (eMule)</h3>
+      ${emuleSettingsHTML(s, sw)}
+    </div>` : ''}
 
     ${window.api.platform === 'win32' ? `<div class="set-group" id="discord"><h3>Discord</h3>
       ${discordSettingsHTML(s, sw)}
@@ -960,12 +1278,12 @@ function viewSettings() {
   </div>`;
 }
 
-/** Web: quién ha iniciado sesión, con qué servidor, y cerrar sesión */
-function webAccountHTML() {
+/** Quién ha iniciado sesión, en qué servidor, y cerrar sesión */
+function accountHTML() {
   const me = S.me || {};
   return `<div class="set-group" id="account"><h3>Cuenta</h3>
-      <div class="set-row"><div class="lbl"><div class="t">${esc(me.user || '')}${me.admin ? ' · administrador' : ''}</div>
-        <div class="d">CineLocal Server ${esc(me.version || '')} · conversión de vídeo con ${me.hwaccel === 'vaapi' ? 'la gráfica del NAS' : 'el procesador del NAS'}.${me.admin ? '' : ' Sólo un administrador puede cambiar la biblioteca y los metadatos; el progreso y Mi lista son tuyos.'}</div></div>
+      <div class="set-row"><div class="lbl"><div class="t">${esc(me.user || '')} · ${me.admin ? 'CineLocal Admin' : 'CineLocal User'}</div>
+        <div class="d">CineLocal Server ${esc(me.version || '')}${WEB ? '' : ' en ' + esc(S.settings.remoteUrl || '')} · conversión de vídeo con ${me.hwaccel === 'vaapi' ? 'la gráfica del NAS' : 'el procesador del NAS'}.${me.admin ? ' Puedes corregir fichas, gestionar las peticiones y cambiar los ajustes del servidor.' : ' Tu progreso, tus listas, tus peticiones y estos ajustes de audio, subtítulos y plataformas son sólo tuyos.'}${me.groups ? '' : ' (Todavía no se usan los grupos de DSM: el acceso lo decide la configuración del servidor.)'}</div></div>
         <div class="ctl"><button class="btn btn-ghost btn-sm" data-action="logout">Cerrar sesión</button></div></div>
     </div>`;
 }
@@ -1140,7 +1458,7 @@ function setServers(r) {
 /** Se pide al abrir Descargas y, con la lista visible, cada 5 s como mucho (al ritmo del sondeo de eMule) */
 async function loadServers(force = false) {
   const srv = S.emule.srv;
-  if (S.route.name !== 'downloads' || !S.settings.emuleEnabled || !S.emule.snap.ok || document.hidden) return;
+  if (S.route.name !== 'downloads' || !emuleOn() || !S.emule.snap.ok || document.hidden) return;
   // con la plantilla antigua sólo se vuelve a mirar si lo pide el usuario o si la cabecera ya trae la nueva
   if (!force && ((S.emule.snap.status?.template || 1) < 2 || (!srvOpen() && srv.list))) return;
   if (srv.loading || (!force && Date.now() - srv.at < 5000)) return;
@@ -1241,7 +1559,7 @@ function paintEmule() {
   const badge = $('#dlBadge');
   badge.textContent = n;
   badge.classList.toggle('hidden', !n);
-  $('#navDownloads').classList.toggle('hidden', !S.settings.emuleEnabled);
+  $('#navDownloads').classList.toggle('hidden', !emuleOn());
   if (S.route.name === 'downloads') {
     $('#dlStatus').innerHTML = emuleStatusHTML();
     $('#dlList').innerHTML = downloadsListHTML();
@@ -1307,7 +1625,7 @@ function emuleSettingsHTML(s, sw) {
   const info = S.emule.info;
   if (!s.emuleEnabled) {
     return `<div class="set-row"><div class="lbl"><div class="t">Buscar y descargar con eMule</div>
-      <div class="d">Usa el servidor web de eMule para buscar, descargar y seguir el progreso desde CineLocal. Lo descargado pasa a tu biblioteca al terminar.</div></div>
+      <div class="d">Usa el servidor web de eMule de este PC para buscar, descargar y seguir el progreso desde CineLocal. Lo descargado se copia al NAS al terminar. Sólo para administradores.</div></div>
       <div class="ctl">${sw('emuleEnabled', false)}</div></div>`;
   }
   const tmpl = info?.templatePath || '…';
@@ -1327,9 +1645,18 @@ function emuleSettingsHTML(s, sw) {
       <button class="btn btn-ghost btn-sm" data-action="emule-test">Probar</button><span id="emuleTest"></span></div></div>
     <div class="set-row"><div class="lbl"><div class="t">Puerto</div></div>
       <div class="ctl"><input class="input" data-set-text="emulePort" value="${esc(s.emulePort)}" style="min-width:0;width:100px"></div></div>
-    <div class="set-row"><div class="lbl"><div class="t">Mover a la biblioteca al terminar</div>
-      <div class="d">Las películas van a la carpeta de la biblioteca y los episodios (S01E02, 1x02, Cap.102) a la carpeta de su serie. Sólo se mueven las descargas que CineLocal ha visto en curso${info?.incoming?.length ? `, desde <code>${esc(info.incoming.join(', '))}</code>` : ''}.</div></div>
+    <div class="set-row"><div class="lbl"><div class="t">Copiar al NAS al terminar</div>
+      <div class="d">Las películas van a la carpeta «Películas» de la biblioteca y los episodios (S01E02, 1x02, Cap.102) a la carpeta de su serie; CineLocal Server los añade solo. Sólo se copian las descargas que CineLocal ha visto en curso${info?.incoming?.length ? `, desde <code>${esc(info.incoming.join(', '))}</code>` : ''}. El PC tiene que llegar al NAS (en casa o con la VPN).</div></div>
       <div class="ctl">${sw('emuleMoveToLibrary', s.emuleMoveToLibrary !== false)}</div></div>
+    ${s.emuleMoveToLibrary !== false ? `<div class="set-row nas-row"><div class="lbl"><div class="t">Carpeta de la biblioteca en el NAS</div>
+      <div class="d">La misma carpeta que usa CineLocal Server, vista desde Windows: <code>\\\\NAS\\Multimedia</code> (o <code>\\\\10.8.0.1\\Multimedia</code> por la VPN). Usuario del NAS con permiso de escritura en ella; si lo dejas vacío, se usa la sesión que tenga Windows. La contraseña se guarda cifrada con tu cuenta de Windows.</div></div>
+      <div class="ctl">
+        <input class="input" data-nas="dest" value="${esc(s.emuleDest)}" placeholder="\\\\NAS\\Multimedia" spellcheck="false">
+        <input class="input" data-nas="user" value="${esc(s.nasUser)}" placeholder="Usuario del NAS" spellcheck="false">
+        <input class="input" type="password" data-nas="password" placeholder="${s.nasHasPassword ? 'Contraseña guardada' : 'Contraseña'}">
+        <button class="btn btn-ghost btn-sm" data-action="nas-test">Comprobar y guardar</button>
+      </div>
+      <div class="nas-status" id="nasStatus">${nasStatePill()}</div></div>` : ''}
     <div class="set-row"><div class="lbl"><div class="t">Programa eMule</div>
       <div class="d">${info?.exe ? `Detectado: ${esc(info.exe)}` : info ? 'No encontrado.' : 'Buscando…'}</div></div>
       <div class="ctl"><button class="btn btn-ghost btn-sm" data-action="emule-launch">Abrir eMule</button><button class="btn btn-ghost btn-sm" data-action="pick-emule">Seleccionar emule.exe</button></div></div>`;
@@ -1371,10 +1698,7 @@ function letterboxdSettingsHTML(s, sw) {
       <div class="ctl">${S.lb.syncedAt ? '<button class="btn btn-ghost btn-sm" data-action="lb-clear">Borrar datos</button>' : ''}</div></div>
     <div class="set-row"><div class="lbl"><div class="t">Importar la exportación de Letterboxd</div>
       <div class="d">Alternativa si la lectura del perfil falla: en Letterboxd, <a data-url="https://letterboxd.com/settings/data/">Settings → Data → Export your data</a>, y elige aquí el .zip descargado.</div></div>
-      <div class="ctl"><button class="btn btn-ghost btn-sm" data-action="lb-import" ${S.lb.status?.running ? 'disabled' : ''}>Elegir .zip</button></div></div>
-    <div class="set-row"><div class="lbl"><div class="t">Marcar como vistas las que ya has visto en Letterboxd</div>
-      <div class="d">Sólo películas de tu biblioteca que aún no hayas empezado en CineLocal.</div></div>
-      <div class="ctl">${sw('lbMarkWatched', s.lbMarkWatched !== false)}</div></div>`;
+      <div class="ctl"><button class="btn btn-ghost btn-sm" data-action="lb-import" ${S.lb.status?.running ? 'disabled' : ''}>Elegir .zip</button></div></div>`;
 }
 function paintLbStatus() {
   if (S.route.name !== 'settings') return;
@@ -1415,29 +1739,6 @@ function discordSettingsHTML(s, sw) {
     <div class="set-row"><div class="lbl"><div class="t">Estado</div><div class="d" id="discordStatus">${discordStatusHTML()}</div></div></div>`;
 }
 /** CineLocal Server como origen de la biblioteca: el NAS por internet, sin VPN */
-function remoteSettingsHTML(s, sw) {
-  const t = S.remoteTest;
-  const status = t === 'running' ? '<span class="status-pill"><span class="spinner sm"></span>Conectando…</span>'
-    : t?.error ? `<span class="status-pill bad">${esc(t.error)}</span>`
-    : S.lib.remote && S.lib.error ? `<span class="status-pill bad">${esc(S.lib.error)}</span>`
-    : s.remoteConnected ? `<span class="status-pill ok">Conectado</span> · ${esc(s.remoteUser)} en ${esc(s.remoteUrl)}` : '';
-  return `<div class="set-row"><div class="lbl"><div class="t">Usar CineLocal Server</div>
-      <div class="d">La biblioteca de tu NAS a través de internet, sin VPN. El progreso y Mi lista se comparten con la web del servidor y con tus otros dispositivos.</div></div>
-      <div class="ctl">${sw('remoteMode', s.remoteMode)}</div></div>
-    ${s.remoteMode ? `<div class="set-row nas-row"><div class="lbl"><div class="t">Conexión con el servidor</div>
-      <div class="d">Entra con tu usuario de DSM. La contraseña no se guarda: sólo la sesión, cifrada con tu cuenta de Windows, durante 30 días.</div></div>
-      <div class="ctl">
-        <input class="input" data-remote="url" value="${esc(s.remoteUrl)}" placeholder="https://cine.tudominio.com" spellcheck="false">
-        <input class="input" data-remote="user" value="${esc(s.remoteUser)}" placeholder="Usuario" spellcheck="false">
-        <input class="input" type="password" data-remote="password" placeholder="Contraseña">
-        <input class="input ${S.remoteOtp ? '' : 'hidden'}" data-remote="otp" placeholder="Código de verificación" inputmode="numeric" autocomplete="one-time-code">
-        <button class="btn btn-ghost btn-sm" data-action="remote-login">Conectar</button>
-        ${s.remoteConnected ? '<button class="btn btn-ghost btn-sm" data-action="remote-logout">Cerrar sesión</button>' : ''}
-      </div>
-      <div class="nas-status" id="remoteStatus">${status}</div></div>` : ''}`;
-}
-
-/** Estado de la sesión en el NAS: la prueba en curso o, si no, el último escaneo */
 function nasStatePill() {
   const t = S.nasTest, n = S.lib.nas;
   if (t === 'running') return '<span class="status-pill"><span class="spinner sm"></span>Conectando…</span>';
@@ -1554,6 +1855,8 @@ function render(keepScroll = false) {
     case 'director': html = viewDirector(r.id); break;
     case 'settings': html = viewSettings(); break;
     case 'downloads': html = viewDownloads(); break;
+    case 'requests': html = viewRequests(); break;
+    case 'title': html = viewTitle(r.type, r.id); break;
     default: html = viewHome();
   }
   view.innerHTML = html;
@@ -1613,10 +1916,11 @@ async function play(itemId, episodeId, fromStart) {
   }
 }
 
-function toast(text, type = '') {
+function toast(text, type = '', onClick = null) {
   const el = document.createElement('div');
-  el.className = 'toast ' + type;
+  el.className = 'toast ' + type + (onClick ? ' clickable' : '');
   el.textContent = text;
+  if (onClick) el.addEventListener('click', () => { el.remove(); onClick(); });
   $('#toasts').appendChild(el);
   setTimeout(() => { el.style.transition = 'opacity .3s'; el.style.opacity = '0'; setTimeout(() => el.remove(), 300); }, type === 'error' ? 7000 : 3000);
 }
@@ -1701,9 +2005,7 @@ async function saveLibPaths(list) {
 async function saveSetting(key, value) {
   S.settings = await window.api.setSettings({ [key]: value });
   if (key === 'region') S.providerList = null;   // recargar la lista del nuevo país (los ids de TMDB son los mismos en todos)
-  if (key === 'nasMode') { S.nasTest = null; S.lib = await window.api.getLibrary(); }
-  if (key === 'remoteMode') { S.remoteTest = null; S.lib = await window.api.getLibrary(); }
-  if (key === 'subLang' || key === 'emuleEnabled' || key === 'playerMode' || key === 'region' || key === 'nasMode' || key === 'remoteMode') render(true);
+  if (key === 'subLang' || key === 'emuleEnabled' || key === 'emuleMoveToLibrary' || key === 'playerMode' || key === 'region') render(true);
   if (key === 'lbUser') { setLb(await window.api.letterboxd.get()); paintLbStatus(); }
   if (key.startsWith('emule')) paintEmule();
   if (key === 'emuleEnabled' && value) loadEmuleInfo();
@@ -1843,7 +2145,21 @@ document.addEventListener('click', async (e) => {
   if (urlEl) { window.api.openExternal(urlEl.dataset.url); return; }
 
   const nav = t.closest('[data-nav]');
-  if (nav) { closeModal(); go(nav.dataset.nav); return; }
+  if (nav) {
+    closeModal();
+    // «Ver todo» de la fila de una lista: la página de Listas con esa pestaña
+    const [route, listId] = nav.dataset.nav.split(':');
+    if (route === 'list' && listId) S.listTab = listId;
+    go(route);
+    return;
+  }
+
+  const lt = t.closest('[data-list-tab]');
+  if (lt) { S.listTab = lt.dataset.listTab || null; render(true); return; }
+  const rt = t.closest('[data-req-tab]');
+  if (rt) { S.reqTab = rt.dataset.reqTab; render(true); return; }
+  const rty = t.closest('[data-req-type]');
+  if (rty) { S.reqSearch = { ...S.reqSearch, type: rty.dataset.reqType, results: [] }; render(true); searchRequests(S.reqSearch.q); return; }
 
   const arrow = t.closest('[data-scroll]');
   if (arrow) {
@@ -1866,6 +2182,47 @@ document.addEventListener('click', async (e) => {
     }
     else if (a === 'scan') scanNow();
     else if (a === 'fav') { S.lib.favorites = await window.api.toggleFavorite(action.dataset.id); render(true); }
+    else if (a === 'lists-pick') {
+      const it = action.dataset.id ? byId(action.dataset.id) : null;
+      const entry = it ? entryOf(it) : JSON.parse(action.dataset.entry);
+      openListPicker(entry, it?.id || null);
+    }
+    else if (a === 'pick-fav') { S.lib.favorites = await window.api.toggleFavorite(action.dataset.id); paintListPicker(); render(true); }
+    else if (a === 'pick-list') { if (await listOp({ op: 'toggle', id: action.dataset.list, entry: S.picker.entry })) { paintListPicker(); render(true); } }
+    else if (a === 'list-create') {
+      const input = $('[data-list-new-name]');
+      if (input.value.trim() && await listOp({ op: 'create', name: input.value, entry: S.picker.entry })) { input.value = ''; paintListPicker(); render(true); }
+    }
+    else if (a === 'list-new') {
+      const name = await askListName('Nueva lista');
+      if (name && await listOp({ op: 'create', name })) { S.listTab = listsOf()[listsOf().length - 1].id; render(true); }
+    }
+    else if (a === 'list-rename') {
+      const l = listsOf().find(x => x.id === action.dataset.list);
+      const name = l && await askListName('Renombrar lista', l.name);
+      if (name && name !== l.name && await listOp({ op: 'rename', id: l.id, name })) render(true);
+    }
+    else if (a === 'list-delete') {
+      const l = listsOf().find(x => x.id === action.dataset.list);
+      if (l && await confirmModal(`¿Eliminar «${l.name}»?`, `Se borra la lista y sus ${l.items.length} títulos guardados en ella. Las películas y series de tu biblioteca no se tocan.`, 'Eliminar lista')
+        && await listOp({ op: 'delete', id: l.id })) { S.listTab = null; render(true); }
+    }
+    else if (a === 'request') {
+      const e = JSON.parse(action.dataset.entry);
+      const q = await askRequest(e);
+      if (q && await requestOp({ op: 'create', entry: { ...e, note: q.note } })) { toast(`Pedida: ${e.title}`, 'ok'); render(true); }
+    }
+    else if (a === 'req-cancel') { if (await requestOp({ op: 'cancel', id: action.dataset.id })) render(true); }
+    else if (a === 'req-remove') {
+      const r = S.requests.items.find(x => x.id === action.dataset.id);
+      if (r && await confirmModal(`¿Borrar la petición de «${r.title}»?`, 'Desaparece para todos los que la pidieron, sin avisarles.', 'Borrar') && await requestOp({ op: 'remove', id: r.id })) render(true);
+    }
+    else if (a === 'req-resolve') {
+      const r = S.requests.items.find(x => x.id === action.dataset.id);
+      const status = action.dataset.status;
+      const reply = status === 'rejected' ? await askReply(r?.title || '') : '';
+      if (r && reply !== null && await requestOp({ op: 'resolve', id: r.id, status, reply })) render(true);
+    }
     else if (a === 'trailer') window.api.openExternal(action.dataset.url);
     else if (a === 'menu') $('#detailMenu').classList.toggle('hidden');
     else if (a === 'identify') { $('#detailMenu')?.classList.add('hidden'); identify(action.dataset.id); }
@@ -1880,12 +2237,10 @@ document.addEventListener('click', async (e) => {
       S.lib.progress = await window.api.markProgress({ paths, watched: action.dataset.watched === '1' });
       render(true);
     } else if (a === 'fullscreen') window.api.toggleFullscreen();
-    else if (a === 'logout') window.api.logout();
-    else if (a === 'pick-folder') {
-      const p = await window.api.pickFolder();
-      if (p) { const list = libPaths(); list[+action.dataset.idx || 0] = p; await saveLibPaths(list); }
-    } else if (a === 'add-lib-path') {
-      const p = await window.api.pickFolder();
+    else if (a === 'logout') logout();
+    else if (a === 'add-lib-path') {
+      // carpetas del servidor (dentro del contenedor): se escriben, no se eligen en este PC
+      const p = await askListName('Añadir carpeta del servidor', '', 'Ruta en el servidor, p. ej. /media/Documentales');
       if (p) {
         if (libPaths().some(x => x.toLowerCase() === p.toLowerCase())) toast('Esa carpeta ya está en la biblioteca');
         else { await saveLibPaths([...libPaths(), p]); toast('Carpeta añadida: escaneando…', 'ok'); }
@@ -1908,35 +2263,17 @@ document.addEventListener('click', async (e) => {
       clearTimeout(S.discordTestTimer);
       S.discordTestTimer = setTimeout(() => { S.discordTest = null; paintDiscord(); }, r.ok ? 15000 : 8000);
     }
-    else if (a === 'remote-login') {
-      const val = k => $(`[data-remote="${k}"]`).value.trim();
-      const q = { url: val('url'), user: val('user'), password: $('[data-remote="password"]').value, otp: val('otp') };
-      if (!q.password) { S.remoteTest = { error: 'Escribe tu contraseña de DSM' }; render(true); return; }
-      S.remoteTest = 'running'; $('#remoteStatus').innerHTML = '<span class="status-pill"><span class="spinner sm"></span>Conectando…</span>';
-      const r = await window.api.remote.login(q);
-      S.remoteOtp = !!r.otp || (S.remoteOtp && !r.ok);
-      S.remoteTest = r.ok ? null : { error: r.error };
-      if (r.ok) { S.settings = r.settings; S.lib = await window.api.getLibrary(); toast(`Conectado a CineLocal Server: ${S.lib.items.length} títulos`, 'ok'); }
-      render(true);
-    }
-    else if (a === 'remote-logout') {
-      S.settings = await window.api.remote.logout();
-      S.remoteTest = null;
-      S.lib = await window.api.getLibrary();
-      render(true);
-    }
     else if (a === 'nas-test') {
-      // sólo se guarda lo que conecta, para no escanear con datos a medias
+      // carpeta del NAS donde eMule copia lo descargado: sólo se guarda si se puede abrir
       const val = k => $(`[data-nas="${k}"]`).value.trim();
-      const q = { host: val('host'), user: val('user'), password: $('[data-nas="password"]').value };
+      const q = { dest: val('dest').replace(/[\\/]+$/, ''), user: val('user'), password: $('[data-nas="password"]').value };
       S.nasTest = 'running'; $('#nasStatus').innerHTML = nasStatePill();
-      const r = await window.api.testNas(q);
+      const r = await window.api.testNas(q).catch(e => ({ ok: false, error: errText(e) }));
       S.nasTest = r;
       if (r.ok) {
-        const patch = { nasHost: q.host, nasUser: q.user };
+        const patch = { emuleDest: q.dest, nasUser: q.user };
         if (q.password) patch.nasPassword = q.password;
         S.settings = await window.api.setSettings(patch);
-        S.lib = await window.api.getLibrary();
         render(true);
       } else $('#nasStatus').innerHTML = nasStatePill();
     }
@@ -1999,6 +2336,8 @@ document.addEventListener('click', async (e) => {
 
   const open = t.closest('[data-open]');
   if (open) { go('detail', { id: open.dataset.open }); return; }
+  const tt = t.closest('[data-title-id]');
+  if (tt) { go('title', { type: tt.dataset.titleType, id: +tt.dataset.titleId }); return; }
 
   const dot = t.closest('[data-hero-dot]');
   if (dot) { setHero(+dot.dataset.heroDot); startHeroTimer(); return; }
@@ -2062,6 +2401,7 @@ window.addEventListener('mouseup', (e) => { if (e.button === 3) { e.preventDefau
 
 let searchTimer;
 document.addEventListener('input', (e) => {
+  if (e.target.id === 'reqQuery') { searchRequests(e.target.value); return; }
   if (e.target.id !== 'dirFilter') return;
   S.filters.directors.q = e.target.value;
   const all = allDirectors();
@@ -2101,7 +2441,12 @@ window.api.onPlayerClosed(({ error }) => {
   render(true);
 });
 window.api.onFullscreen((fs) => document.body.classList.toggle('fullscreen', fs));
-window.api.onToast(({ type, text }) => toast(text, type));
+window.api.onSessionExpired?.(async (msg) => { S.session = await window.api.session.get(); showLogin(msg); });
+window.api.onToast(({ type, text, action }) => toast(text, type, action === 'requests' ? () => go('requests') : null));
+window.api.onRequests?.((v) => {
+  setRequests(v);
+  if (S.route.name === 'requests' && !/INPUT/.test(document.activeElement?.tagName)) render(true);
+});
 window.api.emule.onUpdate((snap) => { S.emule.snap = snap; paintEmule(); });
 window.api.letterboxd.onStatus((st) => { S.lb.status = st; paintLbStatus(); });
 window.api.letterboxd.onUpdate((snap) => {
@@ -2131,22 +2476,88 @@ window.api.onMetaProgress((p) => {
   el.innerHTML = `<div class="spinner"></div><span>Descargando metadatos ${p.done}/${p.total}${p.title ? ' · ' + esc(p.title) : ''}</span>`;
 });
 
+// ---------------------------------------------------------------- inicio de sesión (escritorio)
+/** Pantalla de entrada: servidor (ya puesto), usuario y contraseña de DSM, y el código si hay verificación en dos pasos */
+function showLogin(message = '') {
+  closeModal();
+  document.body.classList.add('login-mode');
+  const root = $('#loginRoot');
+  root.classList.remove('hidden');
+  root.innerHTML = `<form class="login-card" id="loginForm" autocomplete="on">
+      <div class="brand">
+        <svg viewBox="0 0 32 32" aria-hidden="true"><defs><linearGradient id="lg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#8b5cf6"/><stop offset="1" stop-color="#ec4899"/></linearGradient></defs><rect x="2" y="2" width="28" height="28" rx="8" fill="url(#lg)"/><path d="M12.5 9.5v13l10-6.5z" fill="#fff"/></svg>
+        <span>Cine<b>Local</b></span>
+      </div>
+      <p class="sub">Entra con tu usuario del NAS</p>
+      <div id="lgServerBox" class="${S.session.url ? 'hidden' : ''}">
+        <label for="lgServer">Servidor</label>
+        <input class="input" id="lgServer" value="${esc(S.session.url || '')}" placeholder="https://cine.tudominio.com" spellcheck="false">
+      </div>
+      <label for="lgUser">Usuario</label>
+      <input class="input" id="lgUser" value="${esc(S.session.user || '')}" autocomplete="username" spellcheck="false" required>
+      <label for="lgPass">Contraseña</label>
+      <input class="input" id="lgPass" type="password" autocomplete="current-password" required>
+      <div id="lgOtpBox" class="hidden">
+        <label for="lgOtp">Código de verificación en dos pasos</label>
+        <input class="input" id="lgOtp" inputmode="numeric" autocomplete="one-time-code" maxlength="8">
+      </div>
+      <button class="btn btn-accent" id="lgGo" type="submit">Entrar</button>
+      <div id="lgErr" class="err ${message ? '' : 'hidden'}" role="alert">${esc(message)}</div>
+      <div class="server-line ${S.session.url ? '' : 'hidden'}">Servidor: ${esc(S.session.url || '')} · <button type="button" id="lgChange">Cambiar</button></div>
+    </form>`;
+  $('#lgChange')?.addEventListener('click', () => { $('#lgServerBox').classList.remove('hidden'); $('.server-line').classList.add('hidden'); $('#lgServer').focus(); });
+  setTimeout(() => ($('#lgUser').value ? $('#lgPass') : $('#lgUser')).focus(), 30);
+  $('#loginForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const go = $('#lgGo'), err = $('#lgErr');
+    go.disabled = true; go.textContent = 'Entrando…'; err.classList.add('hidden');
+    const r = await window.api.remote.login({ url: $('#lgServer').value.trim(), user: $('#lgUser').value.trim(), password: $('#lgPass').value, otp: $('#lgOtp').value.trim() })
+      .catch(x => ({ ok: false, error: errText(x) }));
+    go.disabled = false; go.textContent = 'Entrar';
+    if (r.ok) { hideLogin(); boot(); return; }
+    if (r.otp) { $('#lgOtpBox').classList.remove('hidden'); $('#lgOtp').focus(); }
+    err.textContent = r.error || 'No se ha podido iniciar sesión';
+    err.classList.remove('hidden');
+  });
+}
+function hideLogin() {
+  document.body.classList.remove('login-mode');
+  $('#loginRoot').classList.add('hidden');
+  $('#loginRoot').innerHTML = '';
+}
+async function logout() {
+  if (WEB) return window.api.logout();
+  await window.api.remote.logout();
+  S.session = await window.api.session.get();
+  S.lib = { items: [], progress: {}, favorites: [] };
+  S.history = []; S.route = { name: 'home' };
+  showLogin();
+}
+
 // ---------------------------------------------------------------- arranque
-(async function init() {
-  if (window.api.platform === 'win32') document.body.classList.add('win');
-  if (WEB) { document.body.classList.add('web'); S.me = await window.api.me(); }
-  document.body.classList.toggle('fullscreen', await window.api.isFullscreen());
+/** Carga todo con la sesión ya abierta (al abrir la app, o al entrar desde la pantalla de inicio de sesión) */
+async function boot() {
   S.settings = await window.api.getSettings();
   S.lib = await window.api.getLibrary();
   S.emule.snap = await window.api.emule.get();
   setLb(await window.api.letterboxd.get());
   S.update = await window.api.update.status();
   S.discord = await window.api.discord.status();
+  await refreshMe();
   render();
   paintUpdToast();
   paintEmule();
-  if (S.settings.emuleEnabled) loadEmuleInfo();
-  // escaneo en segundo plano al abrir (detecta archivos nuevos)
-  S.lib = await window.api.scan();
-  render(true);
+  if (emuleOn()) loadEmuleInfo();
+}
+
+(async function init() {
+  if (window.api.platform === 'win32') document.body.classList.add('win');
+  if (WEB) document.body.classList.add('web');
+  document.body.classList.toggle('fullscreen', await window.api.isFullscreen());
+  // escritorio: sin sesión en CineLocal Server, primero la pantalla de inicio de sesión
+  if (!WEB) {
+    S.session = await window.api.session.get();
+    if (!S.session.loggedIn) { showLogin(); return; }
+  }
+  await boot();
 })();

@@ -12,9 +12,12 @@ contextBridge.exposeInMainWorld('api', {
   setSettings: (patch) => ipcRenderer.invoke('settings:set', patch),
   testKey: (key) => ipcRenderer.invoke('tmdb:test', key),
   testNas: (q) => ipcRenderer.invoke('nas:test', q),
+  session: { get: () => ipcRenderer.invoke('session:get') },
+  onSessionExpired: on('session:expired'),
   remote: {
     login: (q) => ipcRenderer.invoke('remote:login', q),
-    logout: () => ipcRenderer.invoke('remote:logout')
+    logout: () => ipcRenderer.invoke('remote:logout'),
+    me: () => ipcRenderer.invoke('remote:me')
   },
   getLibrary: () => ipcRenderer.invoke('library:get'),
   scan: () => ipcRenderer.invoke('library:scan'),
@@ -23,10 +26,13 @@ contextBridge.exposeInMainWorld('api', {
   getProviders: (id) => ipcRenderer.invoke('meta:providers', id),
   getProviderList: () => ipcRenderer.invoke('meta:providerList'),
   searchMeta: (q) => ipcRenderer.invoke('meta:search', q),
+  getTitle: (q) => ipcRenderer.invoke('meta:title', q),
+  requests: { get: () => ipcRenderer.invoke('requests:get'), op: (q) => ipcRenderer.invoke('requests:op', q) },
   identify: (q) => ipcRenderer.invoke('meta:identify', q),
   play: (q) => ipcRenderer.invoke('play', q),
   markProgress: (q) => ipcRenderer.invoke('progress:mark', q),
   toggleFavorite: (id) => ipcRenderer.invoke('favorites:toggle', id),
+  lists: { op: (q) => ipcRenderer.invoke('lists:op', q) },
   toggleFullscreen: () => ipcRenderer.invoke('window:toggleFullscreen'),
   setFullscreen: (v) => ipcRenderer.invoke('window:setFullscreen', v),
   isFullscreen: () => ipcRenderer.invoke('window:isFullscreen'),
@@ -82,5 +88,6 @@ contextBridge.exposeInMainWorld('api', {
   onFullscreen: on('window:fullscreen'),
   onToast: on('toast'),
   onNewItems: on('library:new'),
+  onRequests: on('requests:updated'),
   onOpenItem: on('open-item')
 });
