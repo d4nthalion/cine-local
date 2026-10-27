@@ -65,6 +65,7 @@ import coil.compose.AsyncImage
 import com.cinelocal.android.Nav
 import com.cinelocal.android.core.DlSummary
 import com.cinelocal.android.core.LbEntry
+import com.cinelocal.android.core.Lists
 import com.cinelocal.android.core.videoPaths
 import com.cinelocal.android.core.Title
 import com.cinelocal.android.repo
@@ -233,6 +234,15 @@ fun HomeScreen(nav: Nav) {
             }
             section("Añadido recientemente", first = isFirst()) { items(recent, key = { "rec-" + it.id }) { poster(it) } }
             if (favs.isNotEmpty()) section("Mi lista", { nav.tab("list") }) { items(favs, key = { "fav-" + it.id }) { poster(it) } }
+            // listas propias: lo que tienes, y lo que no, apagado (como la watchlist)
+            for (l in user.lists) {
+                val shown = l.items.take(30).map { it to Lists.owned(it, titles) }.filter { (e, t) -> t != null || e.tmdb != null }
+                if (shown.isNotEmpty()) section(l.name, { nav.tab("list") }) {
+                    items(shown, key = { "l-" + l.id + "-" + it.first.key }) { (e, t) ->
+                        if (t != null) poster(t) else Lists.asLbEntry(e).let { lb -> MissingCard(lb, CARD_W, lb.key in user.requested) { sheet = lb } }
+                    }
+                }
+            }
             if (wl.isNotEmpty()) section("Tu watchlist de Letterboxd", nav::watchlist) {
                 items(wl, key = { "wl-" + it.first.key }) { (e, t) ->
                     if (t != null) poster(t) else MissingCard(e, CARD_W, e.key in user.requested) { sheet = e }

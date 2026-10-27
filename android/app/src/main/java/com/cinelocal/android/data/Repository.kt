@@ -6,6 +6,9 @@ import android.net.Uri
 import com.cinelocal.android.core.Episode
 import com.cinelocal.android.core.LbEntry
 import com.cinelocal.android.core.Letterboxd
+import com.cinelocal.android.core.ListEntry
+import com.cinelocal.android.core.Lists
+import com.cinelocal.android.core.UserList
 import com.cinelocal.android.core.LibraryData
 import com.cinelocal.android.core.LibraryItem
 import com.cinelocal.android.core.LibraryScanner
@@ -207,24 +210,24 @@ class Repository(private val context: Context) {
     // el servidor (y al revés), para que cambiar de origen no mezcle ni pierda nada
     private val stash = mapOf(
         true to Stash(store("library.server.json", LibraryData.serializer(), LibraryData()), store("metadata.server.json", MapSerializer(String.serializer(), MetaEntry.serializer()), emptyMap()),
-            store("progress.server.json", MapSerializer(String.serializer(), Progress.serializer()), emptyMap()), store("favorites.server.json", ListSerializer(String.serializer()), emptyList())),
+            store("progress.server.json", MapSerializer(String.serializer(), Progress.serializer()), emptyMap()), store("favorites.server.json", ListSerializer(String.serializer()), emptyList()), store("lists.server.json", ListSerializer(UserList.serializer()), emptyList())),
         false to Stash(store("library.local.json", LibraryData.serializer(), LibraryData()), store("metadata.local.json", MapSerializer(String.serializer(), MetaEntry.serializer()), emptyMap()),
-            store("progress.local.json", MapSerializer(String.serializer(), Progress.serializer()), emptyMap()), store("favorites.local.json", ListSerializer(String.serializer()), emptyList()))
+            store("progress.local.json", MapSerializer(String.serializer(), Progress.serializer()), emptyMap()), store("favorites.local.json", ListSerializer(String.serializer()), emptyList()), store("lists.local.json", ListSerializer(UserList.serializer()), emptyList()))
     )
 
     private class Stash(
         val library: JsonStore<LibraryData>, val metadata: JsonStore<Map<String, MetaEntry>>,
-        val progress: JsonStore<Map<String, Progress>>, val favorites: JsonStore<List<String>>
+        val progress: JsonStore<Map<String, Progress>>, val favorites: JsonStore<List<String>>, val lists: JsonStore<List<UserList>>
     )
 
     private fun swapLibrary(toServer: Boolean) {
         stash.getValue(!toServer).apply {
             library.set(this@Repository.library.value); metadata.set(this@Repository.metadata.value)
-            progress.set(this@Repository.progress.value); favorites.set(userState.value.favorites)
+            progress.set(this@Repository.progress.value); favorites.set(userState.value.favorites); lists.set(userState.value.lists)
         }
         stash.getValue(toServer).apply {
             this@Repository.library.set(library.value); this@Repository.metadata.set(metadata.value)
-            this@Repository.progress.set(progress.value); userState.update { it.copy(favorites = favorites.value) }
+            this@Repository.progress.set(progress.value); userState.update { it.copy(favorites = favorites.value, lists = lists.value) }
         }
         onlyDownloaded.value = false
     }
@@ -263,7 +266,7 @@ class Repository(private val context: Context) {
         progress.set(r.progress + newer)
         // lo visto sin conexión (descargado) sube ahora
         for ((k, v) in newer) syncProgress(k, v, force = true)
-        userState.update { it.copy(favorites = r.favorites) }
+        userState.update { it.copy(favorites = r.favorites, lists = r.lists) }
     }
 
     private fun location(s: Settings = settings.value): SmbLocation =
@@ -435,6 +438,23 @@ class Repository(private val context: Context) {
     }
 
     fun isFavorite(id: String) = id in userState.value.favorites
+
+    /**
+     * Listas propias (además de Mi lista). Con CineLocal Server, el servidor manda: se guardan en el usuario del NAS.
+     * Lanza Lists.ListException / IOException con el motivo en español.
+     */
+    suspend fun listOp(op: String, id: String? = null, name: String? = null, entry: ListEntry? = null) = withContext(Dispatchers.IO) {
+        val lists = if (settings.value.server) server().listOp(op, id, name, entry)
+        else userState.value.lists.let { l ->
+            when (op) {
+                "create" -> Lists.create(l, name.orEmpty(), entry)
+                "rename" -> Lists.rename(l, id!!, name.orEmpty())
+                "delete" -> Lists.delete(l, id!!)
+                else -> Lists.toggle(l, id!!, entry!!)
+            }
+        }
+        userState.update { it.copy(lists = lists) }
+    }
 
     fun toggleFavorite(id: String) {
         userState.update { st ->

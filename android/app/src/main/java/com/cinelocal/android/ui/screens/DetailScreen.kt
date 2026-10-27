@@ -87,6 +87,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import com.cinelocal.android.Nav
 import com.cinelocal.android.core.DlSummary
+import com.cinelocal.android.core.Lists
 import com.cinelocal.android.core.DownloadIndex
 import com.cinelocal.android.core.Episode
 import com.cinelocal.android.core.Space
@@ -109,6 +110,7 @@ import com.cinelocal.android.ui.lbOf
 import com.cinelocal.android.ui.seriesState
 import com.cinelocal.android.ui.offlineSeriesState
 import com.cinelocal.android.ui.components.ActionIcon
+import com.cinelocal.android.ui.components.ListSheet
 import com.cinelocal.android.ui.components.DlActions
 import com.cinelocal.android.ui.components.DlMenuItems
 import com.cinelocal.android.ui.components.DlTarget
@@ -160,6 +162,8 @@ fun DetailScreen(id: String, nav: Nav) {
     }
     val m = t.meta
     val fav = id in user.favorites
+    val inLists = fav || Lists.contains(user.lists, Lists.entryOf(t).key)
+    var showLists by remember { mutableStateOf(false) }
     val watched = isWatched(t, progress)
     var identifying by remember { mutableStateOf(false) }
 
@@ -189,6 +193,8 @@ fun DetailScreen(id: String, nav: Nav) {
     }
     val bar by animateFloatAsState(barTarget, tween(Dur.fast), label = "bar")
 
+    if (showLists) ListSheet(Lists.entryOf(t), t.id) { showLists = false }
+
     Box(Modifier.fillMaxSize()) {
         LazyColumn(Modifier.fillMaxSize(), state = listState, contentPadding = PaddingValues(bottom = 32.dp)) {
             item(key = "header") { Header(t, listState, bar) }
@@ -206,7 +212,7 @@ fun DetailScreen(id: String, nav: Nav) {
                     DownloadButton(t, dlIndex, dla, Modifier.padding(top = 10.dp))
 
                     Row(Modifier.padding(top = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        ActionIcon(if (fav) Icons.Rounded.Check else Icons.Rounded.Add, "Mi lista") { repo.toggleFavorite(id) }
+                        ActionIcon(if (inLists) Icons.Rounded.Check else Icons.Rounded.Add, "Listas") { showLists = true }
                         val paths = if (t.isMovie) listOf(t.item.path) else t.item.episodes.map { it.path }
                         ActionIcon(if (watched) Icons.Rounded.CheckCircle else Icons.Outlined.CheckCircleOutline, "Vista") {
                             repo.markWatched(paths, !watched)

@@ -5,6 +5,9 @@ import com.cinelocal.android.core.LibraryItem
 import com.cinelocal.android.core.Meta
 import com.cinelocal.android.core.Progress
 import com.cinelocal.android.core.SubFile
+import com.cinelocal.android.core.ListEntry
+import com.cinelocal.android.core.UserList
+import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -51,13 +54,14 @@ class CineServer(url: String, private val token: String = "", private val http: 
 
     @Serializable data class View(
         val items: List<Item> = emptyList(), val error: String? = null,
-        val progress: Map<String, Progress> = emptyMap(), val favorites: List<String> = emptyList()
+        val progress: Map<String, Progress> = emptyMap(), val favorites: List<String> = emptyList(),
+        val lists: List<UserList> = emptyList()
     )
 
     /** Biblioteca convertida al formato de la app, con los enlaces (ruta → dirección completa) */
     data class Library(
         val items: List<LibraryItem>, val meta: Map<String, Meta>, val links: Map<String, String>,
-        val progress: Map<String, Progress>, val favorites: List<String>, val error: String?
+        val progress: Map<String, Progress>, val favorites: List<String>, val lists: List<UserList>, val error: String?
     )
 
     // ---------------------------------------------------------------- peticiones
@@ -95,7 +99,7 @@ class CineServer(url: String, private val token: String = "", private val http: 
         }
         // cada ficha por separado: una que no encaje (un campo nulo raro) no deja sin biblioteca
         val meta = v.items.mapNotNull { i -> i.meta?.let { m -> runCatching { json.decodeFromJsonElement(Meta.serializer(), m) }.getOrNull()?.let { i.id to it } } }.toMap()
-        return Library(items, meta, links, v.progress, v.favorites, v.error)
+        return Library(items, meta, links, v.progress, v.favorites, v.lists, v.error)
     }
 
     fun reportProgress(id: String, pos: Double, dur: Double) {
@@ -108,6 +112,18 @@ class CineServer(url: String, private val token: String = "", private val http: 
 
     fun toggleFavorite(id: String) {
         request(post("/api/favorites/toggle", """{"id":${json.encodeToString(id)}}"""))
+    }
+
+    /** Listas propias: create · rename · delete · toggle (src/main/lists.js en el servidor). Devuelve todas */
+    fun listOp(op: String, id: String? = null, name: String? = null, entry: ListEntry? = null): List<UserList> {
+        val body = buildString {
+            append("{\"op\":").append(json.encodeToString(op))
+            id?.let { append(",\"id\":").append(json.encodeToString(it)) }
+            name?.let { append(",\"name\":").append(json.encodeToString(it)) }
+            entry?.let { append(",\"entry\":").append(json.encodeToString(ListEntry.serializer(), it)) }
+            append('}')
+        }
+        return json.decodeFromString(ListSerializer(UserList.serializer()), request(post("/api/lists", body)))
     }
 
     fun identify(itemId: String, tmdbId: Int) {

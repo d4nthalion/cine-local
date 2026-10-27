@@ -50,12 +50,12 @@ import com.cinelocal.android.ui.components.MainTopBar
 import com.cinelocal.android.ui.components.PosterCard
 import com.cinelocal.android.ui.theme.CL
 
-enum class BrowseKind(val title: String) { MOVIES("Películas"), SERIES("Series"), LIST("Mi lista") }
+enum class BrowseKind(val title: String) { MOVIES("Películas"), SERIES("Series"), LIST("Listas") }
 
 private enum class Seen(val label: String) { ALL("Todas"), UNSEEN("Sin ver"), SEEN("Vistas"), DOWNLOADED("Descargadas") }
 
 @Composable
-fun BrowseScreen(kind: BrowseKind, nav: Nav) {
+fun BrowseScreen(kind: BrowseKind, nav: Nav, header: (@Composable () -> Unit)? = null) {
     val repo = LocalContext.current.repo
     val titles by repo.titles.collectAsStateWithLifecycle()
     val progress by repo.progress.flow.collectAsStateWithLifecycle()
@@ -94,11 +94,12 @@ fun BrowseScreen(kind: BrowseKind, nav: Nav) {
 
     Column(Modifier.fillMaxSize()) {
         MainTopBar(nav, compactLogo = true)
-        ScreenTitle(kind.title, base.size)
+        ScreenTitle(kind.title, if (header != null) null else base.size)
+        header?.invoke()
         if (base.isEmpty()) {
             if (onlyDownloaded) EmptyState("Nada descargado", "No tienes ${kind.title.lowercase()} descargadas para ver sin conexión.", "Ver todo") {
                 repo.onlyDownloaded.value = false
-            } else if (kind == BrowseKind.LIST) EmptyState("Mi lista está vacía", "Añade películas y series desde su ficha con el botón «Mi lista».")
+            } else if (kind == BrowseKind.LIST) EmptyState("Mi lista está vacía", "Añade películas y series desde su ficha con el botón «Listas».")
             else EmptyState("Nada por aquí", "No hay ${kind.title.lowercase()} en la biblioteca.")
             return
         }

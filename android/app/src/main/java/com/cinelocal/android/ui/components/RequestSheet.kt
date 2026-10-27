@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.OpenInNew
@@ -41,6 +42,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.cinelocal.android.Nav
 import com.cinelocal.android.core.LbEntry
+import com.cinelocal.android.core.Lists
 import com.cinelocal.android.repo
 import com.cinelocal.android.ui.theme.CL
 import kotlinx.coroutines.launch
@@ -60,6 +62,9 @@ fun RequestSheet(e: LbEntry, nav: Nav, onDismiss: () -> Unit) {
     var sending by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     val title = e.localTitle ?: e.film.title
+    val entry = Lists.entryOf(e)
+    var showLists by remember { mutableStateOf(false) }
+    if (showLists && entry != null) { ListSheet(entry, null) { showLists = false }; return }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -131,6 +136,12 @@ fun RequestSheet(e: LbEntry, nav: Nav, onDismiss: () -> Unit) {
                 }
             }
             error?.let { Text(it, Modifier.padding(top = 10.dp), style = MaterialTheme.typography.bodySmall, color = CL.error) }
+
+            if (entry != null) {
+                Spacer(Modifier.height(8.dp))
+                val saved = Lists.contains(state.lists, entry.key)
+                SecondaryButton(if (saved) "En tus listas" else "Guardar en lista", Modifier.fillMaxWidth(), if (saved) Icons.Rounded.Check else Icons.Rounded.Add) { showLists = true }
+            }
 
             e.film.url?.let { url ->
                 Spacer(Modifier.height(8.dp))

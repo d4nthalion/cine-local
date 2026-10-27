@@ -106,9 +106,28 @@ data class MetaEntry(
 @Serializable
 data class Progress(val pos: Double = 0.0, val dur: Double = 0.0, val watched: Boolean = false, val at: Long = 0, val lb: Boolean = false)   // lb: marcada por Letterboxd
 
+/**
+ * Título guardado en una lista propia (como src/main/lists.js): por su ficha de TMDB, así puede no estar en la
+ * biblioteca y vale igual en el móvil, el PC y el servidor. Sin ficha, por el id de la biblioteca ("id:<id>").
+ */
+@Serializable
+data class ListEntry(
+    val key: String,
+    val tmdb: Int? = null,
+    val id: String? = null,
+    val type: String = "movie",
+    val title: String = "",
+    val year: Int? = null,
+    val poster: String? = null
+)
+
+@Serializable
+data class UserList(val id: String, val name: String, val items: List<ListEntry> = emptyList(), val created: Long = 0)
+
 @Serializable
 data class UserState(
     val favorites: List<String> = emptyList(),
+    val lists: List<UserList> = emptyList(),      // listas propias, además de Mi lista
     val requested: Map<String, Long> = emptyMap()   // películas pedidas por ntfy: clave de Letterboxd (o "tmdb:<id>" si se buscó en TMDB) → cuándo
 )
 
@@ -117,7 +136,7 @@ data class Settings(
     val libraryPath: String = "",        // \\EQUIPO\Carpeta o smb://equipo/carpeta
     val nasMode: Boolean = false,        // la carpeta está en un NAS: el usuario y la contraseña son los del NAS
     val serverMode: Boolean = false,     // la biblioteca viene de CineLocal Server (el NAS por HTTPS, sin VPN)
-    val serverUrl: String = "",          // https://danthalion.synology.me:5443
+    val serverUrl: String = "",          // https://tu-nas.synology.me:5443
     val serverUser: String = "",
     val serverToken: String = "",        // sesión del servidor (30 días); la contraseña no se guarda
     val smbUser: String = "",

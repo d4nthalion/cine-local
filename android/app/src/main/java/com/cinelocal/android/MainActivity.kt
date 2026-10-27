@@ -67,6 +67,7 @@ import com.cinelocal.android.ui.theme.EaseEmphasized
 import com.cinelocal.android.ui.theme.EaseExit
 import com.cinelocal.android.ui.screens.BrowseKind
 import com.cinelocal.android.ui.screens.BrowseScreen
+import com.cinelocal.android.ui.screens.ListsScreen
 import com.cinelocal.android.ui.screens.DetailScreen
 import com.cinelocal.android.ui.screens.DownloadsScreen
 import com.cinelocal.android.ui.screens.HomeScreen
@@ -146,7 +147,7 @@ private val tabs = listOf(
     NavTab("home", "Inicio", Icons.Outlined.Home, Icons.Filled.Home),
     NavTab("movies", "Películas", Icons.Outlined.Movie, Icons.Filled.Movie),
     NavTab("series", "Series", Icons.Outlined.Tv, Icons.Filled.Tv),
-    NavTab("list", "Mi lista", Icons.Outlined.BookmarkBorder, Icons.Filled.Bookmark)
+    NavTab("list", "Listas", Icons.Outlined.BookmarkBorder, Icons.Filled.Bookmark)
 )
 private val tabRoutes = tabs.map { it.route }.toSet()
 private fun isTab(e: NavBackStackEntry) = e.destination.route in tabRoutes
@@ -228,7 +229,7 @@ private fun App() {
             composable("home") { HomeScreen(nav) }
             composable("movies") { BrowseScreen(BrowseKind.MOVIES, nav) }
             composable("series") { BrowseScreen(BrowseKind.SERIES, nav) }
-            composable("list") { BrowseScreen(BrowseKind.LIST, nav) }
+            composable("list") { ListsScreen(nav) }
             composable("search") { SearchScreen(nav) }
             composable("settings") { SettingsScreen(nav) }
             composable("watchlist") { WatchlistScreen(nav) }
