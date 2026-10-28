@@ -642,6 +642,9 @@ ipcMain.handle('progress:mark', async (_e, { paths, watched }) => {
 });
 ipcMain.handle('requests:get', () => remote.get('/api/requests'));
 ipcMain.handle('requests:op', (_e, q) => remote.post('/api/requests', q));
+ipcMain.handle('access:list', (_e, q) => remote.get('/api/access?' + new URLSearchParams(q)));
+ipcMain.handle('log:error', (_e, e) => remote.post('/api/log', e).catch(() => null));
+ipcMain.handle('access:list', (_e, q) => remote.get('/api/access?' + new URLSearchParams(q)));
 // Listas propias (además de Mi lista): crear, renombrar, borrar y añadir o quitar títulos
 ipcMain.handle('lists:op', async (_e, q) => {
   const lists = await remote.post('/api/lists', q);

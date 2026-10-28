@@ -6,6 +6,7 @@ const path = require('path');
 const { Library } = require('./library');
 const { Auth } = require('./auth');
 const { Requests } = require('./requests');
+const { AccessLog, clientOf } = require('./accesslog');
 const media = require('./media');
 const { store } = require('./store');
 const { IntroDB, flatten } = require('../src/main/introdb');
@@ -37,6 +38,7 @@ const auth = new Auth({
 });
 if (auth.devUser) console.warn(`¡Atención! CINELOCAL_AUTH=none: no se pide contraseña (usuario «${auth.devUser}»). Sólo para desarrollo.`);
 const requests = new Requests(DATA);
+const access = new AccessLog(DATA, { months: +env.CINELOCAL_LOG_MONTHS || 12 });
 const introDb = new IntroDB({ fetch: globalThis.fetch, store: store(DATA, 'introdb.json', { entries: {} }), userAgent: `CineLocal-Server/${VERSION}` });
 
 // ---------- utilidades HTTP ----------
@@ -154,6 +156,8 @@ const route = (method, pattern, handler, opts = {}) => routes.push({ method, re:
 route('POST', '/api/login', async (req, res) => {
   const b = await readBody(req, 8192);
   const r = await auth.login({ user: b.user, password: b.password, otp: b.otp }, clientIp(req));
+  // pedir el código de verificación no es un fallo
+  if (r.ok || !r.otp || b.otp) act(req, r.ok ? r.user : String(b.user || '').slice(0, 64), r.ok ? 'login' : 'login-failed', null, r.ok ? null : r.error);
   if (!r.ok) return json(res, r.status || (r.otp ? 401 : 403), { ok: false, error: r.error, otp: !!r.otp });
   // las apps (escritorio, Android) guardan el token y lo envían como «Authorization: Bearer»; el navegador, en la cookie
   if (b.client === 'app') return json(res, 200, { ok: true, user: r.user, token: r.token, admin: auth.isAdmin(r.user), role: auth.role(r.user) });
@@ -161,7 +165,8 @@ route('POST', '/api/login', async (req, res) => {
   json(res, 200, { ok: true, user: r.user });
 }, { public: true });
 
-route('POST', '/api/logout', (req, res) => {
+route('POST', '/api/logout', (req, res, { user }) => {
+  if (user) act(req, user, 'logout');
   auth.logout(sessionToken(req));
   res.setHeader('Set-Cookie', sessionCookie(req, '', 0));
   json(res, 200, { ok: true });
@@ -177,6 +182,8 @@ route('GET', '/api/settings', (req, res, { user }) => json(res, 200, library.pub
 route('POST', '/api/settings', async (req, res, { user }) => {
   const patch = await readBody(req);
   if (patch.tmdbKey === '••••••••') delete patch.tmdbKey;
+  const keys = Object.keys(patch);
+  if (keys.length) act(req, user, 'settings', null, keys.join(', '));
   library.setPrefs(user, patch);
   if (auth.isAdmin(user)) await library.setSettings(patch);
   json(res, 200, library.publicSettings(auth.isAdmin(user), user));
@@ -209,8 +216,8 @@ function withLinks(v, user) {
     ? { ...it, ...link(it.id, it.path) }
     : { ...it, episodes: it.episodes.map(e => ({ ...e, ...link(e.id, e.path) })) });
 }
-route('POST', '/api/scan', async (req, res, { user }) => { await library.scan(); json(res, 200, library.view(user)); }, { admin: true });
-route('POST', '/api/meta/refresh', (req, res) => { library.fetchMissingMetadata(true); json(res, 200, true); }, { admin: true });
+route('POST', '/api/scan', async (req, res, { user }) => { act(req, user, 'scan'); await library.scan(); json(res, 200, library.view(user)); }, { admin: true });
+route('POST', '/api/meta/refresh', (req, res, { user }) => { act(req, user, 'meta-refresh'); library.fetchMissingMetadata(true); json(res, 200, true); }, { admin: true });
 route('GET', '/api/person/:id', async (req, res, { p }) => json(res, 200, await library.person(+p.id)));
 route('GET', '/api/providers', async (req, res) => json(res, 200, await library.providerList()));
 route('GET', '/api/providers/:id', async (req, res, { p }) => json(res, 200, await library.providers(+p.id)));
@@ -220,7 +227,12 @@ route('GET', '/api/title/:type/:id', async (req, res, { p }) => {
   catch (e) { throw e.status ? e : httpError(/404|not be found/i.test(e.message) ? 404 : 502, e.message); }
 });
 route('POST', '/api/meta/search', async (req, res) => json(res, 200, await library.search(await readBody(req))));
-route('POST', '/api/meta/identify', async (req, res, { user }) => json(res, 200, await library.identify(await readBody(req), user)), { admin: true });
+route('POST', '/api/meta/identify', async (req, res, { user }) => {
+  const b = await readBody(req);
+  const it = library.library.data.items.find(i => i.id === b.itemId);
+  act(req, user, 'identify', it && titleOf({ item: it }), `Ficha de TMDB ${b.tmdbId}`);
+  json(res, 200, await library.identify(b, user));
+}, { admin: true });
 
 route('POST', '/api/play', async (req, res, { user }) => {
   const q = await readBody(req);
@@ -228,6 +240,7 @@ route('POST', '/api/play', async (req, res, { user }) => {
   if (!playlist?.length) return json(res, 404, { ok: false, error: 'Elemento no encontrado' });
   if (!fs.existsSync(library.file(playlist[0].id)?.path || '')) return json(res, 404, { ok: false, error: 'No se encuentra el archivo de vídeo en el servidor' });
   library.setLastPlayed(user, q.itemId, q.episodeId);
+  act(req, user, 'open', playlist[0].title, q.fromStart ? 'Desde el principio' : null);
   const s = library.publicSettings(false, user);
   // las apps reproducen con mpv / LibVLC: enlaces firmados al archivo tal cual y a los subtítulos externos
   if (q.client === 'app') {
@@ -247,19 +260,35 @@ route('POST', '/api/progress', async (req, res, { user }) => {
   json(res, 200, { ok: !!prog });
 });
 route('POST', '/api/progress/mark', async (req, res, { user }) => {
-  const prog = library.markProgress(user, await readBody(req));
+  const b = await readBody(req);
+  const f = [...library.index.values()].find(x => x.path === b.paths?.[0]);
+  act(req, user, b.watched ? 'watched' : 'unwatched', f && (b.paths.length > 1 ? titleOf({ item: f.item }) : titleOf(f)), b.paths?.length > 1 ? `${b.paths.length} archivos` : null);
+  const prog = library.markProgress(user, b);
   broadcastProgress(user, prog);
   json(res, 200, prog);
 });
-route('POST', '/api/favorites/toggle', async (req, res, { user }) => json(res, 200, library.toggleFavorite(user, (await readBody(req)).id)));
+route('POST', '/api/favorites/toggle', async (req, res, { user }) => {
+  const { id } = await readBody(req);
+  const favs = library.toggleFavorite(user, id);
+  const it = library.library.data.items.find(i => i.id === id);
+  act(req, user, favs.includes(id) ? 'fav-add' : 'fav-remove', it ? titleOf({ item: it }) : id);
+  json(res, 200, favs);
+});
 route('POST', '/api/lists', async (req, res, { user }) => {
-  try { json(res, 200, library.listOp(user, await readBody(req))); }
+  const b = await readBody(req);
+  const before = library.user(user).data.lists.find(l => l.id === b.id);
+  try { json(res, 200, library.listOp(user, b)); }
   catch (e) { throw e.status ? e : httpError(400, e.message); }
+  const after = library.user(user).data.lists.find(l => l.id === b.id);
+  const what = b.op === 'toggle' ? (after?.items.some(x => x.key === b.entry?.key) ? 'list-add' : 'list-remove') : 'list-' + b.op;
+  act(req, user, what, b.op === 'toggle' ? b.entry?.title : b.name || before?.name, b.op === 'toggle' || b.op === 'rename' ? `Lista «${b.op === 'rename' ? before?.name : after?.name}»` : null);
 });
 route('GET', '/api/requests', (req, res, { user }) => json(res, 200, requestsView(user)));
 route('POST', '/api/requests', async (req, res, { user }) => {
   const b = await readBody(req, 16384);
   const admin = auth.isAdmin(user);
+  const r = requests.items.find(x => x.id === String(b.id));
+  act(req, user, 'request-' + b.op, b.op === 'create' ? b.entry?.title : r?.title, b.op === 'resolve' ? { done: 'Conseguida', rejected: 'Rechazada', pending: 'Pendiente' }[b.status] : b.entry?.note);
   if (b.op === 'create') requests.create(user, b.entry);
   else if (b.op === 'cancel') requests.cancel(user, String(b.id));
   else if (b.op === 'resolve' && admin) requests.resolve(user, String(b.id), b);
@@ -279,13 +308,34 @@ route('GET', '/api/media/:id/info', async (req, res, { p }) => {
   const f = mediaFile(p.id);
   json(res, 200, await media.info(f, rootOf(f.path)));
 });
-route('GET', '/api/media/:id/file', (req, res, { p }) => media.sendFile(req, res, mediaFile(p.id).path), { signed: true });
-route('GET', '/api/media/:id/stream', (req, res, { p, q }) => media.sendStream(req, res, mediaFile(p.id), q));
+route('GET', '/api/media/:id/file', (req, res, { p, q, user }) => {
+  const f = mediaFile(p.id);
+  logAccess(req, res, user, p.id, f, q.get('dl') === '1' ? 'download' : 'play');
+  media.sendFile(req, res, f.path);
+}, { signed: true });
+route('GET', '/api/media/:id/stream', (req, res, { p, q, user }) => {
+  const f = mediaFile(p.id);
+  logAccess(req, res, user, p.id, f, q.get('mode') === 'transcode' ? 'transcode' : 'remux');
+  return media.sendStream(req, res, f, q);
+});
 route('GET', '/api/media/:id/subs/:key', (req, res, { p }) => {
   const f = mediaFile(p.id);
   if (!/^[ix]\d{1,3}$/.test(p.key)) throw httpError(400, 'Subtítulo no válido');
   return media.sendSubs(res, f, p.key, rootOf(f.path), path.join(DATA, 'cache', 'subs'));
 }, { signed: true });
+
+route('GET', '/api/access', (req, res, { q }) => json(res, 200, access.list({ days: +q.get('days') || 7, user: q.get('user') || '', q: q.get('q') || '', type: q.get('type') || '' })), { admin: true });
+// errores de la interfaz (web, escritorio): se apuntan para poder ver qué le pasó a cada uno
+const clientErrors = new Map();   // usuario → { n, from }
+route('POST', '/api/log', async (req, res, { user }) => {
+  const b = await readBody(req, 16384);
+  const now = Date.now();
+  const c = clientErrors.get(user);
+  const n = c && now - c.from < 60000 ? c.n + 1 : 1;
+  clientErrors.set(user, n === 1 ? { n, from: now } : { n, from: c.from });
+  if (n <= 20) act(req, user, 'client-error', b.where, [b.message, b.stack].filter(Boolean).join('\n'));
+  json(res, 200, { ok: true });
+});
 
 route('GET', '/api/events', (req, res, { user }) => {
   res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
@@ -303,6 +353,22 @@ function mediaFile(id) {
   const f = library.file(id);
   if (!f || !fs.existsSync(f.path)) throw httpError(404, 'No se encuentra el archivo de vídeo');
   return f;
+}
+/** Título legible de una película, serie o episodio ({ item, episode? }) */
+function titleOf(f) {
+  const name = library.metadata.data[f.item.id]?.meta?.title || f.item.title;
+  const e = f.episode;
+  return e ? `${name} · T${e.season}:E${e.episode}` : name;
+}
+/** Apunta una acción en el registro de actividad */
+function act(req, user, kind, title, detail) {
+  access.event(kind, { user, ip: clientIp(req), client: clientOf(req), title, detail });
+}
+/** Apunta en el registro quién pide este vídeo y cuántos datos se le envían */
+function logAccess(req, res, user, id, f, kind) {
+  const add = access.touch({ user, ip: clientIp(req), client: clientOf(req), kind, id, title: titleOf(f), file: f.path });
+  const write = res.write;
+  res.write = function (chunk, ...rest) { if (chunk) add(chunk.length); return write.call(this, chunk, ...rest); };
 }
 function rootOf(p) {
   return library.roots().find(r => { const rel = path.relative(r, p); return rel && !rel.startsWith('..') && !path.isAbsolute(rel); }) || library.settings.data.libraryPath;
@@ -343,6 +409,10 @@ const server = http.createServer(async (req, res) => {
   } catch (e) {
     const status = e.status || 500;
     if (status === 500) console.error(req.method, pathname, e);
+    // fallos que ve alguien con sesión: los del servidor, los de acciones y los de vídeo
+    if (user && status !== 401 && (status >= 500 || req.method !== 'GET' || pathname.startsWith('/api/media/'))) {
+      act(req, user, 'error', `${req.method} ${pathname}`, `${status} · ${e.message}`);
+    }
     if (!res.headersSent) json(res, status, { ok: false, error: e.message });
     else res.end();
   }
@@ -356,6 +426,7 @@ server.listen(PORT, HOST, () => {
 });
 
 for (const sig of ['SIGTERM', 'SIGINT']) process.on(sig, () => {
+  access.closeIdle(true);
   for (const s of [library.settings, library.library, library.metadata, library.people, auth.store, requests.store]) s.flushSync();
   for (const u of library.users.values()) u.flushSync();
   process.exit(0);

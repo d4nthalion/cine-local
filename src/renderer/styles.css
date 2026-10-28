@@ -726,6 +726,26 @@ table.srv .srv-act .btn { height: 30px; padding: 0 12px; font-size: 13px; }
 .req-title span { color: var(--text-3); font-weight: 400; }
 .req-title .req-type { font-size: 12px; margin-left: 6px; padding: 1px 7px; border-radius: 999px; background: rgba(255,255,255,.07); }
 .req-who { color: var(--text-2); font-size: 13.5px; }
+/* registro de actividad */
+.access-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 22px; }
+.access-filters .list-tabs { margin: 0; }
+.access-filters select.input { width: auto; min-width: 150px; }
+.access-filters #accessQuery { flex: 1; min-width: 200px; }
+.access-day { font-size: 14px; font-weight: 600; color: var(--text-3); margin: 22px 0 8px; }
+.access-day::first-letter { text-transform: uppercase; }
+.access-row { display: grid; grid-template-columns: 52px 130px minmax(0, 1fr) auto; align-items: center; gap: 14px; padding: 9px 14px; border-radius: var(--radius); background: var(--bg-2); border: 1px solid var(--line); margin-bottom: 6px; }
+.access-row.bad { border-color: rgba(239,68,68,.35); }
+.access-time { color: var(--text-2); font-variant-numeric: tabular-nums; font-size: 14px; }
+.access-user { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.access-what { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.access-title { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.access-file, .access-facts, .access-detail { color: var(--text-3); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.access-detail { color: var(--text-2); }
+.access-detail.bad { color: #f87171; }
+@media (max-width: 720px) {
+  .access-row { grid-template-columns: 44px minmax(0, 1fr); row-gap: 4px; }
+  .access-row .access-what, .access-row .status-pill { grid-column: 2; justify-self: start; }
+}
 .req-who i { color: var(--text-3); }
 .req-reply { color: var(--text-3); font-size: 13px; }
 .req-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
@@ -753,3 +773,6 @@ body.login-mode .topbar, body.login-mode #view, body.login-mode #metaStatus { di
 .login-card .err { margin-top: 16px; padding: 10px 12px; border-radius: 8px; background: rgba(239,68,68,.12); color: #fca5a5; font-size: 14px; white-space: pre-line; }
 .login-card .server-line { margin-top: 18px; font-size: 13px; color: var(--text-3); }
 .login-card .server-line button { background: none; border: 0; padding: 0; color: var(--accent); font: inherit; cursor: pointer; }
+
+/* búsqueda: resultados de TMDB (fuera de la biblioteca) */
+.tmdb-sub { margin: 18px 0 12px; font-size: 16px; font-weight: 600; color: var(--text-2); }

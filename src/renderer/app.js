@@ -61,9 +61,10 @@ const S = {
   people: {},
   season: {},
   query: '',
-  tmdbSearch: { q: '', busy: false, results: [], error: null },   // películas de TMDB cuando la biblioteca no tiene nada
+  tmdbSearch: { q: '', busy: false, movies: [], series: [], error: null },   // películas y series de TMDB cuando la biblioteca no tiene nada
   requests: { items: [], pending: 0 },                             // peticiones (las mías; un administrador, todas)
   reqSearch: { q: '', type: 'movie', busy: false, results: [], error: null },
+  access: { days: 7, user: '', type: '', q: '', items: null, total: 0, users: [], busy: false, error: null },   // registro de actividad (administradores)
   titles: {},                                                      // fichas de TMDB de lo que no está en la biblioteca
   emule: {
     snap: { ok: false, code: 'disabled', downloads: [] },
@@ -801,6 +802,7 @@ async function refreshMe() {
   S.me = WEB ? await window.api.me() : await window.api.remote.me().catch(() => null);
   $('#btnScan').classList.toggle('hidden', !canManage());
   $('#navRequests').classList.toggle('hidden', !hasRequests());
+  $('#navAccess').classList.toggle('hidden', !(hasRequests() && isAdmin() && window.api.accessLog));
   if (hasRequests()) await loadRequests(); else setRequests(null);
 }
 const REQ_STATUS = { pending: 'Pendiente', done: 'Conseguida', rejected: 'Rechazada' };
@@ -924,6 +926,81 @@ function requestRow(r) {
   </div>`;
 }
 
+// ---------------------------------------------------------------- registro de actividad (administradores)
+const ACCESS_KIND = {
+  play: 'Reproducción', remux: 'Reproducción (reempaquetado)', transcode: 'Reproducción (convertido)', download: 'Descarga',
+  login: 'Inicio de sesión', 'login-failed': 'Intento fallido', logout: 'Cierre de sesión',
+  open: 'Abrir reproductor', watched: 'Marcado como visto', unwatched: 'Marcado como no visto',
+  'fav-add': 'Añadido a Mi lista', 'fav-remove': 'Quitado de Mi lista',
+  'list-create': 'Lista creada', 'list-rename': 'Lista renombrada', 'list-delete': 'Lista borrada', 'list-add': 'Añadido a una lista', 'list-remove': 'Quitado de una lista',
+  'request-create': 'Petición', 'request-cancel': 'Petición cancelada', 'request-resolve': 'Petición resuelta', 'request-remove': 'Petición borrada',
+  settings: 'Ajustes', scan: 'Escaneo', 'meta-refresh': 'Buscar fichas', identify: 'Ficha corregida',
+  error: 'Error', 'client-error': 'Error en la app'
+};
+const ACCESS_TYPES = [['', 'Todo'], ['video', 'Vídeo'], ['action', 'Acciones'], ['session', 'Sesiones'], ['error', 'Errores']];
+
+async function loadAccess() {
+  const a = S.access;
+  a.busy = true; a.error = null; paintAccess();
+  try {
+    const r = await window.api.accessLog({ days: a.days, user: a.user, type: a.type, q: a.q.trim() });
+    Object.assign(a, { items: r.items, total: r.total, users: r.users });
+  } catch (e) { a.error = errText(e); }
+  a.busy = false;
+  paintAccess();
+}
+function paintAccess() { const box = $('#accessList'); if (box) box.innerHTML = accessListHTML(); }
+
+function viewAccess() {
+  const a = S.access;
+  const users = [...new Set([...a.users, a.user].filter(Boolean))];
+  return `<div class="page access"><h1 class="page-title">Registro de actividad</h1>
+    <p class="req-intro">Qué ha visto o descargado cada usuario, desde dónde y cuánto, lo que ha hecho en la app y los errores que ha tenido. Una reproducción con varios saltos cuenta como un solo acceso.</p>
+    <div class="access-filters">
+      <div class="list-tabs">${ACCESS_TYPES.map(([k, l]) => `<button class="gchip ${a.type === k ? 'on' : ''}" data-access-type="${k}">${l}</button>`).join('')}</div>
+      <select class="input" id="accessDays">${[[1, 'Hoy y ayer'], [7, '7 días'], [30, '30 días'], [90, '90 días'], [365, 'Último año']].map(([d, l]) => `<option value="${d}" ${a.days === d ? 'selected' : ''}>${l}</option>`).join('')}</select>
+      <select class="input" id="accessUser"><option value="">Todos los usuarios</option>${users.map(u => `<option ${u === a.user ? 'selected' : ''}>${esc(u)}</option>`).join('')}</select>
+      <input class="input" id="accessQuery" value="${esc(a.q)}" placeholder="Filtrar por título, archivo, IP o error…" spellcheck="false">
+    </div>
+    <div id="accessList">${accessListHTML()}</div>
+  </div>`;
+}
+
+function accessListHTML() {
+  const a = S.access;
+  if (a.error) return `<p class="filmo-note" style="padding-left:0;color:#f87171">${esc(a.error)}</p>`;
+  if (!a.items) return '<p class="filmo-note" style="padding-left:0">Cargando…</p>';
+  if (!a.items.length) return `<div class="empty"><div class="big-ico">${I.check}</div><h2>Nada en este periodo</h2><p>Prueba con más días o quita los filtros.</p></div>`;
+  const day = ts => new Date(ts).toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+  const time = ts => new Date(ts).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
+  const size = n => n >= 1e9 ? (n / 1e9).toFixed(1).replace('.', ',') + ' GB' : Math.max(1, Math.round(n / 1e6)) + ' MB';
+  const span = (from, to) => { const m = Math.round((to - from) / 60000); return m < 1 ? '' : m < 60 ? `${m} min` : `${Math.floor(m / 60)} h ${m % 60} min`; };
+  const video = new Set(['play', 'remux', 'transcode', 'download']);
+  let last = '';
+  const rows = a.items.map(e => {
+    const d = day(e.at);
+    const head = d !== last ? `<h3 class="access-day">${d}</h3>` : '';
+    last = d;
+    const isVideo = video.has(e.kind);
+    const bad = e.kind === 'login-failed' || e.kind === 'error' || e.kind === 'client-error';
+    const what = [
+      e.title ? `<span class="access-title">${esc(e.title)}</span>` : '',
+      isVideo && e.file ? `<span class="access-file" title="${esc(e.file)}">${esc(e.file.split(/[\\/]/).pop())}</span>` : '',
+      e.detail ? `<span class="access-detail ${bad ? 'bad' : ''}" title="${esc(e.detail)}">${esc(e.detail.split('\n')[0])}</span>` : ''
+    ].join('');
+    const facts = [e.client, e.ip, isVideo && span(e.at, e.end), isVideo && e.bytes ? size(e.bytes) : ''].filter(Boolean).map(esc).join(' · ');
+    const pill = e.live ? `<span class="status-pill ok">${ACCESS_KIND[e.kind]} · en curso</span>`
+      : `<span class="status-pill ${bad ? 'bad' : e.kind === 'download' ? 'warn' : isVideo ? 'ok' : ''}">${ACCESS_KIND[e.kind] || esc(e.kind)}</span>`;
+    return `${head}<div class="access-row ${bad ? 'bad' : ''}">
+      <span class="access-time">${time(e.at)}</span>
+      <span class="access-user">${esc(e.user || '—')}</span>
+      <div class="access-what">${what}<span class="access-facts">${facts}</span></div>
+      ${pill}
+    </div>`;
+  }).join('');
+  return `${a.total > a.items.length ? `<p class="filmo-note" style="padding-left:0">Se muestran los ${a.items.length} más recientes de ${a.total}.</p>` : ''}${rows}`;
+}
+
 /** Pedir un título: con una nota opcional («la versión extendida», «en español»…) */
 function askRequest(e) {
   return new Promise(resolve => {
@@ -970,36 +1047,60 @@ function viewSearch() {
     return { it, score };
   }).filter(x => x.score > 0).sort((a, b) => b.score - a.score);
   const dmatch = allDirectors().filter(d => norm(d.name).includes(nq)).slice(0, 12);
-  // nada en la biblioteca: se busca la película en TMDB para poder ver dónde está o descargarla
-  const online = !scored.length && !dmatch.length ? tmdbSearchHTML(S.query.trim()) : '';
+  // siempre se busca también en TMDB: lo que coincide en la biblioteca (otra película con esa palabra, un actor…)
+  // no quiere decir que esté lo que buscas, y desde ahí se ve su ficha y se pide
+  const local = scored.length > 0 || dmatch.length > 0;
+  const online = tmdbSearchHTML(S.query.trim(), local);
   return `<div class="page"><h1 class="page-title">Resultados para “${esc(S.query)}”<span class="count">${scored.length}</span></h1>
     ${dmatch.length ? `<h2 class="section-title" style="margin-top:0">Directores</h2><div class="dir-strip">${dmatch.map(directorChip).join('')}</div><h2 class="section-title">Títulos</h2>` : ''}
-    ${scored.length ? `<div class="grid">${scored.map(x => card(x.it)).join('')}</div>`
-      : online || `<div class="empty"><div class="big-ico">${I.search}</div><h2>Sin resultados</h2><p>Prueba con otro título, un actor o un género.</p></div>`}</div>`;
+    ${scored.length ? `<div class="grid">${scored.map(x => card(x.it)).join('')}</div>` : ''}
+    ${online || (local ? '' : `<div class="empty"><div class="big-ico">${I.search}</div><h2>Sin resultados</h2><p>Prueba con otro título, un actor o un género.</p></div>`)}</div>`;
 }
 
-/** Resultados de TMDB para una búsqueda sin coincidencias en la biblioteca ('' si no hay clave de TMDB) */
-function tmdbSearchHTML(q) {
+/**
+ * Películas y series de TMDB que coinciden con la búsqueda y no están en la biblioteca ('' si no hay clave de TMDB).
+ * local: la biblioteca ya ha dado resultados (entonces van debajo, como «Fuera de tu biblioteca»)
+ */
+function tmdbSearchHTML(q, local = false) {
   if (!S.lib.hasKey || q.length < 2) return '';
   const t = S.tmdbSearch;
-  if (t.q !== q) { searchTmdb(q); return `<p class="filmo-note">No está en tu biblioteca. Buscando en TMDB…</p>`; }
-  if (t.busy) return `<p class="filmo-note">No está en tu biblioteca. Buscando en TMDB…</p>`;
-  if (t.error) return `<div class="empty"><div class="big-ico">${I.search}</div><h2>Sin resultados</h2><p>No está en tu biblioteca y no se ha podido buscar en TMDB: ${esc(t.error)}</p></div>`;
-  if (!t.results.length) return `<div class="empty"><div class="big-ico">${I.search}</div><h2>Sin resultados</h2><p>Ni en tu biblioteca ni en TMDB. Prueba con otro título, un actor o un género.</p></div>`;
-  return `<p class="filmo-note" style="padding-left:0">No está en tu biblioteca. Películas de TMDB que coinciden: pulsa para ver dónde verla${emuleOn() ? ' o búscala en eMule' : ''}.</p>
-    <div class="grid filmo">${t.results.map(r => missingCard({ ...r, year: r.year ? +r.year : null })).join('')}</div>`;
+  const head = local ? `<h2 class="section-title">Fuera de tu biblioteca</h2>` : '';
+  const pending = `${head}<p class="filmo-note" style="padding-left:0">${local ? '' : 'No está en tu biblioteca. '}Buscando en TMDB…</p>`;
+  if (t.q !== q) { searchTmdb(q); return pending; }
+  if (t.busy) return pending;
+  if (t.error) return local ? '' : `<div class="empty"><div class="big-ico">${I.search}</div><h2>Sin resultados</h2><p>No está en tu biblioteca y no se ha podido buscar en TMDB: ${esc(t.error)}</p></div>`;
+  // lo que ya tienes no se repite
+  const owned = (type, id) => S.lib.items.some(i => i.type === type && i.meta?.tmdbId === id);
+  const movies = t.movies.filter(r => !owned('movie', r.id));
+  const series = t.series.filter(r => !owned('series', r.id));
+  if (!movies.length && !series.length) return local ? '' : `<div class="empty"><div class="big-ico">${I.search}</div><h2>Sin resultados</h2><p>Ni en tu biblioteca ni en TMDB. Prueba con otro título, un actor o un género.</p></div>`;
+  // películas y series de TMDB: pulsa para ver su ficha y pedirla
+  const cards = (list, type) => list.map(r => {
+    const e = { key: `${type}:${r.id}`, tmdb: r.id, type, title: r.title, year: r.year ? +r.year : null, poster: r.poster || null };
+    return missingCard({ ...r, id: type === 'movie' ? r.id : null, year: r.year ? +r.year : null }, { entry: e, sub: [r.year, type === 'series' ? 'Serie' : ''].filter(Boolean).join(' · ') || null });
+  }).join('');
+  const section = (title, list, type) => list.length ? `<h3 class="tmdb-sub">${title}</h3><div class="grid filmo">${cards(list, type)}</div>` : '';
+  // las series primero si coinciden mejor (p. ej. «breaking bad»)
+  const seriesFirst = series.length && (!movies.length || normName(series[0].title) === normName(q) && normName(movies[0].title) !== normName(q));
+  const parts = [section('Películas', movies, 'movie'), section('Series', series, 'series')];
+  return `${head}<p class="filmo-note" style="padding-left:0">${local ? 'En TMDB' : 'No está en tu biblioteca. Esto es lo que hay en TMDB'}: pulsa un título para ver su ficha${hasRequests() ? ' y pedirlo' : ''}.</p>
+    ${(seriesFirst ? parts.reverse() : parts).join('')}`;
 }
 
 async function searchTmdb(q) {
-  S.tmdbSearch = { q, busy: true, results: [], error: null };
+  S.tmdbSearch = { q, busy: true, movies: [], series: [], error: null };
   // "dune 2021": el año del final afina la búsqueda (uno del futuro es parte del título: "Blade Runner 2049")
   const y = q.match(/^(.*\S)\s+((?:19|20)\d{2})$/);
   const m = y && +y[2] <= new Date().getFullYear() + 1 ? y : null;
   try {
-    const res = await window.api.searchMeta({ type: 'movie', query: m ? m[1] : q, year: m ? m[2] : null });
-    if (S.tmdbSearch.q === q) S.tmdbSearch = { q, busy: false, results: res.slice(0, 20), error: null };
+    const query = m ? m[1] : q, year = m ? m[2] : null;
+    const [movies, series] = await Promise.all([
+      window.api.searchMeta({ type: 'movie', query, year }),
+      window.api.searchMeta({ type: 'series', query, year })
+    ]);
+    if (S.tmdbSearch.q === q) S.tmdbSearch = { q, busy: false, movies: movies.slice(0, 18), series: series.slice(0, 12), error: null };
   } catch (e) {
-    if (S.tmdbSearch.q === q) S.tmdbSearch = { q, busy: false, results: [], error: errText(e) };
+    if (S.tmdbSearch.q === q) S.tmdbSearch = { q, busy: false, movies: [], series: [], error: errText(e) };
   }
   if (S.route.name === 'search' && S.query.trim() === q) render(true);
 }
@@ -1856,6 +1957,7 @@ function render(keepScroll = false) {
     case 'settings': html = viewSettings(); break;
     case 'downloads': html = viewDownloads(); break;
     case 'requests': html = viewRequests(); break;
+    case 'access': html = viewAccess(); break;
     case 'title': html = viewTitle(r.type, r.id); break;
     default: html = viewHome();
   }
@@ -1863,6 +1965,7 @@ function render(keepScroll = false) {
   $$('#nav a').forEach(a => a.classList.toggle('active', a.dataset.nav === r.name || (r.name === 'director' && a.dataset.nav === 'directors')));
   if (r.name === 'director') loadPerson(r.id);
   if (r.name === 'downloads') loadServers(true);
+  if (r.name === 'access' && !keepScroll) loadAccess();
   if (r.name !== 'director') S.filters.filmo = 'all';
 
   view.style.scrollBehavior = 'auto';
@@ -2158,6 +2261,8 @@ document.addEventListener('click', async (e) => {
   if (lt) { S.listTab = lt.dataset.listTab || null; render(true); return; }
   const rt = t.closest('[data-req-tab]');
   if (rt) { S.reqTab = rt.dataset.reqTab; render(true); return; }
+  const at = t.closest('[data-access-type]');
+  if (at) { S.access.type = at.dataset.accessType; $$('[data-access-type]').forEach(b => b.classList.toggle('on', b === at)); loadAccess(); return; }
   const rty = t.closest('[data-req-type]');
   if (rty) { S.reqSearch = { ...S.reqSearch, type: rty.dataset.reqType, results: [] }; render(true); searchRequests(S.reqSearch.q); return; }
 
@@ -2400,8 +2505,22 @@ document.addEventListener('keydown', (e) => {
 window.addEventListener('mouseup', (e) => { if (e.button === 3) { e.preventDefault(); back(); } });
 
 let searchTimer;
+// errores de la interfaz: al registro de actividad del servidor, para saber qué le pasó a cada usuario
+function reportError(message, stack) {
+  if (!S.me || !window.api.logError) return;
+  window.api.logError({ where: `${WEB ? 'Web' : 'Escritorio'} · ${S.route?.name || 'inicio'}`, message: String(message || 'Error').slice(0, 500), stack: String(stack || '').slice(0, 3000) }).catch(() => {});
+}
+window.addEventListener('error', e => reportError(e.message, e.error?.stack || `${e.filename}:${e.lineno}`));
+window.addEventListener('unhandledrejection', e => reportError(e.reason?.message || e.reason, e.reason?.stack));
+
+let accessTimer = null;
+document.addEventListener('change', (e) => {
+  if (e.target.id === 'accessUser') { S.access.user = e.target.value; loadAccess(); }
+  if (e.target.id === 'accessDays') { S.access.days = +e.target.value; loadAccess(); }
+});
 document.addEventListener('input', (e) => {
   if (e.target.id === 'reqQuery') { searchRequests(e.target.value); return; }
+  if (e.target.id === 'accessQuery') { S.access.q = e.target.value; clearTimeout(accessTimer); accessTimer = setTimeout(loadAccess, 350); return; }
   if (e.target.id !== 'dirFilter') return;
   S.filters.directors.q = e.target.value;
   const all = allDirectors();

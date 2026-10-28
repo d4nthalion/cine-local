@@ -52,6 +52,17 @@ La app de Windows sólo funciona con CineLocal Server: al abrirla pide la direcc
 * Para reproducir, `/api/play` con `client: 'app'` da **enlaces firmados** (HMAC, válidos 24 h y sólo para ese vídeo) al archivo tal cual y a sus subtítulos externos. mpv, su generador de miniaturas y, más adelante, LibVLC los abren sin cabeceras ni cookies, y el token de la sesión nunca va en una URL.
 * El progreso de mpv se envía al servidor cada 10 s y al cerrar.
 
+## Registro de actividad
+
+Los administradores lo ven en **Registro**. `accesslog.js` apunta en `data/logs/access-AAAA-MM.jsonl` (una línea JSON por evento):
+
+* **Vídeo**: quién ha reproducido o descargado cada archivo, desde qué app e IP, cuánto rato y cuántos datos. Las peticiones de un mismo vídeo (saltos, trozos) se juntan en un solo acceso, que se cierra tras 10 minutos sin actividad; mientras tanto sale «en curso». Android añade `dl=1` al descargar para distinguirlo de una reproducción.
+* **Sesiones**: inicios de sesión, intentos fallidos y cierres.
+* **Acciones**: abrir el reproductor, marcar como visto, Mi lista, listas, peticiones, ajustes cambiados, escaneos y fichas corregidas.
+* **Errores**: los del servidor que le salen a alguien con sesión, y los de la interfaz (web y escritorio), que se envían a `/api/log` (como mucho 20 por minuto y usuario).
+
+Se guardan 12 meses (`CINELOCAL_LOG_MONTHS` para cambiarlo).
+
 ## Seguridad
 
 * **Usuarios de DSM.** La contraseña se comprueba contra `SYNO.API.Auth` (por POST, con verificación en dos pasos si la tienes) y no se guarda. La sesión de DSM se cierra al momento. CineLocal da su propia cookie de sesión (`HttpOnly`, `SameSite=Strict`, `Secure` tras HTTPS) de 30 días. En disco sólo queda el hash del token.
