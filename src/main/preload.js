@@ -30,7 +30,6 @@ contextBridge.exposeInMainWorld('api', {
   requests: { get: () => ipcRenderer.invoke('requests:get'), op: (q) => ipcRenderer.invoke('requests:op', q) },
   accessLog: (q) => ipcRenderer.invoke('access:list', q),
   logError: (e) => ipcRenderer.invoke('log:error', e),
-  accessLog: (q) => ipcRenderer.invoke('access:list', q),
   identify: (q) => ipcRenderer.invoke('meta:identify', q),
   play: (q) => ipcRenderer.invoke('play', q),
   markProgress: (q) => ipcRenderer.invoke('progress:mark', q),

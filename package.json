@@ -1,7 +1,7 @@
 {
   "name": "cinelocal",
   "productName": "CineLocal",
-  "version": "1.17.0",
+  "version": "1.17.1",
   "description": "Tu cine en casa: películas y series de tu disco con estilo de plataforma de streaming",
   "main": "src/main/main.js",
   "author": "Carlos",

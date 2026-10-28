@@ -69,7 +69,6 @@
     requests: { get: () => get('/api/requests'), op: q => post('/api/requests', q) },
     accessLog: q => get('/api/access?' + new URLSearchParams(q)),
     logError: e => post('/api/log', e),
-    accessLog: q => get('/api/access?' + new URLSearchParams(q)),
     toggleFullscreen: () => setFs(!document.fullscreenElement),
     setFullscreen: v => setFs(!!v),
     isFullscreen: async () => !!document.fullscreenElement,
