@@ -134,7 +134,9 @@ class CineServer(url: String, private val token: String = "", private val http: 
 
     /** Copia el archivo enlazado al final de [dest] desde [offset] (reanuda un .part). Como SmbLibrary.download */
     fun download(url: String, dest: File, offset: Long, onChunk: (Long) -> Boolean): Long? {
-        val req = Request.Builder().url(url).apply { if (offset > 0) header("Range", "bytes=$offset-") }.build()
+        // «dl=1»: el registro de accesos del servidor lo apunta como descarga y no como reproducción
+        val link = if ("/file?" in url) "$url&dl=1" else url
+        val req = Request.Builder().url(link).apply { if (offset > 0) header("Range", "bytes=$offset-") }.build()
         http.newBuilder().readTimeout(60, TimeUnit.SECONDS).build().newCall(req).execute().use { res ->
             if (res.code == 416) return offset   // ya estaba entero
             if (!res.isSuccessful) throw IOException(httpError(res.code))
