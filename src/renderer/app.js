@@ -22,6 +22,7 @@ const I = {
   yt: '<svg viewBox="0 0 24 24"><path d="M21.6 7.2a2.5 2.5 0 0 0-1.8-1.8C18.2 5 12 5 12 5s-6.2 0-7.8.4A2.5 2.5 0 0 0 2.4 7.2 26 26 0 0 0 2 12a26 26 0 0 0 .4 4.8 2.5 2.5 0 0 0 1.8 1.8C5.8 19 12 19 12 19s6.2 0 7.8-.4a2.5 2.5 0 0 0 1.8-1.8A26 26 0 0 0 22 12a26 26 0 0 0-.4-4.8zM10 15V9l5.2 3z"/></svg>',
   eye: '<svg viewBox="0 0 24 24"><path d="M12 5c5 0 9 4.5 10 7-1 2.5-5 7-10 7S3 14.5 2 12c1-2.5 5-7 10-7zm0 3a4 4 0 1 0 0 8 4 4 0 0 0 0-8z"/></svg>',
   tag: '<svg viewBox="0 0 24 24"><path d="M3 3h8l10 10-8 8L3 11zm4 2.5a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3z"/></svg>',
+  image: '<svg viewBox="0 0 24 24"><path d="M3 4h18v16H3zm2 2v9.6l4-4 4 4 2.5-2.5L19 16.6V6zm11 1.5a1.5 1.5 0 1 1 0 3 1.5 1.5 0 0 1 0-3z"/></svg>',
   download: '<svg viewBox="0 0 24 24"><path d="M11 3h2v9.2l3.3-3.3 1.4 1.4L12 16l-5.7-5.7 1.4-1.4 3.3 3.3zM4 18h16v2H4z"/></svg>',
   pause: '<svg viewBox="0 0 24 24"><path d="M7 5h4v14H7zm6 0h4v14h-4z"/></svg>',
   close: '<svg viewBox="0 0 24 24"><path d="m6.4 5 5.6 5.6L17.6 5 19 6.4 13.4 12l5.6 5.6-1.4 1.4-5.6-5.6L6.4 19 5 17.6l5.6-5.6L5 6.4z"/></svg>',
@@ -249,8 +250,11 @@ function metaLine(it, extra = '') {
   return `<div class="meta-line">${parts.join('<i class="dot"></i>')}</div>`;
 }
 
+/** Carátula de un título: la elegida a mano (también sin ficha de TMDB) o la de la ficha */
+const posterOf = it => it.poster || it.meta?.poster || null;
+
 function card(it) {
-  const poster = it.meta?.poster;
+  const poster = posterOf(it);
   const isNew = isNewItem(it);
   let watched = false, bar = '';
   if (it.type === 'movie') {
@@ -678,7 +682,7 @@ function allSagas() {
 }
 const sagaName = s => s.name.replace(/\s*[-–:]?\s*(Colecci[oó]n|Collection|Saga)$/i, '').replace(/^(Colecci[oó]n|Saga)\s*:?\s*/i, '') || s.name;
 function sagaCard(s) {
-  const poster = s.poster || s.films.find(f => f.meta?.poster)?.meta.poster;
+  const poster = s.poster || posterOf(s.films.find(posterOf) || {});
   const seen = s.films.filter(isSeen).length;
   return `<div class="card" tabindex="0" data-saga="${s.id}">
     <div class="art">${poster ? `<img loading="lazy" src="${esc(poster)}" alt="">` : placeholder({ title: sagaName(s), type: 'movie' })}
@@ -751,7 +755,9 @@ function setHero(i) {
 function banners() {
   let out = '';
   if (S.lib.error) {
-    out += `<div class="banner"><div class="txt"><b>CineLocal Server.</b> ${esc(S.lib.error)}.${S.lib.items.length ? ' Se muestra lo último que se recibió.' : ''}</div></div>`;
+    out += LOCAL()
+      ? `<div class="banner"><div class="txt"><b>Biblioteca.</b> ${esc(S.lib.error)}.${S.lib.items.length ? ' Se muestra lo último que se encontró.' : ''}</div></div>`
+      : `<div class="banner"><div class="txt"><b>CineLocal Server.</b> ${esc(S.lib.error)}.${S.lib.items.length ? ' Se muestra lo último que se recibió.' : ''}</div></div>`;
   }
   if (!S.lib.hasKey && isAdmin()) {
     out += `<div class="banner"><div class="txt"><b>Añade tu API key de TMDB</b> para ver carátulas, sinopsis, reparto y nombres de episodios. Es gratuita.</div>
@@ -768,7 +774,7 @@ function viewEmpty() {
   return `<div class="page">${banners()}<div class="empty">
     <div class="big-ico">${I.film}</div>
     <h2>Tu biblioteca está vacía</h2>
-    <p>${isAdmin() ? `CineLocal Server busca en ${libPaths().filter(Boolean).map(p => `<b>${esc(p)}</b>`).join(', ') || 'ninguna carpeta'}.<br>Los archivos de vídeo sueltos se muestran como películas y cada carpeta como una serie.` : 'Todavía no hay nada en la biblioteca del servidor.'}</p>
+    <p>${isAdmin() ? `${LOCAL() ? 'CineLocal' : 'CineLocal Server'} busca en ${libPaths().filter(Boolean).map(p => `<b>${esc(p)}</b>`).join(', ') || 'ninguna carpeta'}.<br>Los archivos de vídeo sueltos se muestran como películas y cada carpeta como una serie.` : 'Todavía no hay nada en la biblioteca del servidor.'}</p>
     ${canManage() ? `<div class="actions" style="justify-content:center">
       <button class="btn btn-primary" data-action="scan">Escanear ahora</button>
       <button class="btn btn-ghost" data-nav="settings">Cambiar carpeta</button>
@@ -946,8 +952,10 @@ function askListName(title, value = '', placeholder = 'Nombre de la lista') {
 
 // ---------------------------------------------------------------- peticiones (CineLocal Server)
 /** Hay peticiones cuando la biblioteca es la del servidor */
-const hasRequests = () => !!window.api.requests && !!S.me;
+const hasRequests = () => !!window.api.requests && !!S.me && !S.me.local;
 const isAdmin = () => !!S.me?.admin;
+/** Escritorio sin CineLocal Server: carpetas de este PC o del NAS por SMB (todo lo de administrador, para ti) */
+const LOCAL = () => !WEB && !!S.me?.local;
 /** Corregir fichas, escanear, carpetas y TMDB: en el servidor, sólo un administrador */
 const canManage = () => isAdmin();
 /** eMule: sólo en el escritorio y sólo para administradores */
@@ -1090,7 +1098,7 @@ const ACCESS_KIND = {
   'fav-add': 'Añadido a Mi lista', 'fav-remove': 'Quitado de Mi lista',
   'list-create': 'Lista creada', 'list-rename': 'Lista renombrada', 'list-delete': 'Lista borrada', 'list-add': 'Añadido a una lista', 'list-remove': 'Quitado de una lista',
   'request-create': 'Petición', 'request-cancel': 'Petición cancelada', 'request-resolve': 'Petición resuelta', 'request-remove': 'Petición borrada',
-  settings: 'Ajustes', scan: 'Escaneo', 'meta-refresh': 'Buscar fichas', identify: 'Ficha corregida',
+  settings: 'Ajustes', scan: 'Escaneo', 'meta-refresh': 'Buscar fichas', identify: 'Ficha corregida', poster: 'Carátula cambiada',
   error: 'Error', 'client-error': 'Error en la app'
 };
 const ACCESS_TYPES = [['', 'Todo'], ['video', 'Vídeo'], ['action', 'Acciones'], ['session', 'Sesiones'], ['error', 'Errores']];
@@ -1288,6 +1296,7 @@ function viewDetail(id) {
       : `<b>Carpeta</b><span>${esc(it.path)}</span><b>Tamaño</b><span>${fmtSize(it.episodes.reduce((a, e) => a + e.size, 0))}</span>`}
     <b>Metadatos</b><span>${it.meta ? `TMDB #${m.tmdbId}${canManage() ? ` · <button class="link-btn" data-action="identify" data-id="${it.id}">Corregir coincidencia</button>` : ''}`
       : `${it.metaFailed ? 'No se encontró en TMDB' : 'Sin metadatos'}${canManage() ? ` · <button class="link-btn" data-action="identify" data-id="${it.id}">Identificar manualmente</button>` : ''}`}</span>
+    ${canManage() || it.poster ? `<b>Carátula</b><span>${it.poster ? 'Elegida a mano' : posterOf(it) ? 'La de TMDB' : 'Sin carátula'}${canManage() ? ` · <button class="link-btn" data-action="poster" data-id="${it.id}">Cambiar</button>` : ''}</span>` : ''}
   </div>`;
 
   return `<div class="detail">
@@ -1312,7 +1321,8 @@ function viewDetail(id) {
             <button class="round-btn" title="Más opciones" data-action="menu">${I.more}</button>
             <div class="menu hidden" id="detailMenu">
               <button data-action="mark-all" data-id="${it.id}" data-watched="${watchedAll ? 0 : 1}">${watchedAll ? I.restart : I.eye}${watchedAll ? 'Marcar como no visto' : 'Marcar como visto'}</button>
-              ${canManage() ? `<button data-action="identify" data-id="${it.id}">${I.tag}Corregir coincidencia</button>` : ''}
+              ${canManage() ? `<button data-action="identify" data-id="${it.id}">${I.tag}Corregir coincidencia</button>
+              <button data-action="poster" data-id="${it.id}">${I.image}Cambiar carátula</button>` : ''}
               ${emuleOn() ? `<button data-action="emule-find" data-q="${esc(T(it))}">${I.download}Buscar en eMule</button>` : ''}
               ${WEB ? '' : `<button data-action="reveal" data-path="${esc(it.type === 'movie' ? it.path : it.episodes[0].path)}">${I.folder}Abrir ubicación</button>`}
             </div>
@@ -1453,20 +1463,22 @@ function viewSettings() {
     <h1 class="page-title">Ajustes</h1>
     ${accountHTML()}
 
-    ${isAdmin() ? `<div class="set-group"><h3>Biblioteca del servidor</h3>
+    ${isAdmin() ? `<div class="set-group"><h3>${LOCAL() ? 'Biblioteca' : 'Biblioteca del servidor'}</h3>
       <div class="set-row lib-paths"><div class="lbl"><div class="t">Carpetas de películas y series</div>
-        <div class="d">Carpetas dentro del contenedor de CineLocal Server. Archivos de vídeo sueltos = películas · cada carpeta = una serie (admite subcarpetas por temporada). Una serie repartida en varias carpetas se junta en una sola.</div></div>
+        <div class="d">${LOCAL() ? 'De este PC o del NAS: <code>\\\\NAS\\Carpeta</code>. Cada una, «Automática» o «Por categorías». Una serie repartida en varias se junta en una.' : 'Carpetas dentro del contenedor de CineLocal Server. Archivos de vídeo sueltos = películas · cada carpeta = una serie (admite subcarpetas por temporada). Una serie repartida en varias carpetas se junta en una sola.'}</div></div>
         <div class="ctl">
           ${libPaths().map((p, i, all) => `<div class="lib-path">
-            <input class="input" data-lib-path="${i}" value="${esc(p)}" placeholder="Carpeta en el servidor, p. ej. /media">
+            <input class="input" data-lib-path="${i}" value="${esc(p)}" placeholder="${LOCAL() ? 'D:\\Películas o \\\\NAS\\video' : 'Carpeta en el servidor, p. ej. /media'}" spellcheck="false">
+            ${LOCAL() ? `<button class="btn btn-ghost btn-sm" data-action="pick-folder" data-idx="${i}">Examinar</button>` : ''}
             ${p ? `<button class="btn btn-ghost btn-sm layout-btn ${layoutOf(p) ? 'on' : ''}" data-action="lib-layout" data-path="${esc(p)}" title="Cómo están organizadas las carpetas">${layoutOf(p) ? 'Por categorías' : 'Automática'}</button>` : ''}
             ${all.length > 1 ? `<button class="icon-btn sm" data-action="remove-lib-path" data-idx="${i}" title="Quitar esta carpeta">${I.close}</button>` : ''}
           </div>`).join('')}
           <button class="btn btn-ghost btn-sm add-path" data-action="add-lib-path">${I.plus}Añadir nueva ruta</button>
         </div></div>
+      ${LOCAL() && libPaths().some(isUncPath) ? nasLoginHTML(s) : ''}
       <div class="set-row"><div class="lbl"><div class="t">Escanear de nuevo</div><div class="d">${S.lib.items.length} títulos · último escaneo ${S.lib.scannedAt ? new Date(S.lib.scannedAt).toLocaleString('es-ES') : 'nunca'}</div></div>
         <div class="ctl"><button class="btn btn-ghost btn-sm" data-action="scan">Escanear ahora</button></div></div>
-      <div class="set-row"><div class="lbl"><div class="t">Detectar archivos nuevos automáticamente</div><div class="d">El servidor vigila la carpeta y añade lo nuevo en cuanto termine de copiarse, con aviso a todos.</div></div>
+      <div class="set-row"><div class="lbl"><div class="t">Detectar archivos nuevos automáticamente</div><div class="d">${LOCAL() ? 'CineLocal vigila las carpetas mientras está abierto y añade lo nuevo en cuanto termine de copiarse, con aviso.' : 'El servidor vigila la carpeta y añade lo nuevo en cuanto termine de copiarse, con aviso a todos.'}</div></div>
         <div class="ctl">${sw('autoWatch', s.autoWatch !== false)}</div></div>
       <div class="set-row"><div class="lbl"><div class="t">Carpetas con un solo vídeo como película</div><div class="d">Si una carpeta contiene un único vídeo sin numeración de episodio, se trata como película en vez de serie.</div></div>
         <div class="ctl">${sw('singleFileFolderAsMovie', s.singleFileFolderAsMovie)}</div></div>
@@ -1536,14 +1548,38 @@ function viewSettings() {
   </div>`;
 }
 
-/** Quién ha iniciado sesión, en qué servidor, y cerrar sesión */
+/** Quién ha iniciado sesión, en qué servidor, y cerrar sesión (o la biblioteca local, y volver al servidor) */
 function accountHTML() {
   const me = S.me || {};
+  if (LOCAL()) {
+    return `<div class="set-group" id="account"><h3>Origen de la biblioteca</h3>
+      <div class="set-row"><div class="lbl"><div class="t">Carpetas de este PC o del NAS</div>
+        <div class="d">Sin CineLocal Server: CineLocal lee las carpetas directamente (las del NAS, por SMB) y guarda en este PC las fichas, el progreso y tus listas. Las peticiones y el registro de actividad sólo existen con el servidor.</div></div>
+        <div class="ctl"><button class="btn btn-ghost btn-sm" data-action="use-server">Usar CineLocal Server</button></div></div>
+    </div>`;
+  }
   return `<div class="set-group" id="account"><h3>Cuenta</h3>
       <div class="set-row"><div class="lbl"><div class="t">${esc(me.user || '')} · ${me.admin ? 'CineLocal Admin' : 'CineLocal User'}</div>
         <div class="d">CineLocal Server ${esc(me.version || '')}${WEB ? '' : ' en ' + esc(S.settings.remoteUrl || '')} · conversión de vídeo con ${me.hwaccel === 'vaapi' ? 'la gráfica del NAS' : 'el procesador del NAS'}.${me.admin ? ' Puedes corregir fichas, gestionar las peticiones y cambiar los ajustes del servidor.' : ' Tu progreso, tus listas, tus peticiones y estos ajustes de audio, subtítulos y plataformas son sólo tuyos.'}${me.groups ? '' : ' (Todavía no se usan los grupos de DSM: el acceso lo decide la configuración del servidor.)'}</div></div>
         <div class="ctl"><button class="btn btn-ghost btn-sm" data-action="logout">Cerrar sesión</button></div></div>
+      ${WEB ? '' : `<div class="set-row"><div class="lbl"><div class="t">Usar sin CineLocal Server</div>
+        <div class="d">Leer directamente las carpetas de este PC o del NAS por SMB (<code>\\\\NAS\\Carpeta</code>), con su propia biblioteca en este PC. La sesión del servidor se guarda para volver a él.</div></div>
+        <div class="ctl"><button class="btn btn-ghost btn-sm" data-action="use-local">Usar carpetas</button></div></div>`}
     </div>`;
+}
+
+const isUncPath = p => /^\\\\[^\\]+\\[^\\]+/.test(p || '');
+
+/** Biblioteca local en el NAS: usuario propio para leer las carpetas \\NAS\… (opcional) */
+function nasLoginHTML(s) {
+  return `<div class="set-row nas-row"><div class="lbl"><div class="t">Inicio de sesión en el NAS</div>
+      <div class="d">Opcional: un usuario del NAS con permiso de lectura en esas carpetas (de escritura si eMule copia ahí las descargas), sin depender de las credenciales guardadas en el Explorador de Windows. Vacío = la sesión que tenga Windows. La contraseña se guarda cifrada con tu cuenta de Windows.</div></div>
+      <div class="ctl">
+        <input class="input" data-lnas="user" value="${esc(s.nasUser)}" placeholder="Usuario del NAS" spellcheck="false">
+        <input class="input" type="password" data-lnas="password" placeholder="${s.nasHasPassword ? 'Contraseña guardada' : 'Contraseña'}">
+        <button class="btn btn-ghost btn-sm" data-action="nas-login">Conectar</button>
+      </div>
+      <div class="nas-status" id="nasStatus">${nasStatePill()}</div></div>`;
 }
 
 // ---------------------------------------------------------------- descargas (eMule)
@@ -1883,7 +1919,7 @@ function emuleSettingsHTML(s, sw) {
   const info = S.emule.info;
   if (!s.emuleEnabled) {
     return `<div class="set-row"><div class="lbl"><div class="t">Buscar y descargar con eMule</div>
-      <div class="d">Usa el servidor web de eMule de este PC para buscar, descargar y seguir el progreso desde CineLocal. Lo descargado se copia al NAS al terminar. Sólo para administradores.</div></div>
+      <div class="d">Usa el servidor web de eMule de este PC para buscar, descargar y seguir el progreso desde CineLocal. Lo descargado se copia ${LOCAL() ? 'a la biblioteca' : 'al NAS'} al terminar.${LOCAL() ? '' : ' Sólo para administradores.'}</div></div>
       <div class="ctl">${sw('emuleEnabled', false)}</div></div>`;
   }
   const tmpl = info?.templatePath || '…';
@@ -1903,10 +1939,10 @@ function emuleSettingsHTML(s, sw) {
       <button class="btn btn-ghost btn-sm" data-action="emule-test">Probar</button><span id="emuleTest"></span></div></div>
     <div class="set-row"><div class="lbl"><div class="t">Puerto</div></div>
       <div class="ctl"><input class="input" data-set-text="emulePort" value="${esc(s.emulePort)}" style="min-width:0;width:100px"></div></div>
-    <div class="set-row"><div class="lbl"><div class="t">Copiar al NAS al terminar</div>
-      <div class="d">Las películas van a la carpeta «Películas» de la biblioteca y los episodios (S01E02, 1x02, Cap.102) a la carpeta de su serie; CineLocal Server los añade solo. Sólo se copian las descargas que CineLocal ha visto en curso${info?.incoming?.length ? `, desde <code>${esc(info.incoming.join(', '))}</code>` : ''}. El PC tiene que llegar al NAS (en casa o con la VPN).</div></div>
+    <div class="set-row"><div class="lbl"><div class="t">${LOCAL() ? 'Copiar a la biblioteca al terminar' : 'Copiar al NAS al terminar'}</div>
+      <div class="d">Las películas van a la carpeta «Películas» de la biblioteca${LOCAL() ? ` (la primera: <code>${esc(libPaths()[0] || '…')}</code>)` : ''} y los episodios (S01E02, 1x02, Cap.102) a la carpeta de su serie; ${LOCAL() ? 'CineLocal' : 'CineLocal Server'} los añade solo. Sólo se copian las descargas que CineLocal ha visto en curso${info?.incoming?.length ? `, desde <code>${esc(info.incoming.join(', '))}</code>` : ''}.${LOCAL() ? '' : ' El PC tiene que llegar al NAS (en casa o con la VPN).'}</div></div>
       <div class="ctl">${sw('emuleMoveToLibrary', s.emuleMoveToLibrary !== false)}</div></div>
-    ${s.emuleMoveToLibrary !== false ? `<div class="set-row nas-row"><div class="lbl"><div class="t">Carpeta de la biblioteca en el NAS</div>
+    ${s.emuleMoveToLibrary !== false && !LOCAL() ? `<div class="set-row nas-row"><div class="lbl"><div class="t">Carpeta de la biblioteca en el NAS</div>
       <div class="d">La misma carpeta que usa CineLocal Server, vista desde Windows: <code>\\\\NAS\\Multimedia</code> (o <code>\\\\10.8.0.1\\Multimedia</code> por la VPN). Usuario del NAS con permiso de escritura en ella; si lo dejas vacío, se usa la sesión que tenga Windows. La contraseña se guarda cifrada con tu cuenta de Windows.</div></div>
       <div class="ctl">
         <input class="input" data-nas="dest" value="${esc(s.emuleDest)}" placeholder="\\\\NAS\\Multimedia" spellcheck="false">
@@ -1952,6 +1988,9 @@ function letterboxdSettingsHTML(s, sw) {
       <div class="d">Se lee tu perfil público: películas vistas, tus notas, los “me gusta” y la watchlist. Al abrir CineLocal se añade lo último que hayas visto.</div></div>
       <div class="ctl"><input class="input" data-set-text="lbUser" value="${esc(s.lbUser || '')}" placeholder="tu_usuario" spellcheck="false" style="min-width:200px">
       <button class="btn btn-ghost btn-sm" data-action="lb-sync" ${s.lbUser && !S.lb.status?.running ? '' : 'disabled'}>Sincronizar ahora</button></div></div>
+    <div class="set-row"><div class="lbl"><div class="t">Marcar como vistas las que has visto en Letterboxd</div>
+      <div class="d">Las películas de la biblioteca que tienes vistas en Letterboxd se marcan como vistas en CineLocal (en tu usuario), sin tocar las que tienen progreso. Si desmarcas una, no se vuelve a marcar.</div></div>
+      <div class="ctl">${sw('lbMarkWatched', s.lbMarkWatched !== false)}</div></div>
     <div class="set-row"><div class="lbl"><div class="t">Estado</div><div class="d" id="lbStatus">${lbStatusHTML()}</div></div>
       <div class="ctl">${S.lb.syncedAt ? '<button class="btn btn-ghost btn-sm" data-action="lb-clear">Borrar datos</button>' : ''}</div></div>
     <div class="set-row"><div class="lbl"><div class="t">Importar la exportación de Letterboxd</div>
@@ -2256,6 +2295,80 @@ async function identify(id) {
   search();
 }
 
+/**
+ * Cambiar la carátula: otra de las de TMDB, una imagen propia (se reduce aquí a 500 px de ancho antes de enviarla)
+ * o volver a la de la ficha. Se guarda aparte, así que no se pierde al volver a descargar los metadatos.
+ */
+async function pickPoster(id) {
+  const it = byId(id);
+  if (!it) return;
+  const m = modal(`<div class="modal-head"><h2>Carátula</h2><p>${esc(T(it))}</p></div>
+    <div class="pp-top">
+      <div class="pp-current" id="ppCurrent">${posterOf(it) ? `<img src="${esc(posterOf(it))}" alt="">` : placeholder(it)}</div>
+      <div class="pp-side">
+        <label class="btn btn-ghost btn-sm">${I.plus}Subir imagen…<input type="file" id="ppFile" accept="image/jpeg,image/png,image/webp" hidden></label>
+        <button class="btn btn-ghost btn-sm ${it.poster ? '' : 'hidden'}" id="ppReset">${I.restart}Volver a la de TMDB</button>
+        <p>Elige una de TMDB o sube la tuya (JPG, PNG o WebP; mejor vertical, 2:3). Se guarda aunque vuelvas a descargar los metadatos.</p>
+      </div>
+    </div>
+    <div class="modal-list"><div class="pp-grid" id="ppGrid"><p class="pp-msg">Buscando carátulas en TMDB…</p></div></div>
+    <div class="modal-foot"><button class="btn btn-ghost btn-sm" data-action="close-modal">Cerrar</button></div>`);
+  const grid = $('#ppGrid', m);
+  const save = async (poster, msg) => {
+    try {
+      grid.style.opacity = '.5';
+      await window.api.setPoster(id, poster);
+      fullMeta.delete(id);
+      closeModal();
+      toast(msg, 'ok');
+    } catch (e) {
+      grid.style.opacity = '';
+      toast(errText(e), 'error');
+    }
+  };
+  $('#ppReset', m).addEventListener('click', () => save(null, 'Carátula de TMDB restablecida'));
+  $('#ppFile', m).addEventListener('change', async e => {
+    const f = e.target.files[0];
+    if (!f) return;
+    try { await save(await shrinkImage(f, 500), 'Carátula cambiada'); }
+    catch (x) { toast('No se pudo leer la imagen: ' + errText(x), 'error'); }
+  });
+  grid.addEventListener('click', e => {
+    const p = e.target.closest('[data-poster]');
+    if (p) save(p.dataset.poster, 'Carátula cambiada');
+  });
+  try {
+    const r = await window.api.getPosters(id);
+    const lang = l => l ? l.toUpperCase() : 'Sin texto';
+    grid.innerHTML = r.posters.length ? r.posters.map(p => `<button class="pp-item ${p.url === r.current ? 'on' : ''}" data-poster="${esc(p.url)}" title="${p.url === r.tmdb ? 'La de la ficha' : ''}">
+        <img loading="lazy" src="${esc(p.thumb)}" alt=""><span>${p.url === r.tmdb ? 'Ficha' : lang(p.lang)}</span></button>`).join('')
+      : `<p class="pp-msg">${it.meta ? 'TMDB no tiene más carátulas de este título.' : 'Sin ficha de TMDB: sube una imagen, o identifícalo primero con «Corregir coincidencia».'}</p>`;
+  } catch (e) {
+    grid.innerHTML = `<p class="pp-msg err">${esc(errText(e))}</p>`;
+  }
+}
+
+/** Imagen elegida → JPEG de como mucho `width` px de ancho, como data: (para guardarla en la ficha) */
+function shrinkImage(file, width) {
+  return new Promise((resolve, reject) => {
+    // como data: y no blob:, que la política de contenido de la página no deja cargar
+    const reader = new FileReader();
+    const img = new Image();
+    img.onload = () => {
+      const scale = Math.min(1, width / img.naturalWidth);
+      const c = document.createElement('canvas');
+      c.width = Math.round(img.naturalWidth * scale);
+      c.height = Math.round(img.naturalHeight * scale);
+      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+      resolve(c.toDataURL('image/jpeg', 0.86));
+    };
+    img.onerror = () => reject(new Error('formato no válido'));
+    reader.onload = () => { img.src = reader.result; };
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+}
+
 /** Carpetas de la biblioteca: la principal (libraryPath) y las añadidas (extraLibraryPaths) */
 function libPaths() {
   return [S.settings.libraryPath || '', ...(S.settings.extraLibraryPaths || [])];
@@ -2532,6 +2645,7 @@ document.addEventListener('click', async (e) => {
     else if (a === 'trailer') window.api.openExternal(action.dataset.url);
     else if (a === 'menu') $('#detailMenu').classList.toggle('hidden');
     else if (a === 'identify') { $('#detailMenu')?.classList.add('hidden'); identify(action.dataset.id); }
+    else if (a === 'poster') { $('#detailMenu')?.classList.add('hidden'); pickPoster(action.dataset.id); }
     else if (a === 'reveal') window.api.showInFolder(action.dataset.path);
     else if (a === 'mark') {
       e.stopPropagation();
@@ -2544,9 +2658,30 @@ document.addEventListener('click', async (e) => {
       render(true);
     } else if (a === 'fullscreen') window.api.toggleFullscreen();
     else if (a === 'logout') logout();
-    else if (a === 'add-lib-path') {
-      // carpetas del servidor (dentro del contenedor): se escriben, no se eligen en este PC
-      const p = await askListName('Añadir carpeta del servidor', '', 'Ruta en el servidor, p. ej. /media/Documentales');
+    else if (a === 'use-local') useLocal();
+    else if (a === 'use-server') useServer();
+    else if (a === 'pick-folder') {
+      const p = await window.api.pickFolder();
+      if (p) { const list = libPaths(); list[+action.dataset.idx || 0] = p; await saveLibPaths(list); }
+    } else if (a === 'nas-login') {
+      // usuario del NAS de la biblioteca local: sólo se guarda lo que conecta; vacío = la sesión de Windows
+      const user = $('[data-lnas="user"]').value.trim(), password = $('[data-lnas="password"]').value;
+      if (!user) { S.nasTest = null; S.settings = await window.api.setSettings({ nasUser: '', nasPassword: '' }); toast('Se usa la sesión de Windows en el NAS'); render(true); return; }
+      S.nasTest = 'running'; $('#nasStatus').innerHTML = nasStatePill();
+      const r = await window.api.nasLogin({ user, password }).catch(e => ({ ok: false, error: errText(e) }));
+      S.nasTest = r;
+      if (r.ok) {
+        const patch = { nasUser: user };
+        if (password) patch.nasPassword = password;
+        S.settings = await window.api.setSettings(patch);
+        toast('Conectado al NAS: escaneando…', 'ok');
+        render(true);
+      } else $('#nasStatus').innerHTML = nasStatePill();
+    } else if (a === 'add-lib-path') {
+      // carpetas del servidor (dentro del contenedor): se escriben, no se eligen en este PC; en modo local, también \\NAS\…
+      const p = LOCAL()
+        ? await askListName('Añadir carpeta', '', 'D:\\Documentales o \\\\NAS\\video')
+        : await askListName('Añadir carpeta del servidor', '', 'Ruta en el servidor, p. ej. /media/Documentales');
       if (p) {
         if (libPaths().some(x => x.toLowerCase() === p.toLowerCase())) toast('Esa carpeta ya está en la biblioteca');
         else { await saveLibPaths([...libPaths(), p]); toast('Carpeta añadida: escaneando…', 'ok'); }
@@ -2828,8 +2963,10 @@ function showLogin(message = '') {
       <button class="btn btn-accent" id="lgGo" type="submit">Entrar</button>
       <div id="lgErr" class="err ${message ? '' : 'hidden'}" role="alert">${esc(message)}</div>
       <div class="server-line ${S.session.url ? '' : 'hidden'}">Servidor: ${esc(S.session.url || '')} · <button type="button" id="lgChange">Cambiar</button></div>
+      <div class="server-line"><button type="button" id="lgLocal">Usar sin servidor: carpetas de este PC o del NAS</button></div>
     </form>`;
   $('#lgChange')?.addEventListener('click', () => { $('#lgServerBox').classList.remove('hidden'); $('.server-line').classList.add('hidden'); $('#lgServer').focus(); });
+  $('#lgLocal').addEventListener('click', () => useLocal());
   setTimeout(() => ($('#lgUser').value ? $('#lgPass') : $('#lgUser')).focus(), 30);
   $('#loginForm').addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -2853,9 +2990,29 @@ async function logout() {
   if (WEB) return window.api.logout();
   await window.api.remote.logout();
   S.session = await window.api.session.get();
-  S.lib = { items: [], progress: {}, favorites: [] };
-  S.history = []; S.route = { name: 'home' };
+  resetLibrary();
   showLogin();
+}
+function resetLibrary(route = 'home') {
+  S.lib = { items: [], progress: {}, favorites: [] };
+  S.history = []; S.route = { name: route };
+  S.nasTest = null;
+}
+/** Sin CineLocal Server: la biblioteca de las carpetas de este PC o del NAS (la primera vez, a Ajustes para añadirlas) */
+async function useLocal() {
+  S.settings = await window.api.setSettings({ localMode: true });
+  S.session = await window.api.session.get();
+  resetLibrary(libPaths().some(Boolean) ? 'home' : 'settings');
+  hideLogin();
+  await boot();
+}
+/** Volver a CineLocal Server: con la sesión guardada, directamente; si no, a la pantalla de inicio de sesión */
+async function useServer() {
+  S.settings = await window.api.setSettings({ localMode: false });
+  S.session = await window.api.session.get();
+  resetLibrary();
+  if (!S.session.loggedIn) { S.me = null; showLogin(); return; }
+  await boot();
 }
 
 // ---------------------------------------------------------------- arranque

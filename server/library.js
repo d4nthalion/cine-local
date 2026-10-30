@@ -67,13 +67,22 @@ function slimMeta(m) {
 }
 
 class Library extends EventEmitter {
-  constructor(dataDir) {
+  /**
+   * La usan CineLocal Server y, en modo local, la app de escritorio (src/main/local.js).
+   * defaults: ajustes iniciales propios · fetch: el de Electron en la app · prepare(roots): antes de cada escaneo
+   * (la app inicia sesión en el NAS); si devuelve { ok: false, error }, el error se muestra con los del escaneo.
+   */
+  constructor(dataDir, { defaults = {}, fetch = globalThis.fetch, prepare = null } = {}) {
     super();
     this.dir = dataDir;
-    this.settings = store(dataDir, 'settings.json', DEFAULT_SETTINGS);
+    this.fetch = fetch;
+    this.prepare = prepare;
+    this.settings = store(dataDir, 'settings.json', { ...DEFAULT_SETTINGS, ...defaults });
     this.library = store(dataDir, 'library.json', { items: [], scannedAt: 0, error: null });
     this.metadata = store(dataDir, 'metadata.json', {});
     this.people = store(dataDir, 'people.json', {});
+    // carátulas elegidas a mano: { [id del título]: { poster } }; aparte de metadata.json para que no las borre recargar las fichas
+    this.custom = store(dataDir, 'custom.json', {});
     this.users = new Map();
     this.fetching = false;
     this.fetchAgain = false;
@@ -152,7 +161,7 @@ class Library extends EventEmitter {
 
   tmdb() {
     const s = this.settings.data;
-    return new TMDB(s.tmdbKey, s.metaLang || 'es-ES', globalThis.fetch, s.region || 'ES');
+    return new TMDB(s.tmdbKey, s.metaLang || 'es-ES', this.fetch, s.region || 'ES');
   }
 
   // ---------- vista ----------
@@ -165,7 +174,7 @@ class Library extends EventEmitter {
     const items = this.library.data.items.map(it => {
       const m = this.metadata.data[it.id];
       const meta = m && !m.failed ? m.meta : null;
-      return { ...it, meta: slim && meta ? slimMeta(meta) : meta, metaFailed: !!m?.failed };
+      return this.withCustom({ ...it, meta: slim && meta ? slimMeta(meta) : meta, metaFailed: !!m?.failed });
     });
     return {
       items,
@@ -191,7 +200,44 @@ class Library extends EventEmitter {
     const it = this.library.data.items.find(i => i.id === id);
     if (!it) return null;
     const m = this.metadata.data[it.id];
-    return { ...it, meta: m && !m.failed ? m.meta : null, metaFailed: !!m?.failed };
+    return this.withCustom({ ...it, meta: m && !m.failed ? m.meta : null, metaFailed: !!m?.failed });
+  }
+
+  /**
+   * Carátula elegida a mano: va en `poster` (también sin ficha de TMDB). Si es otra de TMDB, además sustituye a la
+   * de la ficha, y así la ven también las apps que sólo miran meta.poster (Android, Discord); una imagen subida
+   * (data:) sólo va en `poster`, para no copiarla en las listas.
+   */
+  withCustom(it) {
+    const poster = this.custom.data[it.id]?.poster;
+    if (!poster) return it;
+    const meta = it.meta && /^https:/.test(poster) ? { ...it.meta, poster } : it.meta;
+    return { ...it, meta, poster };
+  }
+
+  /** Carátulas de TMDB para elegir, con la que se usa ahora */
+  async posters(id) {
+    const it = this.item(id);
+    if (!it) throw new Error('Elemento no encontrado');
+    const tmdbId = this.metadata.data[id]?.meta?.tmdbId;
+    const list = tmdbId ? await this.requireTmdb().posters(it.type, tmdbId) : [];
+    return { posters: list, current: it.poster || it.meta?.poster || null, custom: !!it.poster, tmdb: this.metadata.data[id]?.meta?.poster || null };
+  }
+
+  /** Cambia la carátula: una de TMDB, una imagen subida (data:image/…, ya reducida) o null para volver a la de la ficha */
+  setPoster(id, poster) {
+    if (!this.library.data.items.some(i => i.id === id)) throw new Error('Elemento no encontrado');
+    if (poster == null || poster === '') delete this.custom.data[id];
+    else {
+      const tmdb = /^https:\/\/image\.tmdb\.org\/t\/p\/\w+\/[\w-]+\.(jpg|jpeg|png|webp)$/i.test(poster);
+      const upload = /^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/.test(poster);
+      if (!tmdb && !upload) throw new Error('Imagen no válida');
+      if (upload && poster.length > 400 * 1024) throw new Error('La imagen es demasiado grande');
+      this.custom.data[id] = { poster, at: Date.now() };
+    }
+    this.custom.save();
+    this.emit('library');
+    return this.item(id);
   }
 
   /** Archivo de vídeo por su id (el de la película o el del episodio); nunca por ruta */
@@ -228,6 +274,7 @@ class Library extends EventEmitter {
     const prevIds = new Set(prevItems.map(i => i.id));
     const roots = this.roots();
     const isUnder = (p, root) => { const rel = path.relative(root, p); return !!rel && !rel.startsWith('..') && !path.isAbsolute(rel); };
+    const prep = this.prepare ? await Promise.resolve(this.prepare(roots)).catch(e => ({ ok: false, error: e.message })) : null;
 
     const r = roots.length
       ? scanLibraries(roots, { singleFileFolderAsMovie: this.settings.data.singleFileFolderAsMovie, layouts: this.settings.data.libraryLayouts || {} })
@@ -238,6 +285,9 @@ class Library extends EventEmitter {
       r.items.sort((a, b) => a.title.localeCompare(b.title, 'es', { numeric: true }));
     }
     r.error = r.failed.map(f => f.error).join(' · ') || null;
+    if (prep && !prep.ok) r.error = 'NAS: ' + prep.error + (r.error ? ' · ' + r.error : '');
+    // alguna carpeta no se ha podido leer (quizá se cerró la sesión en el NAS): la app la vuelve a abrir la próxima vez
+    else if (r.failed.length) this.emit('scan:failed', r.failed);
 
     let pending = false;
     const items = [];

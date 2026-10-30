@@ -1,6 +1,6 @@
 # CineLocal
 
-Cliente de escritorio para Windows con estilo de plataforma de streaming (HBO Max / Netflix / Filmin) para la biblioteca de películas y series de **CineLocal Server**, el servicio que corre en el NAS ([`server/`](server/README.md)). Se entra con el usuario de DSM; la biblioteca, los metadatos, el progreso, las listas y las peticiones están en el servidor, y la app reproduce con mpv.
+Cliente de escritorio para Windows con estilo de plataforma de streaming (HBO Max / Netflix / Filmin) para la biblioteca de películas y series de **CineLocal Server**, el servicio que corre en el NAS ([`server/`](server/README.md)). Se entra con el usuario de DSM; la biblioteca, los metadatos, el progreso, las listas y las peticiones están en el servidor, y la app reproduce con mpv. También funciona **sin servidor**, leyendo directamente carpetas de este PC o del NAS por SMB (ver [Sin CineLocal Server](#sin-cinelocal-server)).
 
 ## Cómo organiza la biblioteca
 
@@ -32,6 +32,7 @@ D:\Películas y Series\
   * `Título (Año).mkv` → el más fiable, p. ej. `The Godfather Part II (1974).mkv`
   * `Director - Título.mkv` → se comprueba el director en TMDB (tolera erratas)
 * Si algo se identifica mal: ficha → `···` → **Corregir coincidencia** (se recuerda aunque reescanees).
+* **Cambiar carátula** (ficha → `···`, o *Información → Carátula → Cambiar*; administradores): por defecto se usa la de la ficha de TMDB, pero se puede elegir otra de las que tiene TMDB para ese título (las del idioma de las fichas, en español, sin texto y en inglés) o subir una imagen propia, que se reduce a 500 px de ancho antes de enviarla. Sirve también para lo que no está en TMDB. Se guarda aparte (`custom.json`), así que se conserva al volver a descargar los metadatos; *Volver a la de TMDB* la deshace. Las elegidas de TMDB también se ven en Android y en Discord; las subidas, de momento sólo en el escritorio y en la web.
 * Subtítulos externos: junto al vídeo con el mismo nombre (`Película.es.srt`) o en una carpeta `Subtítulos` dentro de la biblioteca; se emparejan por código IMDb (`tt1234567`) o por título y se detecta el idioma (`es`, `spa`, `castellano`, `en`…).
 
 ## Primer uso
@@ -39,6 +40,18 @@ D:\Películas y Series\
 1. **Inicio de sesión:** al abrir, CineLocal pide la dirección de CineLocal Server (con su puerto, p. ej. `https://tu-nas.synology.me:5443`; sólo la primera vez) y tu usuario y contraseña de DSM, más el código si tienes la verificación en dos pasos. La contraseña no se guarda: sólo la sesión, cifrada con `safeStorage`, durante 30 días. Si caduca, o te sacan del grupo de CineLocal, la app vuelve a esta pantalla. *Ajustes → Cuenta → Cerrar sesión*.
 2. **mpv** (el motor de reproducción) viene incluido en el instalador y en la versión portable; no hay que instalar nada. Si prefieres otro, selecciona su `mpv.exe` en *Ajustes*. Ejecutando desde el código (`npm start`) se usa el de `mpv\` (lo descarga `npm run fetch-mpv`) o uno instalado en el sistema (`winget install --id=shinchiro.mpv -e`).
 3. Elige **idioma de audio** y **subtítulos** en *Ajustes*: son tuyos (se guardan en el servidor con tu usuario) y valen también en la web y en Android. Al reproducir se seleccionan automáticamente esas pistas si existen (incluidos `.srt`/`.ass` junto al vídeo). Con el modo *“Sólo si el audio está en otro idioma”* no verás subtítulos en español cuando el audio ya sea español.
+
+### Sin CineLocal Server
+
+En la pantalla de inicio de sesión, *Usar sin servidor: carpetas de este PC o del NAS* (o *Ajustes → Cuenta → Usar sin CineLocal Server → Usar carpetas*). La biblioteca se escanea en este PC con las mismas reglas que en el servidor (también *Automática* / *Por categorías* en cada carpeta) y las fichas, el progreso, Mi lista y las listas se guardan en `%APPDATA%\CineLocal\local\`. La sesión del servidor se conserva: *Ajustes → Origen de la biblioteca → Usar CineLocal Server* vuelve a él.
+
+* **Carpetas:** en *Ajustes → Biblioteca → Añadir nueva ruta* se escriben (`D:\Películas`, `\\NAS\video`, o `\\10.8.0.1\video` por la VPN del Synology), o se eligen con *Examinar*. Se pueden poner varias, del PC y del NAS.
+* **NAS por SMB:** con alguna carpeta `\\NAS\…`, aparece *Inicio de sesión en el NAS*. Con un usuario, CineLocal inicia sesión en el NAS antes de cada escaneo (`net use`, contraseña cifrada con `safeStorage`), sin depender de las credenciales guardadas en el Explorador de Windows. Sin usuario, se usa la sesión que tenga Windows. Si el NAS no responde, se conservan sus títulos y se avisa.
+* Mientras CineLocal está abierto, vigila las carpetas y añade lo nuevo cuando termina de copiarse.
+* Todo lo de administrador es tuyo: TMDB, carpetas, corregir fichas y eMule. Con eMule, lo descargado se copia a la primera carpeta de la biblioteca.
+* No hay peticiones ni registro de actividad: sólo existen en el servidor.
+* La primera vez se importa la biblioteca local de antes de la 1.16 si sigue en `%APPDATA%\CineLocal` (fichas, correcciones, progreso y Mi lista). Las carpetas hay que volver a añadirlas.
+* Por dentro, `src/main/local.js` usa la misma biblioteca que el servidor (`server/library.js`) y responde a las mismas rutas `/api/…`, así que el resto de la app no distingue los dos modos.
 
 ### Administradores y usuarios
 
@@ -137,7 +150,7 @@ En *Ajustes → Letterboxd* escribe tu usuario y CineLocal importa tu perfil pú
 * **Portada:** fila *Tu watchlist de Letterboxd*, con las que ya tienes primero. Las que no tienes llevan *Dónde verla* y *Buscar en eMule*. *Ver todo* abre la watchlist completa.
 * **Tarjetas y fichas:** muestran tu nota en estrellas y el ♥. La ficha añade además la fecha en que la viste y enlaza a la película en Letterboxd.
 * **Orden y filtros:** *Mi nota (Letterboxd)* en Películas y en la filmografía de los directores. La filmografía tiene también el filtro *Vistas en Letterboxd*.
-* **Vistas:** opcionalmente, marca como vistas en CineLocal las películas de tu biblioteca que ya has visto, sin tocar las que tienen progreso.
+* **Vistas:** opcionalmente (*Marcar como vistas las que has visto en Letterboxd*, activado por defecto), marca como vistas en CineLocal, en tu usuario del servidor o en la biblioteca local, las películas de tu biblioteca que ya has visto, sin tocar las que tienen progreso. Se hace al sincronizar y cuando llegan títulos o fichas nuevas. Cada archivo se marca una sola vez: si lo desmarcas en CineLocal, no se vuelve a marcar.
 
 Letterboxd no tiene API pública, así que las páginas del perfil (`/usuario/films/`, `/usuario/watchlist/`, `/usuario/rss/`) se leen desde una ventana oculta de Chromium, que supera la comprobación de Cloudflare.
 

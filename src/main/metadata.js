@@ -36,6 +36,20 @@ class TMDB {
     return true;
   }
 
+  /**
+   * Las carátulas de una película o serie en el idioma de las fichas, en español, sin texto y en inglés (en ese
+   * orden; dentro de cada grupo, las más votadas)
+   */
+  async posters(type, id) {
+    const langs = [...new Set([this.language.split('-')[0], 'es', 'null', 'en'])];
+    const d = await this.get(`/${type === 'movie' ? 'movie' : 'tv'}/${id}/images`, { include_image_language: langs.join(',') });
+    const rank = l => langs.indexOf(l ?? 'null');
+    return (d.posters || [])
+      .sort((a, b) => rank(a.iso_639_1) - rank(b.iso_639_1) || (b.vote_average || 0) - (a.vote_average || 0) || (b.vote_count || 0) - (a.vote_count || 0))
+      .slice(0, 150)
+      .map(p => ({ url: img(p.file_path, 'w500'), thumb: img(p.file_path, 'w185'), lang: p.iso_639_1 || null }));
+  }
+
   async search(type, query, year) {
     const ep = type === 'movie' ? '/search/movie' : '/search/tv';
     const yearKey = type === 'movie' ? 'year' : 'first_air_date_year';

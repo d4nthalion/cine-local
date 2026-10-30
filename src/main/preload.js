@@ -12,6 +12,7 @@ contextBridge.exposeInMainWorld('api', {
   setSettings: (patch) => ipcRenderer.invoke('settings:set', patch),
   testKey: (key) => ipcRenderer.invoke('tmdb:test', key),
   testNas: (q) => ipcRenderer.invoke('nas:test', q),
+  nasLogin: (q) => ipcRenderer.invoke('nas:login', q),
   session: { get: () => ipcRenderer.invoke('session:get') },
   onSessionExpired: on('session:expired'),
   remote: {
@@ -32,6 +33,8 @@ contextBridge.exposeInMainWorld('api', {
   accessLog: (q) => ipcRenderer.invoke('access:list', q),
   logError: (e) => ipcRenderer.invoke('log:error', e),
   identify: (q) => ipcRenderer.invoke('meta:identify', q),
+  getPosters: (id) => ipcRenderer.invoke('meta:posters', id),
+  setPoster: (id, poster) => ipcRenderer.invoke('meta:setPoster', { id, poster }),
   play: (q) => ipcRenderer.invoke('play', q),
   markProgress: (q) => ipcRenderer.invoke('progress:mark', q),
   toggleFavorite: (id) => ipcRenderer.invoke('favorites:toggle', id),

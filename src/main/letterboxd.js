@@ -222,7 +222,8 @@ class LetterboxdService extends EventEmitter {
   }
 
   reset() {
-    this.store.data = { films: {}, ids: this.store.data.ids || {}, user: '', syncedAt: 0, fullAt: 0, source: null };
+    // marked (lo que ya se marcó como visto en CineLocal) se conserva: lo desmarcado a mano no se vuelve a marcar
+    this.store.data = { films: {}, ids: this.store.data.ids || {}, marked: this.store.data.marked, user: '', syncedAt: 0, fullAt: 0, source: null };
     this.setStatus({ running: false, text: '', error: null });
     this.emit('updated');
   }

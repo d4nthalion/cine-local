@@ -1,7 +1,7 @@
 {
   "name": "cinelocal",
   "productName": "CineLocal",
-  "version": "1.18.0",
+  "version": "1.19.0",
   "description": "Tu cine en casa: películas y series de tu disco con estilo de plataforma de streaming",
   "main": "src/main/main.js",
   "author": "Carlos",
@@ -20,6 +20,8 @@
     },
     "files": [
       "src/**/*",
+      "server/library.js",
+      "server/store.js",
       "build/icon.png",
       "package.json"
     ],

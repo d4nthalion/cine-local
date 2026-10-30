@@ -231,6 +231,15 @@ function withLinks(v, user) {
     ? { ...it, ...link(it.id, it.path) }
     : { ...it, episodes: it.episodes.map(e => ({ ...e, ...link(e.id, e.path) })) });
 }
+// carátula: las de TMDB para elegir, y cambiarla (otra de TMDB o una imagen subida, ya reducida) o volver a la de la ficha
+route('GET', '/api/item/:id/posters', async (req, res, { p }) => json(res, 200, await library.posters(p.id)));
+route('POST', '/api/item/:id/poster', async (req, res, { p, user }) => {
+  const b = await readBody(req, 512 * 1024);
+  const it = library.library.data.items.find(i => i.id === p.id);
+  act(req, user, 'poster', it && titleOf({ item: it }), b.poster ? (b.poster.startsWith('data:') ? 'Imagen propia' : 'Otra de TMDB') : 'La de la ficha');
+  try { json(res, 200, library.setPoster(p.id, b.poster || null)); }
+  catch (e) { throw httpError(400, e.message); }
+}, { admin: true });
 route('POST', '/api/scan', async (req, res, { user }) => { act(req, user, 'scan'); await library.scan(); json(res, 200, library.view(user, { slim: true })); }, { admin: true });
 route('POST', '/api/meta/refresh', (req, res, { user }) => { act(req, user, 'meta-refresh'); library.fetchMissingMetadata(true); json(res, 200, true); }, { admin: true });
 route('GET', '/api/person/:id', async (req, res, { p }) => json(res, 200, await library.person(+p.id)));
@@ -442,7 +451,7 @@ server.listen(PORT, HOST, () => {
 
 for (const sig of ['SIGTERM', 'SIGINT']) process.on(sig, () => {
   access.closeIdle(true);
-  for (const s of [library.settings, library.library, library.metadata, library.people, auth.store, requests.store]) s.flushSync();
+  for (const s of [library.settings, library.library, library.metadata, library.people, library.custom, auth.store, requests.store]) s.flushSync();
   for (const u of library.users.values()) u.flushSync();
   process.exit(0);
 });
