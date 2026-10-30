@@ -463,13 +463,22 @@ class Repository(private val context: Context) {
         if (settings.value.server) scope.launch(Dispatchers.IO) { runCatching { server().toggleFavorite(id) } }
     }
 
-    // ---------------------------------------------------------------- peticiones de descarga (ntfy)
+    // ---------------------------------------------------------------- peticiones de descarga (servidor o ntfy)
 
-    /** Avisa por ntfy de que quieres una película que no está en la biblioteca (de la watchlist o buscada en TMDB) */
+    /**
+     * Pide una película que no está en la biblioteca (de la watchlist o buscada en TMDB). Con CineLocal Server va a
+     * su pantalla de Peticiones (y avisa a los administradores); sin servidor, por ntfy.
+     */
     suspend fun requestDownload(e: LbEntry) = withContext(Dispatchers.IO) {
         val s = settings.value
         val f = e.film
         val name = e.localTitle ?: f.title
+        if (s.server) {
+            val id = e.tmdbId ?: throw IOException("No se ha encontrado esta película en TMDB y el servidor la necesita para pedirla")
+            server().createRequest(id, name, f.year, e.poster, if (f.watchlist) "En mi watchlist de Letterboxd" else null)
+            userState.update { it.copy(requested = it.requested + (e.key to System.currentTimeMillis())) }
+            return@withContext
+        }
         val year = f.year?.let { " ($it)" }.orEmpty()
         val tmdb = e.tmdbId?.let { "https://www.themoviedb.org/movie/$it" }
         val links = listOfNotNull(f.url?.let { Ntfy.Link("Letterboxd", it) }, tmdb?.let { Ntfy.Link("TMDB", it) })

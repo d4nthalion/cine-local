@@ -232,24 +232,30 @@ fun SettingsScreen(nav: Nav) {
 
             LetterboxdSection(s, onChange = { s = it }, saveFirst = { if (s != repo.settings.value) repo.saveSettings(s) })
 
-            Header("Peticiones de descarga · ntfy")
-            Group {
-                Field("Servidor", s.ntfyServer, Ntfy.DEFAULT_SERVER) { s = s.copy(ntfyServer = it.trim()) }
-                Sep()
-                Field("Tema", s.ntfyTopic, "cinelocal-un-nombre-dificil") { s = s.copy(ntfyTopic = it.trim()) }
-                Sep()
-                Field(
-                    "Token de acceso (opcional)", s.ntfyToken, "", password = true, showPass = showToken, onTogglePass = { showToken = !showToken }
-                ) { s = s.copy(ntfyToken = it.trim()) }
-                Sep()
-                ActionRow("Enviar aviso de prueba", enabled = s.ntfyReady, result = ntfyTest) {
-                    ntfyTest = null
-                    scope.launch {
-                        ntfyTest = try { repo.testNtfy(s); true to "Enviado" } catch (e: Exception) { false to (e.message ?: e.javaClass.simpleName) }
+            // con CineLocal Server, «Pedir descarga» va a Peticiones del servidor: ntfy sólo hace falta sin él
+            if (s.serverMode) {
+                Header("Peticiones de descarga")
+                Help("Con CineLocal Server, “Pedir descarga” (en la watchlist y en la búsqueda de TMDB) llega a la pantalla de Peticiones del servidor y avisa a los administradores.")
+            } else {
+                Header("Peticiones de descarga · ntfy")
+                Group {
+                    Field("Servidor", s.ntfyServer, Ntfy.DEFAULT_SERVER) { s = s.copy(ntfyServer = it.trim()) }
+                    Sep()
+                    Field("Tema", s.ntfyTopic, "cinelocal-un-nombre-dificil") { s = s.copy(ntfyTopic = it.trim()) }
+                    Sep()
+                    Field(
+                        "Token de acceso (opcional)", s.ntfyToken, "", password = true, showPass = showToken, onTogglePass = { showToken = !showToken }
+                    ) { s = s.copy(ntfyToken = it.trim()) }
+                    Sep()
+                    ActionRow("Enviar aviso de prueba", enabled = s.ntfyReady, result = ntfyTest) {
+                        ntfyTest = null
+                        scope.launch {
+                            ntfyTest = try { repo.testNtfy(s); true to "Enviado" } catch (e: Exception) { false to (e.message ?: e.javaClass.simpleName) }
+                        }
                     }
                 }
+                Help("En la watchlist, las películas que no tienes llevan un botón “Pedir descarga” que te manda un aviso a este tema. Suscríbete a él en la app de ntfy. En ntfy.sh los temas son públicos: elige un nombre difícil de adivinar.")
             }
-            Help("En la watchlist, las películas que no tienes llevan un botón “Pedir descarga” que te manda un aviso a este tema. Suscríbete a él en la app de ntfy. En ntfy.sh los temas son públicos: elige un nombre difícil de adivinar.")
 
             Header("Mantenimiento")
             Group {

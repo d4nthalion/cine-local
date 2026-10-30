@@ -126,6 +126,21 @@ class CineServer(url: String, private val token: String = "", private val http: 
         return json.decodeFromString(ListSerializer(UserList.serializer()), request(post("/api/lists", body)))
     }
 
+    /**
+     * Pide una película que no está en la biblioteca: llega a Peticiones del servidor y a los administradores
+     * (server/requests.js). Si otro usuario ya la pidió, se suma a esa petición.
+     */
+    fun createRequest(tmdbId: Int, title: String, year: Int?, poster: String?, note: String?) {
+        val entry = buildString {
+            append("{\"tmdb\":").append(tmdbId).append(",\"type\":\"movie\",\"title\":").append(json.encodeToString(title))
+            year?.let { append(",\"year\":").append(it) }
+            poster?.let { append(",\"poster\":").append(json.encodeToString(it)) }
+            note?.let { append(",\"note\":").append(json.encodeToString(it)) }
+            append('}')
+        }
+        request(post("/api/requests", """{"op":"create","entry":$entry}"""))
+    }
+
     fun identify(itemId: String, tmdbId: Int) {
         request(post("/api/meta/identify", """{"itemId":${json.encodeToString(itemId)},"tmdbId":$tmdbId}"""))
     }

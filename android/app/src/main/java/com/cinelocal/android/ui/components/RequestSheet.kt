@@ -50,7 +50,10 @@ import java.text.DateFormat
 import java.util.Date
 import java.util.Locale
 
-/** Hoja de una película que no está en la biblioteca (de la watchlist o buscada en TMDB): pedir que la descarguen (ntfy) o verla en Letterboxd */
+/**
+ * Hoja de una película que no está en la biblioteca (de la watchlist o buscada en TMDB): pedirla (a Peticiones de
+ * CineLocal Server o, sin servidor, por ntfy) o verla en Letterboxd
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun RequestSheet(e: LbEntry, nav: Nav, onDismiss: () -> Unit) {
@@ -100,7 +103,7 @@ fun RequestSheet(e: LbEntry, nav: Nav, onDismiss: () -> Unit) {
 
             Spacer(Modifier.height(20.dp))
             when {
-                !settings.ntfyReady -> {
+                !settings.server && !settings.ntfyReady -> {
                     Text(
                         "Para pedir descargas, indica en Ajustes el tema de ntfy al que estás suscrito.",
                         style = MaterialTheme.typography.bodyMedium, color = CL.text2

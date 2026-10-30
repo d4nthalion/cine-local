@@ -10,7 +10,7 @@ Versión para móvil de [CineLocal](../README.md): tus películas y series de la
 * Reproduce con **LibVLC**: MKV, AC3, DTS, subtítulos `.srt`/`.ass` internos o junto al vídeo, audio y subtítulos según el idioma elegido (con el modo *“Sólo si el audio está en otro idioma”*), reanuda donde lo dejaste y pasa al siguiente episodio.
 * **Saltar intro, resumen y créditos** con los tiempos de [TheIntroDB](https://theintrodb.org) (ver abajo).
 * Portada con *Continuar viendo*, *Añadido recientemente*, Mi lista, mejor valoradas y filas por género; Películas y Series con orden, filtro vistas/sin ver y géneros; búsqueda por título, reparto, director o género.
-* Si la búsqueda no encuentra nada en la biblioteca, busca la película en **TMDB** (un año al final afina: `dune 2021`) y cada resultado tiene **Pedir descarga** por ntfy, como en la watchlist (`core/OnlineSearch.kt`, con pruebas).
+* Si la búsqueda no encuentra nada en la biblioteca, busca la película en **TMDB** (un año al final afina: `dune 2021`) y cada resultado tiene **Pedir descarga**, como en la watchlist: con CineLocal Server la petición llega a su pantalla de Peticiones (y avisa a los administradores); sin servidor, por ntfy (`core/OnlineSearch.kt`, con pruebas).
 * **Descargas para ver sin conexión** con el PC: películas, temporadas, series o episodios sueltos (ver abajo).
 * El progreso, Mi lista y las vistas son de cada móvil.
 * **Letterboxd**, igual que en escritorio (ver abajo).
