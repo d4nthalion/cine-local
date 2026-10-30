@@ -26,10 +26,17 @@
   // eventos en vivo del servidor (biblioteca, metadatos, progreso desde otro dispositivo…)
   function connect() {
     const es = new EventSource('/api/events');
-    for (const ev of ['library:updated', 'meta:progress', 'progress:updated', 'toast', 'library:new', 'requests:updated']) {
+    for (const ev of ['meta:progress', 'progress:updated', 'toast', 'library:new', 'requests:updated']) {
       es.addEventListener(ev, e => emit(ev, JSON.parse(e.data)));
     }
+    es.addEventListener('library:changed', reloadLibrary);
     es.onerror = () => { es.close(); setTimeout(connect, 5000); };
+  }
+  // la biblioteca ha cambiado en el servidor: se vuelve a pedir (varios avisos seguidos, una sola vez)
+  let libTimer = null;
+  function reloadLibrary() {
+    clearTimeout(libTimer);
+    libTimer = setTimeout(() => get('/api/library?slim=1').then(v => emit('library:updated', v)).catch(() => {}), 300);
   }
   connect();
 
@@ -48,7 +55,8 @@
     setSettings: patch => post('/api/settings', patch),
     testKey: key => post('/api/tmdb/test', { key }),
     testNas: async () => ({ ok: false, error: 'No disponible en la web' }),
-    getLibrary: () => get('/api/library'),
+    getLibrary: () => get('/api/library?slim=1'),
+    getItem: id => get('/api/item/' + encodeURIComponent(id)),
     scan: () => post('/api/scan'),
     refreshMeta: () => post('/api/meta/refresh'),
     getPerson: id => get('/api/person/' + encodeURIComponent(id)),

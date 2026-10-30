@@ -618,12 +618,36 @@ code.path, .set-row code { background: var(--bg-3); padding: 2px 7px; border-rad
 .gchip { border: 0; background: transparent; color: var(--text-2); font-size: 13px; padding: 5px 10px; border-radius: 6px; cursor: pointer; }
 .gchip:hover { color: var(--text); background: rgba(255,255,255,.06); }
 .gchip.on { color: var(--text); background: rgba(255,255,255,.12); font-weight: 600; }
+/* categorías (géneros de TMDB) en Películas y Series */
+.cat-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: -10px 0 24px; }
+.cat-chips .gchip { font-size: 14px; padding: 7px 12px; border: 1px solid var(--line); border-radius: 999px; }
+.cat-chips .gchip.on { border-color: rgba(255,255,255,.3); }
+.cat-chips .gchip .n { color: var(--text-3); font-weight: 500; margin-left: 2px; }
+.grid-more { display: flex; justify-content: center; padding: 28px 0 8px; }
+/* saga */
+.saga-page { position: relative; }
+.saga-bg { position: absolute; inset: -80px -48px auto; height: 420px; background-size: cover; background-position: center 30%; opacity: .28; pointer-events: none;
+  -webkit-mask-image: linear-gradient(to bottom, #000 30%, transparent); mask-image: linear-gradient(to bottom, #000 30%, transparent); }
+.saga-page > :not(.saga-bg) { position: relative; }
+.saga-back { margin-bottom: 18px; display: inline-flex; align-items: center; gap: 6px; }
+.saga-back svg { width: 16px; height: 16px; fill: currentColor; }
 
 /* varias carpetas de biblioteca */
 .set-row.lib-paths { align-items: flex-start; }
 .set-row.lib-paths .ctl { flex-direction: column; align-items: stretch; gap: 8px; }
 .lib-path { display: flex; gap: 8px; align-items: center; }
 .lib-path .input { flex: 1; }
+.layout-btn { white-space: nowrap; }
+.layout-btn.on { color: var(--accent); border-color: var(--accent); }
+.layout-form { padding: 0 24px 8px; display: flex; flex-direction: column; gap: 10px; }
+.layout-opt { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--line); cursor: pointer; }
+.layout-opt span { display: flex; flex-direction: column; gap: 3px; font-size: 13px; color: var(--text-2); }
+.layout-opt b { color: var(--text); font-size: 14px; }
+.layout-opt input { margin-top: 3px; }
+.layout-fields { display: flex; flex-direction: column; gap: 10px; padding: 4px 2px; }
+.layout-fields.off { opacity: .4; pointer-events: none; }
+.layout-fields label { display: flex; flex-direction: column; gap: 5px; font-size: 13px; color: var(--text-2); }
+.layout-fields .layout-check { flex-direction: row; align-items: center; gap: 8px; }
 .icon-btn.sm { width: 34px; height: 34px; }
 .icon-btn.sm svg { width: 18px; height: 18px; }
 .btn.add-path { align-self: flex-start; display: inline-flex; align-items: center; gap: 6px; }

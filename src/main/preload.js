@@ -20,6 +20,7 @@ contextBridge.exposeInMainWorld('api', {
     me: () => ipcRenderer.invoke('remote:me')
   },
   getLibrary: () => ipcRenderer.invoke('library:get'),
+  getItem: (id) => ipcRenderer.invoke('library:item', id),
   scan: () => ipcRenderer.invoke('library:scan'),
   refreshMeta: () => ipcRenderer.invoke('library:refreshMeta'),
   getPerson: (id) => ipcRenderer.invoke('meta:person', id),

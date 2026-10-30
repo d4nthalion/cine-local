@@ -22,6 +22,8 @@ const DEFAULT_SETTINGS = {
   autoplayNext: true,
   autoWatch: true,
   singleFileFolderAsMovie: false,
+  // cómo está organizada cada carpeta de la biblioteca: { [ruta]: { mode: 'categories', movies, series, folderMovie, ignore } }
+  libraryLayouts: {},
   myProviders: [],
   region: 'ES'
 };
@@ -31,6 +33,38 @@ const EDITABLE = new Set(Object.keys(DEFAULT_SETTINGS));
 const PREF_KEYS = new Set(['audioLang', 'subLang', 'subMode', 'autoplayNext', 'myProviders']);
 
 const MATCHER_VERSION = 2;
+
+const cut = (s, n) => s && s.length > n ? s.slice(0, n).replace(/\s+\S*$/, '') + '…' : s;
+
+/** Organización de cada carpeta de biblioteca, sólo con lo que entiende el escáner */
+function cleanLayouts(v) {
+  const words = a => (Array.isArray(a) ? a : String(a || '').split(',')).map(s => String(s).trim()).filter(Boolean).slice(0, 30).map(s => s.slice(0, 80));
+  const out = {};
+  for (const [root, l] of Object.entries(v && typeof v === 'object' ? v : {})) {
+    if (!root || l?.mode !== 'categories') continue;
+    out[root] = { mode: 'categories', movies: words(l.movies), series: words(l.series), folderMovie: l.folderMovie !== false, ignore: words(l.ignore) };
+  }
+  return out;
+}
+
+/** Ficha reducida para la lista (ver Library.view) */
+function slimMeta(m) {
+  const out = {
+    slim: true, tmdbId: m.tmdbId, title: m.title, originalTitle: m.originalTitle, year: m.year, endYear: m.endYear,
+    runtime: m.runtime, rating: m.rating, certification: m.certification, genres: m.genres,
+    poster: m.poster, backdrop: m.backdrop, logo: m.logo, overview: cut(m.overview, 260),
+    directors: m.directors, director: m.director, creators: m.creators, people: (m.cast || []).slice(0, 8).map(c => c.name),
+    collection: m.collection ? { id: m.collection.id, name: m.collection.name, poster: m.collection.poster, backdrop: m.collection.backdrop } : null,
+    recs: m.recs
+  };
+  // series: nombres y fotogramas de los episodios (Continuar viendo), sin sinopsis
+  if (m.seasons) {
+    out.seasons = Object.fromEntries(Object.entries(m.seasons).map(([n, s]) => [n, {
+      name: s.name, episodes: Object.fromEntries(Object.entries(s.episodes || {}).map(([k, e]) => [k, { name: e.name, still: e.still }]))
+    }]));
+  }
+  return out;
+}
 
 class Library extends EventEmitter {
   constructor(dataDir) {
@@ -92,12 +126,14 @@ class Library extends EventEmitter {
   async setSettings(patch) {
     const before = { ...this.settings.data };
     const clean = Object.fromEntries(Object.entries(patch || {}).filter(([k]) => EDITABLE.has(k) && !PREF_KEYS.has(k)));
+    if (clean.libraryLayouts) clean.libraryLayouts = cleanLayouts(clean.libraryLayouts);
     if (!Object.keys(clean).length) return this.settings.data;
     this.settings.data = { ...this.settings.data, ...clean };
     const s = this.settings.data;
     const roots = x => this.roots(x).join('|');
     if (roots(before) !== roots(s) || before.autoWatch !== s.autoWatch) this.restartWatcher();
-    if (roots(before) !== roots(s) || before.singleFileFolderAsMovie !== s.singleFileFolderAsMovie) await this.scan();
+    if (roots(before) !== roots(s) || before.singleFileFolderAsMovie !== s.singleFileFolderAsMovie
+      || JSON.stringify(before.libraryLayouts || {}) !== JSON.stringify(s.libraryLayouts || {})) await this.scan();
     else if (before.tmdbKey !== s.tmdbKey || before.metaLang !== s.metaLang) this.fetchMissingMetadata();
     return s;
   }
@@ -120,11 +156,16 @@ class Library extends EventEmitter {
   }
 
   // ---------- vista ----------
-  view(userName) {
+  /**
+   * Biblioteca para un usuario. slim: sólo lo que hace falta para carátulas, filas, filtros y búsqueda
+   * (la ficha completa se pide al abrir el título con item()); con miles de títulos la completa pesa varios MB.
+   */
+  view(userName, { slim = false } = {}) {
     const u = this.user(userName).data;
     const items = this.library.data.items.map(it => {
       const m = this.metadata.data[it.id];
-      return { ...it, meta: m && !m.failed ? m.meta : null, metaFailed: !!m?.failed };
+      const meta = m && !m.failed ? m.meta : null;
+      return { ...it, meta: slim && meta ? slimMeta(meta) : meta, metaFailed: !!m?.failed };
     });
     return {
       items,
@@ -143,6 +184,14 @@ class Library extends EventEmitter {
   /** Títulos de la biblioteca con su ficha (para dar por conseguidas las peticiones) */
   withMeta() {
     return this.library.data.items.map(it => ({ type: it.type, meta: this.metadata.data[it.id]?.meta || null }));
+  }
+
+  /** Un título con su ficha completa */
+  item(id) {
+    const it = this.library.data.items.find(i => i.id === id);
+    if (!it) return null;
+    const m = this.metadata.data[it.id];
+    return { ...it, meta: m && !m.failed ? m.meta : null, metaFailed: !!m?.failed };
   }
 
   /** Archivo de vídeo por su id (el de la película o el del episodio); nunca por ruta */
@@ -181,7 +230,7 @@ class Library extends EventEmitter {
     const isUnder = (p, root) => { const rel = path.relative(root, p); return !!rel && !rel.startsWith('..') && !path.isAbsolute(rel); };
 
     const r = roots.length
-      ? scanLibraries(roots, { singleFileFolderAsMovie: this.settings.data.singleFileFolderAsMovie })
+      ? scanLibraries(roots, { singleFileFolderAsMovie: this.settings.data.singleFileFolderAsMovie, layouts: this.settings.data.libraryLayouts || {} })
       : { ok: false, items: [], failed: [{ root: '', error: 'No hay ninguna carpeta de biblioteca configurada' }] };
     if (r.ok && r.failed.length) {
       const ids = new Set(r.items.map(i => i.id));
@@ -244,6 +293,8 @@ class Library extends EventEmitter {
     if (!m.manual && m.matcher !== MATCHER_VERSION) return true;
     if (m.lang !== lang && !m.failed) return true;
     if (it.type === 'movie' && !m.failed && m.meta && !Array.isArray(m.meta.directors)) return true;
+    // fichas de antes de las sagas y las recomendaciones
+    if (!m.failed && m.meta && !Array.isArray(m.meta.recs)) return true;
     if (m.failed) return Date.now() - (m.at || 0) > 1000 * 60 * 60 * 24 * 3;
     if (it.type === 'series') {
       const have = Object.keys(m.meta?.seasons || {}).map(Number);
@@ -291,7 +342,7 @@ class Library extends EventEmitter {
           await this.fetchItem(api, it);
           done++;
           this.emit('meta:progress', { done, total: todo.length, title: it.title });
-          if (done % 6 === 0) this.emit('library');
+          if (done % 25 === 0) this.emit('library');
         }
       };
       await Promise.all([worker(), worker(), worker(), worker()]);

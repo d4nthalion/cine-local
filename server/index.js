@@ -3,6 +3,7 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const zlib = require('zlib');
 const { Library } = require('./library');
 const { Auth } = require('./auth');
 const { Requests } = require('./requests');
@@ -51,8 +52,15 @@ const SECURITY_HEADERS = {
 };
 
 function json(res, status, data) {
-  res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
-  res.end(JSON.stringify(data));
+  const body = Buffer.from(JSON.stringify(data));
+  const headers = { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' };
+  // la biblioteca con miles de títulos: comprimida ocupa unas 6 veces menos
+  if (body.length > 16384 && /gzip/.test(res.req?.headers['accept-encoding'] || '')) {
+    res.writeHead(status, { ...headers, 'Content-Encoding': 'gzip', Vary: 'Accept-Encoding' });
+    return res.end(zlib.gzipSync(body, { level: 6 }));
+  }
+  res.writeHead(status, headers);
+  res.end(body);
 }
 
 function readBody(req, limit = 256 * 1024) {
@@ -124,7 +132,8 @@ library.on('library', () => {
   // varias actualizaciones seguidas (metadatos) se juntan en una
   clearTimeout(libTimer);
   libTimer = setTimeout(() => {
-    broadcast('library:updated', user => library.view(user));
+    // sólo el aviso: cada cliente vuelve a pedir la biblioteca (comprimida) en vez de recibirla entera por aquí
+    broadcast('library:changed', {});
     requests.matchLibrary(library.withMeta());
   }, 250);
 });
@@ -195,9 +204,15 @@ route('POST', '/api/tmdb/test', async (req, res) => {
 }, { admin: true });
 
 route('GET', '/api/library', (req, res, { user, q }) => {
-  const v = library.view(user);
+  const v = library.view(user, { slim: q.get('slim') === '1' });
   if (q.get('client') === 'app') withLinks(v, user);
   json(res, 200, v);
+});
+// ficha completa de un título (la lista ligera sólo lleva lo necesario para las carátulas)
+route('GET', '/api/item/:id', (req, res, { p }) => {
+  const it = library.item(p.id);
+  if (!it) throw httpError(404, 'Elemento no encontrado');
+  json(res, 200, it);
 });
 
 /**
@@ -216,7 +231,7 @@ function withLinks(v, user) {
     ? { ...it, ...link(it.id, it.path) }
     : { ...it, episodes: it.episodes.map(e => ({ ...e, ...link(e.id, e.path) })) });
 }
-route('POST', '/api/scan', async (req, res, { user }) => { act(req, user, 'scan'); await library.scan(); json(res, 200, library.view(user)); }, { admin: true });
+route('POST', '/api/scan', async (req, res, { user }) => { act(req, user, 'scan'); await library.scan(); json(res, 200, library.view(user, { slim: true })); }, { admin: true });
 route('POST', '/api/meta/refresh', (req, res, { user }) => { act(req, user, 'meta-refresh'); library.fetchMissingMetadata(true); json(res, 200, true); }, { admin: true });
 route('GET', '/api/person/:id', async (req, res, { p }) => json(res, 200, await library.person(+p.id)));
 route('GET', '/api/providers', async (req, res) => json(res, 200, await library.providerList()));

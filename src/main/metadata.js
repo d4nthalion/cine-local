@@ -113,7 +113,7 @@ class TMDB {
     const lang = this.language.split('-')[0];
     const d = await this.get(`/movie/${id}`, {
       language: this.language,
-      append_to_response: 'credits,images,release_dates,videos',
+      append_to_response: 'credits,images,release_dates,videos,recommendations',
       include_image_language: `${lang},en,null`
     });
     let overview = d.overview;
@@ -140,7 +140,9 @@ class TMDB {
       director: (d.credits?.crew || []).filter(c => c.job === 'Director').map(c => c.name).join(', '),
       directors: (d.credits?.crew || []).filter(c => c.job === 'Director').map(c => ({ id: c.id, name: c.name, photo: img(c.profile_path, 'w342') })),
       cast: castOf(d.credits),
-      trailer: trailerOf(d.videos)
+      trailer: trailerOf(d.videos),
+      collection: d.belongs_to_collection ? { id: d.belongs_to_collection.id, name: d.belongs_to_collection.name, poster: img(d.belongs_to_collection.poster_path, 'w342'), backdrop: img(d.belongs_to_collection.backdrop_path, 'w1280') } : null,
+      recs: recsOf(d.recommendations)
     };
   }
 
@@ -181,7 +183,7 @@ class TMDB {
     const lang = this.language.split('-')[0];
     const d = await this.get(`/tv/${id}`, {
       language: this.language,
-      append_to_response: 'credits,images,content_ratings,videos',
+      append_to_response: 'credits,images,content_ratings,videos,recommendations',
       include_image_language: `${lang},en,null`
     });
     let overview = d.overview;
@@ -229,9 +231,15 @@ class TMDB {
       numberOfSeasons: d.number_of_seasons,
       cast: castOf(d.credits),
       trailer: trailerOf(d.videos),
+      recs: recsOf(d.recommendations),
       seasons: seasonData
     };
   }
+}
+
+/** Ids de TMDB de lo que TMDB recomienda a partir de este título (para «Porque viste…») */
+function recsOf(r) {
+  return (r?.results || []).slice(0, 20).map(x => x.id);
 }
 
 // ---------- utilidades de coincidencia ----------

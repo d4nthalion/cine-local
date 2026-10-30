@@ -52,7 +52,7 @@ const S = {
   heroIdx: 0,
   heroTimer: null,
   heroList: [],
-  filters: { movies: { genre: null, sort: 'added', seen: 'all', open: false }, series: { genre: null, sort: 'added', seen: 'all', open: false }, directors: { sort: 'count', q: '' }, filmo: 'all', filmoSort: 'year', watchlist: 'all' },
+  filters: { movies: { cat: null, sort: 'added', seen: 'all', shown: 0, seed: Math.random() }, series: { cat: null, sort: 'added', seen: 'all', shown: 0, seed: Math.random() }, directors: { sort: 'count', q: '' }, filmo: 'all', filmoSort: 'year', watchlist: 'all' },
   lb: { films: [], status: {} },   // Letterboxd: películas vistas, notas y watchlist
   update: { state: 'idle' },       // actualizaciones de CineLocal (estado que envía el proceso principal)
   discord: { state: 'off' },       // Discord Rich Presence: estado de la conexión
@@ -92,6 +92,36 @@ function watchlistEntries() {
 }
 
 const byId = (id) => S.lib.items.find(i => i.id === id);
+
+// La biblioteca llega «ligera» (carátula, título, año, duración, géneros…); la ficha completa (sinopsis, reparto,
+// episodios…) se pide al abrir el título y se guarda aquí, para no perderla cuando la biblioteca se vuelve a recibir.
+const fullMeta = new Map();   // id → ficha completa
+function setLib(lib) {
+  for (const it of lib.items || []) {
+    const f = fullMeta.get(it.id);
+    if (!f) continue;
+    if (it.meta?.tmdbId === f.tmdbId) it.meta = f; else fullMeta.delete(it.id);   // otra ficha (corregida): se vuelve a pedir
+  }
+  S.lib = lib;
+}
+const loadingFull = new Set();
+async function ensureFull(id) {
+  const it = byId(id);
+  if (!it?.meta?.slim || loadingFull.has(id) || !window.api.getItem) return;
+  loadingFull.add(id);
+  try {
+    const full = await window.api.getItem(id);
+    if (full?.meta) {
+      fullMeta.set(id, full.meta);
+      const cur = byId(id);
+      if (cur && cur.meta?.tmdbId === full.meta.tmdbId) cur.meta = full.meta;
+      if (S.route.name === 'detail' && S.route.id === id) render(true);
+    }
+  } catch {}
+  loadingFull.delete(id);
+}
+/** «Nuevo»: añadido en las últimas 24 horas */
+const isNewItem = it => Date.now() - (it.added || 0) < DAY;
 const T = (it) => it.meta?.title || it.title;
 const Y = (it) => it.meta?.year || it.year;
 const prog = (p) => S.lib.progress[p];
@@ -178,13 +208,20 @@ function continueList() {
   return out.sort((a, b) => b.at - a.at);
 }
 
-function allGenres(items) {
-  const c = new Map();
-  for (const it of items) for (const g of it.meta?.genres || []) c.set(g, (c.get(g) || 0) + 1);
-  return [...c.entries()].sort((a, b) => b[1] - a[1]);
+/** Números pseudoaleatorios repetibles: el mismo orden «al azar» mientras no se cambie la semilla */
+function seeded(seed) {
+  let h = 2166136261;
+  for (const ch of String(seed)) h = Math.imul(h ^ ch.charCodeAt(0), 16777619);
+  return () => { h = Math.imul(h ^ (h >>> 15), 2246822507); h = Math.imul(h ^ (h >>> 13), 3266489909); h ^= h >>> 16; return (h >>> 0) / 4294967296; };
+}
+/** Barajar con semilla (filas de Inicio que cambian cada día, orden «al azar») */
+function shuffled(items, seed) {
+  const r = seeded(seed);
+  return items.map(it => [r(), it]).sort((x, y) => x[0] - y[0]).map(([, it]) => it);
 }
 
-function sortItems(items, sort) {
+function sortItems(items, sort, seed = 0) {
+  if (sort === 'random') return shuffled(items, seed);
   const a = [...items];
   if (sort === 'title') a.sort((x, y) => T(x).localeCompare(T(y), 'es', { numeric: true }));
   else if (sort === 'year') a.sort((x, y) => (Y(y) || 0) - (Y(x) || 0));
@@ -214,7 +251,7 @@ function metaLine(it, extra = '') {
 
 function card(it) {
   const poster = it.meta?.poster;
-  const isNew = Date.now() - (it.added || 0) < 14 * DAY;
+  const isNew = isNewItem(it);
   let watched = false, bar = '';
   if (it.type === 'movie') {
     const p = prog(it.path);
@@ -491,7 +528,7 @@ function ownsProvider(p) {
 const PROVIDER_SEARCH = [
   [/^netflix/, q => `https://www.netflix.com/search?q=${q}`],
   [/^amazon prime video/, q => `https://www.primevideo.com/search/ref=atv_nb_sr?phrase=${q}`],
-  [/^(hbo )?max|^hbo max/, q => `https://play.hbomax.com/search?q=${q}`],
+  [/^(hbo )?max\b|^hbo max/, q => `https://play.hbomax.com/search?q=${q}`],
   [/^apple tv/, q => `https://tv.apple.com/es/search?term=${q}`],
   [/^filmin/, q => `https://www.filmin.es/busqueda/texto/${q}`],
   [/^google play/, q => `https://play.google.com/store/search?q=${q}&c=movies`],
@@ -565,7 +602,7 @@ function viewHome() {
   const series = sortItems(items.filter(i => i.type === 'series'), 'added');
   const movies = sortItems(items.filter(i => i.type === 'movie'), 'added');
   const favs = S.lib.favorites.map(byId).filter(Boolean);
-  const topRated = items.filter(i => (i.meta?.rating || 0) >= 7.5).sort((a, b) => b.meta.rating - a.meta.rating).slice(0, 24);
+  const today = new Date().toDateString();   // las filas «al azar» cambian cada día, no en cada visita
 
   let rows = '';
   rows += row('Continuar viendo', cont.map(wideCard).join(''), 'cont');
@@ -578,16 +615,94 @@ function viewHome() {
     const sorted = [...wl.filter(e => e.it), ...wl.filter(e => !e.it)].slice(0, 30);
     rows += row('Tu watchlist de Letterboxd', sorted.map(watchlistCard).join(''), 'lbwl', 'watchlist');
   }
+  for (const b of becauseYouWatched().slice(0, 2)) rows += row(`Porque viste «${T(b.from)}»`, b.items.map(card).join(''), 'because-' + b.from.id);
+  const gems = shuffled(items.filter(i => (i.meta?.rating || 0) >= 7.5 && !isSeen(i)), today + 'gems').slice(0, 24);
+  if (gems.length >= 4) rows += row('Joyas sin ver', gems.map(card).join(''), 'gems');
   rows += row('Series', series.slice(0, 30).map(card).join(''), 'series', 'series');
   rows += row('Películas', movies.slice(0, 30).map(card).join(''), 'movies', 'movies');
+  const sagas = allSagas();
+  if (sagas.length) rows += row('Sagas', sagas.slice(0, 24).map(sagaCard).join(''), 'sagas', sagas.length > 24 ? 'sagas' : null);
   const dirs = sortDirectors(allDirectors(), 'count');
   if (dirs.length >= 3) rows += row('Directores', dirs.slice(0, 24).map(directorChip).join(''), 'directors', 'directors');
-  if (topRated.length >= 4) rows += row('Las mejor valoradas', topRated.map(card).join(''), 'top');
-  for (const [g] of allGenres(items).filter(([, n]) => n >= 4).slice(0, 8)) {
-    rows += row(g, sortItems(items.filter(i => i.meta?.genres?.includes(g)), 'rating').map(card).join(''), 'g-' + g);
+  // tres categorías cada día, con títulos al azar (con miles de títulos, una fila por género sería interminable)
+  for (const [c] of shuffled(categoriesOf(items, 6), today + 'cats').slice(0, 3)) {
+    rows += row(c, shuffled(items.filter(i => inCategory(i, c)), today + c).slice(0, 24).map(card).join(''), 'cat-' + c);
   }
 
   return `${hero}<div class="rows ${hero ? '' : 'no-hero'}">${banners()}${rows}</div>`;
+}
+
+/**
+ * «Porque viste…»: lo que TMDB recomienda a partir de lo último que has visto, sólo entre lo que hay en la biblioteca
+ * y que no hayas visto. Una fila por título visto (los más recientes primero).
+ */
+function becauseYouWatched() {
+  const byPath = new Map();
+  for (const it of S.lib.items) {
+    if (it.type === 'movie') byPath.set(it.path, it);
+    else for (const e of it.episodes) byPath.set(e.path, it);
+  }
+  const recent = [];
+  const seenIds = new Set();
+  for (const [p, pr] of Object.entries(S.lib.progress || {}).sort((a, b) => (b[1].at || 0) - (a[1].at || 0))) {
+    const it = byPath.get(p);
+    if (!it || seenIds.has(it.id) || !(pr.watched || pr.pos > 600)) continue;
+    seenIds.add(it.id);
+    if (it.meta?.recs?.length) recent.push(it);
+    if (recent.length >= 6) break;
+  }
+  const byTmdb = new Map(S.lib.items.filter(i => i.meta?.tmdbId).map(i => [i.type + ':' + i.meta.tmdbId, i]));
+  const used = new Set();
+  const out = [];
+  for (const from of recent) {
+    const items = from.meta.recs.map(id => byTmdb.get(from.type + ':' + id)).filter(i => i && !isSeen(i) && !used.has(i.id) && i.id !== from.id);
+    if (items.length < 3) continue;
+    items.forEach(i => used.add(i.id));
+    out.push({ from, items });
+  }
+  return out;
+}
+
+/** Sagas (colecciones de TMDB) con al menos dos películas en la biblioteca, las más completas primero */
+function allSagas() {
+  const map = new Map();
+  for (const it of S.lib.items) {
+    const c = it.type === 'movie' && it.meta?.collection;
+    if (!c) continue;
+    if (!map.has(c.id)) map.set(c.id, { ...c, films: [] });
+    map.get(c.id).films.push(it);
+  }
+  return [...map.values()].filter(s => s.films.length >= 2)
+    .map(s => ({ ...s, films: s.films.sort((a, b) => (Y(a) || 0) - (Y(b) || 0)) }))
+    .sort((a, b) => b.films.length - a.films.length || a.name.localeCompare(b.name, 'es'));
+}
+const sagaName = s => s.name.replace(/\s*[-–:]?\s*(Colecci[oó]n|Collection|Saga)$/i, '').replace(/^(Colecci[oó]n|Saga)\s*:?\s*/i, '') || s.name;
+function sagaCard(s) {
+  const poster = s.poster || s.films.find(f => f.meta?.poster)?.meta.poster;
+  const seen = s.films.filter(isSeen).length;
+  return `<div class="card" tabindex="0" data-saga="${s.id}">
+    <div class="art">${poster ? `<img loading="lazy" src="${esc(poster)}" alt="">` : placeholder({ title: sagaName(s), type: 'movie' })}
+      ${seen === s.films.length ? `<span class="watched-mark" title="Todas vistas">${I.check}</span>` : ''}</div>
+    <div class="cap"><div class="t">${esc(sagaName(s))}</div><div class="s">${s.films.length} películas${seen && seen < s.films.length ? ` · ${seen} vistas` : ''}</div></div>
+  </div>`;
+}
+function viewSagas() {
+  const sagas = allSagas();
+  return `<div class="page"><h1 class="page-title">Sagas<span class="count">${sagas.length}</span></h1>
+    ${sagas.length ? `<div class="grid">${sagas.map(sagaCard).join('')}</div>` : '<div class="empty"><p>No hay ninguna saga con dos o más películas en la biblioteca.</p></div>'}</div>`;
+}
+function viewSaga(id) {
+  const s = allSagas().find(x => String(x.id) === String(id));
+  if (!s) return `<div class="page"><div class="empty"><h2>No encontrada</h2><button class="btn btn-ghost" data-action="back">Volver</button></div></div>`;
+  const bg = s.backdrop || s.films.find(f => f.meta?.backdrop)?.meta.backdrop?.replace('/original/', '/w1280/');
+  const years = [Y(s.films[0]), Y(s.films[s.films.length - 1])].filter(Boolean);
+  return `<div class="page saga-page">
+    ${bg ? `<div class="saga-bg" style="background-image:url('${esc(bg)}')"></div>` : ''}
+    <button class="btn btn-ghost btn-sm saga-back" data-action="back">${I.left}Volver</button>
+    <h1 class="page-title">${esc(sagaName(s))}<span class="count">${s.films.length}</span></h1>
+    <p class="req-intro">${years.length ? (years[0] === years[1] ? years[0] : `${years[0]} – ${years[1]}`) + ' · ' : ''}${s.films.filter(isSeen).length} de ${s.films.length} vistas · en orden de estreno</p>
+    <div class="grid">${s.films.map(card).join('')}</div>
+  </div>`;
 }
 
 function heroHTML() {
@@ -606,7 +721,7 @@ function heroHTML() {
 
 function heroContent(it) {
   const m = it.meta || {};
-  return `<div class="kicker">${it.type === 'movie' ? 'Película' : 'Serie'}${Date.now() - it.added < 14 * DAY ? ' · Nuevo' : ''}</div>
+  return `<div class="kicker">${it.type === 'movie' ? 'Película' : 'Serie'}${isNewItem(it) ? ' · Nuevo' : ''}</div>
     ${m.logo ? `<img class="title-logo" src="${esc(m.logo)}" alt="${esc(T(it))}">` : `<h1 class="title-text">${esc(T(it))}</h1>`}
     ${metaLine(it)}
     ${m.overview ? `<p class="overview">${esc(m.overview)}</p>` : ''}
@@ -662,39 +777,80 @@ function viewEmpty() {
 
 const isSeen = it => it.type === 'movie' ? !!prog(it.path)?.watched : it.episodes.every(e => prog(e.path)?.watched);
 
-function viewGrid(kind) {
+// Categorías: unos pocos géneros de TMDB, con sus nombres en inglés y en español (según el idioma de las fichas)
+const CATEGORIES = [
+  ['Acción', ['Acción', 'Action', 'Aventura', 'Adventure', 'Action & Adventure', 'Acción y Aventura', 'Acción & Aventura']],
+  ['Comedia', ['Comedia', 'Comedy']],
+  ['Drama', ['Drama']],
+  ['Terror', ['Terror', 'Horror']],
+  ['Suspense', ['Suspense', 'Thriller', 'Misterio', 'Mystery']],
+  ['Ciencia ficción', ['Ciencia ficción', 'Science Fiction', 'Sci-Fi & Fantasy', 'Ciencia ficción y fantasía', 'Sci-Fi & Fantasía']],
+  ['Fantasía', ['Fantasía', 'Fantasy', 'Sci-Fi & Fantasy', 'Ciencia ficción y fantasía', 'Sci-Fi & Fantasía']],
+  ['Crimen', ['Crimen', 'Crime']],
+  ['Animación', ['Animación', 'Animation']],
+  ['Romance', ['Romance']],
+  ['Western', ['Western']],
+  ['Bélica', ['Bélica', 'War', 'War & Politics', 'Bélica y Política', 'Guerra y política']],
+  ['Documental', ['Documental', 'Documentary']],
+  ['Familia', ['Familia', 'Family', 'Kids', 'Infantil']]
+].map(([name, genres]) => ({ name, keys: new Set(genres.map(g => normName(g))) }));
+const inCategory = (it, name) => { const c = CATEGORIES.find(x => x.name === name); return !!c && (it.meta?.genres || []).some(g => c.keys.has(normName(g))); };
+/** Categorías con al menos `min` títulos, con cuántos tiene cada una */
+const categoriesOf = (items, min = 3) => CATEGORIES.map(c => [c.name, items.filter(it => inCategory(it, c.name)).length]).filter(([, n]) => n >= min);
+
+const GRID_PAGE = 60;   // carátulas que se pintan de cada vez; el resto, al bajar
+function gridList(kind) {
   const f = S.filters[kind];
   const base = S.lib.items.filter(i => i.type === (kind === 'movies' ? 'movie' : 'series'));
-  const genres = allGenres(base).map(([g]) => g);
-  const byGenre = f.genre ? base.filter(i => i.meta?.genres?.includes(f.genre)) : base;
-  const seen = byGenre.filter(isSeen).length;
-  let list = f.seen === 'seen' ? byGenre.filter(isSeen) : f.seen === 'unseen' ? byGenre.filter(i => !isSeen(i)) : byGenre;
-  list = sortItems(list, f.sort);
+  const byCat = f.cat ? base.filter(i => inCategory(i, f.cat)) : base;
+  const list = f.seen === 'seen' ? byCat.filter(isSeen) : f.seen === 'unseen' ? byCat.filter(i => !isSeen(i)) : byCat;
+  return { base, byCat, list: sortItems(list, f.sort, f.seed) };
+}
+
+function viewGrid(kind) {
+  const f = S.filters[kind];
+  const { base, byCat, list } = gridList(kind);
+  const cats = categoriesOf(base);
+  if (f.cat && !cats.some(([c]) => c === f.cat)) cats.push([f.cat, byCat.length]);
+  const seen = byCat.filter(isSeen).length;
   const title = kind === 'movies' ? 'Películas' : 'Series';
+  const shown = Math.max(GRID_PAGE, f.shown || 0);
   return `<div class="page">
     <h1 class="page-title">${title}<span class="count">${list.length}</span></h1>
     <div class="toolbar">
       <div class="chips">
-        <button class="chip ${f.seen === 'all' ? 'on' : ''}" data-seen="all">Todas · ${byGenre.length}</button>
+        <button class="chip ${f.seen === 'all' ? 'on' : ''}" data-seen="all">Todas · ${byCat.length}</button>
         <button class="chip ${f.seen === 'seen' ? 'on' : ''}" data-seen="seen">Vistas · ${seen}</button>
-        <button class="chip ${f.seen === 'unseen' ? 'on' : ''}" data-seen="unseen">Sin ver · ${byGenre.length - seen}</button>
+        <button class="chip ${f.seen === 'unseen' ? 'on' : ''}" data-seen="unseen">Sin ver · ${byCat.length - seen}</button>
       </div>
       <div class="spacer"></div>
-      ${f.genre ? `<button class="chip genre-on" data-genre="" title="Quitar filtro">${esc(f.genre)}${I.close}</button>` : ''}
-      ${genres.length ? `<button class="icon-btn filter-btn ${f.open ? 'open' : ''} ${f.genre ? 'active' : ''}" data-action="toggle-genres" title="Filtrar por género">${I.filter}</button>` : ''}
       <select class="select" data-sort="${kind}">
-        ${[['added', 'Añadidas recientemente'], ['title', 'Título (A-Z)'], ['year', 'Año'], ['rating', 'Valoración'], ...(kind === 'movies' && hasLb() ? [['mine', 'Mi nota (Letterboxd)']] : [])]
+        ${[['added', 'Añadidas recientemente'], ['title', 'Título (A-Z)'], ['year', 'Año'], ['rating', 'Valoración'], ['random', 'Al azar'], ...(kind === 'movies' && hasLb() ? [['mine', 'Mi nota (Letterboxd)']] : [])]
           .map(([v, l]) => `<option value="${v}" ${f.sort === v ? 'selected' : ''}>${l}</option>`).join('')}
       </select>
     </div>
-    ${f.open && genres.length ? `<div class="genre-panel">
-        <span class="lbl">Género</span>
-        <button class="gchip ${!f.genre ? 'on' : ''}" data-genre="">Todos</button>
-        ${genres.map(g => `<button class="gchip ${f.genre === g ? 'on' : ''}" data-genre="${esc(g)}">${esc(g)}</button>`).join('')}
+    ${cats.length ? `<div class="cat-chips">
+        <button class="gchip ${!f.cat ? 'on' : ''}" data-cat="">Todas</button>
+        ${cats.map(([c, n]) => `<button class="gchip ${f.cat === c ? 'on' : ''}" data-cat="${esc(c)}">${esc(c)} <span class="n">${n}</span></button>`).join('')}
       </div>` : ''}
-    ${list.length ? `<div class="grid">${list.map(card).join('')}</div>`
+    ${list.length ? `<div class="grid" id="grid" data-kind="${kind}">${list.slice(0, shown).map(card).join('')}</div>
+        ${list.length > shown ? `<div class="grid-more" id="gridMore"><span class="spinner sm"></span></div>` : ''}`
       : `<div class="empty"><p>${base.length ? 'No hay ninguna con estos filtros.' : `No hay ${title.toLowerCase()} en tu biblioteca.`}</p></div>`}
   </div>`;
+}
+
+/** Al acercarse al final de la cuadrícula se añade la siguiente tanda (sin volver a pintar lo que ya está) */
+function growGrid() {
+  const grid = $('#grid'), more = $('#gridMore');
+  if (!grid || !more) return;
+  const v = $('#view');
+  if (v.scrollTop + v.clientHeight < more.offsetTop - 900) return;
+  const kind = grid.dataset.kind, f = S.filters[kind];
+  const { list } = gridList(kind);
+  const from = grid.children.length;
+  f.shown = from + GRID_PAGE;
+  grid.insertAdjacentHTML('beforeend', list.slice(from, f.shown).map(card).join(''));
+  if (f.shown >= list.length) more.remove();
 }
 
 function viewWatchlist() {
@@ -1041,7 +1197,7 @@ function viewSearch() {
     else if (norm(T(it)).includes(nq)) score += 6;
     if (norm(it.title).includes(nq) || norm(m.originalTitle).includes(nq)) score += 4;
     if ((m.genres || []).some(g => norm(g).includes(nq))) score += 3;
-    if ((m.cast || []).some(c => norm(c.name).includes(nq))) score += 2;
+    if ((m.cast?.map(c => c.name) || m.people || []).some(n => norm(n).includes(nq))) score += 2;
     if (norm(m.director || m.creators).includes(nq)) score += 2;
     if (String(Y(it)) === q) score += 3;
     return { it, score };
@@ -1303,6 +1459,7 @@ function viewSettings() {
         <div class="ctl">
           ${libPaths().map((p, i, all) => `<div class="lib-path">
             <input class="input" data-lib-path="${i}" value="${esc(p)}" placeholder="Carpeta en el servidor, p. ej. /media">
+            ${p ? `<button class="btn btn-ghost btn-sm layout-btn ${layoutOf(p) ? 'on' : ''}" data-action="lib-layout" data-path="${esc(p)}" title="Cómo están organizadas las carpetas">${layoutOf(p) ? 'Por categorías' : 'Automática'}</button>` : ''}
             ${all.length > 1 ? `<button class="icon-btn sm" data-action="remove-lib-path" data-idx="${i}" title="Quitar esta carpeta">${I.close}</button>` : ''}
           </div>`).join('')}
           <button class="btn btn-ghost btn-sm add-path" data-action="add-lib-path">${I.plus}Añadir nueva ruta</button>
@@ -1959,11 +2116,14 @@ function render(keepScroll = false) {
     case 'requests': html = viewRequests(); break;
     case 'access': html = viewAccess(); break;
     case 'title': html = viewTitle(r.type, r.id); break;
+    case 'sagas': html = viewSagas(); break;
+    case 'saga': html = viewSaga(r.id); break;
     default: html = viewHome();
   }
   view.innerHTML = html;
   $$('#nav a').forEach(a => a.classList.toggle('active', a.dataset.nav === r.name || (r.name === 'director' && a.dataset.nav === 'directors')));
   if (r.name === 'director') loadPerson(r.id);
+  if (r.name === 'detail') ensureFull(r.id);
   if (r.name === 'downloads') loadServers(true);
   if (r.name === 'access' && !keepScroll) loadAccess();
   if (r.name !== 'director') S.filters.filmo = 'all';
@@ -1991,6 +2151,7 @@ function go(name, extra = {}) {
   if (S.route.name === name && !extra.id && name !== 'search') { $('#view').scrollTo({ top: 0, behavior: 'smooth' }); return; }
   S.history.push({ route: S.route, scroll: $('#view').scrollTop });
   S.route = { name, ...extra };
+  if (S.filters[name]?.shown) S.filters[name].shown = 0;   // al entrar de nuevo, desde la primera tanda
   if (name !== 'search') { S.query = ''; $('#searchInput').value = ''; }
   render();
 }
@@ -2005,6 +2166,7 @@ function back() {
 }
 
 function onScroll() {
+  growGrid();
   $('#topbar').classList.toggle('solid', $('#view').scrollTop > 40 || ['settings', 'downloads'].includes(S.route.name));
 }
 
@@ -2086,6 +2248,7 @@ async function identify(id) {
     const r = e.target.closest('[data-tmdb]');
     if (!r) return;
     list.innerHTML = '<p style="color:var(--text-3);padding:12px">Descargando metadatos…</p>';
+    fullMeta.delete(id);
     await window.api.identify({ itemId: id, tmdbId: +r.dataset.tmdb });
     closeModal();
     toast('Metadatos actualizados', 'ok');
@@ -2098,10 +2261,49 @@ function libPaths() {
   return [S.settings.libraryPath || '', ...(S.settings.extraLibraryPaths || [])];
 }
 
+/** Organización de una carpeta de la biblioteca (null = automática) */
+const layoutOf = p => S.settings.libraryLayouts?.[p] || null;
+
+/** Ventana para elegir cómo está organizada una carpeta de la biblioteca */
+function askLayout(root) {
+  const l = layoutOf(root) || { movies: ['Peliculas', 'Películas', 'Movies', 'Cine'], series: ['Series', 'TV'], folderMovie: true, ignore: [] };
+  const on = !!layoutOf(root);
+  const m = modal(`<div class="modal-head"><h2>Organización de la carpeta</h2><p><code>${esc(root)}</code></p></div>
+    <div class="layout-form">
+      <label class="layout-opt"><input type="radio" name="lmode" value="auto" ${on ? '' : 'checked'}><span><b>Automática</b>Vídeo suelto = película, carpeta = serie. Las carpetas «Películas» y «Series» de la raíz se respetan.</span></label>
+      <label class="layout-opt"><input type="radio" name="lmode" value="categories" ${on ? 'checked' : ''}><span><b>Por categorías</b>Cada carpeta de la raíz es una categoría («Peliculas Humor», «Series Sci-Fi»…). En las que no empiezan por ninguno de los prefijos, una carpeta con episodios es una serie y si no, películas.</span></label>
+      <div class="layout-fields">
+        <label>Las carpetas que empiezan por… sólo tienen películas<input class="input" data-l="movies" value="${esc(l.movies.join(', '))}" placeholder="Peliculas, Películas, Cine"></label>
+        <label>Las carpetas que empiezan por… sólo tienen series<input class="input" data-l="series" value="${esc(l.series.join(', '))}" placeholder="Series, TV"></label>
+        <label>Carpetas que no se miran<input class="input" data-l="ignore" value="${esc(l.ignore.join(', '))}" placeholder="Descargas, Temporal"></label>
+        <label class="layout-check"><input type="checkbox" data-l="folderMovie" ${l.folderMovie !== false ? 'checked' : ''}> Una película sola en su carpeta toma el nombre de la carpeta («Dune (2021)/Dune.mkv»)</label>
+      </div>
+    </div>
+    <div class="modal-foot" style="gap:10px"><button class="btn btn-ghost btn-sm" data-r="0">Cancelar</button><button class="btn btn-accent btn-sm" data-r="1">Guardar y escanear</button></div>`);
+  const sync = () => m.querySelector('.layout-fields').classList.toggle('off', m.querySelector('[name=lmode]:checked').value !== 'categories');
+  sync();
+  m.addEventListener('change', sync);
+  m.addEventListener('click', async e => {
+    const b = e.target.closest('[data-r]');
+    if (!b) return;
+    if (b.dataset.r !== '1') return closeModal();
+    const words = k => m.querySelector(`[data-l=${k}]`).value.split(',').map(s => s.trim()).filter(Boolean);
+    const layouts = { ...(S.settings.libraryLayouts || {}) };
+    if (m.querySelector('[name=lmode]:checked').value === 'categories') {
+      layouts[root] = { mode: 'categories', movies: words('movies'), series: words('series'), ignore: words('ignore'), folderMovie: m.querySelector('[data-l=folderMovie]').checked };
+    } else delete layouts[root];
+    closeModal();
+    toast('Escaneando la carpeta con la nueva organización…');
+    S.settings = await window.api.setSettings({ libraryLayouts: layouts });
+    setLib(await window.api.getLibrary());
+    render(true);
+  });
+}
+
 async function saveLibPaths(list) {
   list = list.map(p => (p || '').trim()).filter(Boolean);
   S.settings = await window.api.setSettings({ libraryPath: list[0] || '', extraLibraryPaths: list.slice(1) });
-  S.lib = await window.api.getLibrary();
+  setLib(await window.api.getLibrary());
   render(true);
 }
 
@@ -2118,7 +2320,7 @@ async function scanNow() {
   const b = $('#btnScan');
   b.classList.add('spin');
   try {
-    S.lib = await window.api.scan();
+    setLib(await window.api.scan());
     render(true);
     toast(`Biblioteca actualizada: ${S.lib.items.length} títulos`, 'ok');
   } finally { b.classList.remove('spin'); }
@@ -2277,7 +2479,6 @@ document.addEventListener('click', async (e) => {
   if (action) {
     const a = action.dataset.action;
     if (a === 'back') back();
-    else if (a === 'toggle-genres') { const f = S.filters[S.route.name]; f.open = !f.open; render(true); }
     else if (a === 'bio-more') {
       const d = allDirectors().find(x => x.key === S.route.id);
       const pp = d?.id ? S.people[d.id] : null;
@@ -2350,11 +2551,13 @@ document.addEventListener('click', async (e) => {
         if (libPaths().some(x => x.toLowerCase() === p.toLowerCase())) toast('Esa carpeta ya está en la biblioteca');
         else { await saveLibPaths([...libPaths(), p]); toast('Carpeta añadida: escaneando…', 'ok'); }
       }
+    } else if (a === 'lib-layout') {
+      askLayout(action.dataset.path);
     } else if (a === 'remove-lib-path') {
       const list = libPaths(); list.splice(+action.dataset.idx, 1); await saveLibPaths(list);
     } else if (a === 'pick-mpv') {
       const p = await window.api.pickMpv();
-      if (p) { await saveSetting('mpvPath', p); S.lib = await window.api.getLibrary(); closeModal(); render(true); toast(S.lib.mpv ? 'mpv configurado' : 'Ese archivo no parece mpv', S.lib.mpv ? 'ok' : 'error'); }
+      if (p) { await saveSetting('mpvPath', p); setLib(await window.api.getLibrary()); closeModal(); render(true); toast(S.lib.mpv ? 'mpv configurado' : 'Ese archivo no parece mpv', S.lib.mpv ? 'ok' : 'error'); }
     } else if (a === 'mpv-help') mpvHelp();
     else if (a === 'close-modal') closeModal();
     else if (a === 'discord-test') {
@@ -2447,11 +2650,13 @@ document.addEventListener('click', async (e) => {
   const dot = t.closest('[data-hero-dot]');
   if (dot) { setHero(+dot.dataset.heroDot); startHeroTimer(); return; }
 
-  const g = t.closest('[data-genre]');
-  if (g) { S.filters[S.route.name].genre = g.dataset.genre || null; render(true); return; }
+  const sg = t.closest('[data-saga]');
+  if (sg) { go('saga', { id: sg.dataset.saga }); return; }
+  const cat = t.closest('[data-cat]');
+  if (cat) { Object.assign(S.filters[S.route.name], { cat: cat.dataset.cat || null, shown: 0 }); render(true); return; }
 
   const sn = t.closest('[data-seen]');
-  if (sn) { S.filters[S.route.name].seen = sn.dataset.seen; render(true); return; }
+  if (sn) { Object.assign(S.filters[S.route.name], { seen: sn.dataset.seen, shown: 0 }); render(true); return; }
 
   const sb = t.closest('[data-season]');
   if (sb) { S.season[sb.dataset.id] = +sb.dataset.season; render(true); return; }
@@ -2459,14 +2664,14 @@ document.addEventListener('click', async (e) => {
 
 document.addEventListener('change', (e) => {
   const t = e.target;
-  if (t.dataset.sort) { S.filters[t.dataset.sort].sort = t.value; render(); }
+  if (t.dataset.sort) { Object.assign(S.filters[t.dataset.sort], { sort: t.value, shown: 0, seed: Math.random() }); render(); }
   else if ('filmoSort' in t.dataset) { S.filters.filmoSort = t.value; render(true); }
   else if (t.dataset.seasonSelect) { S.season[t.dataset.seasonSelect] = +t.value; render(true); }
   else if (t.dataset.set) {
     const v = t.type === 'checkbox' ? t.checked : t.value;
     saveSetting(t.dataset.set, v).then(() => {
       if (t.dataset.set === 'startFullscreen') window.api.setFullscreen(v);
-      if (t.dataset.set === 'singleFileFolderAsMovie') window.api.getLibrary().then(l => { S.lib = l; });
+      if (t.dataset.set === 'singleFileFolderAsMovie') window.api.getLibrary().then(l => { setLib(l); });
     });
   } else if ('discordId' in t.dataset) {
     // sólo cifras; un ID mal copiado no se guarda
@@ -2481,7 +2686,7 @@ document.addEventListener('change', (e) => {
     const key = t.dataset.setText;
     const v = t.value.trim();
     saveSetting(key, v).then(async () => {
-      if (key === 'libraryPath' || key === 'tmdbKey') { S.lib = await window.api.getLibrary(); render(true); }
+      if (key === 'libraryPath' || key === 'tmdbKey') { setLib(await window.api.getLibrary()); render(true); }
     });
   }
 });
@@ -2549,7 +2754,7 @@ $('#btnFullscreen').addEventListener('click', () => window.api.toggleFullscreen(
 
 // ---------------------------------------------------------------- eventos del proceso principal
 window.api.onLibrary((lib) => {
-  S.lib = lib;
+  setLib(lib);
   // no re-renderizar ajustes ni descargas mientras el usuario escribe
   if (['settings', 'downloads'].includes(S.route.name) && /INPUT|SELECT/.test(document.activeElement?.tagName)) return;
   render(true);
@@ -2657,7 +2862,7 @@ async function logout() {
 /** Carga todo con la sesión ya abierta (al abrir la app, o al entrar desde la pantalla de inicio de sesión) */
 async function boot() {
   S.settings = await window.api.getSettings();
-  S.lib = await window.api.getLibrary();
+  setLib(await window.api.getLibrary());
   S.emule.snap = await window.api.emule.get();
   setLb(await window.api.letterboxd.get());
   S.update = await window.api.update.status();

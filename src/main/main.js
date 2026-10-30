@@ -47,7 +47,7 @@ const DEFAULT_SETTINGS = {
 };
 // ajustes que guarda el servidor (los de la biblioteca y TMDB sólo los cambia un administrador)
 const SERVER_KEYS = new Set(['libraryPath', 'extraLibraryPaths', 'tmdbKey', 'metaLang', 'audioLang', 'subLang', 'subMode',
-  'autoplayNext', 'autoWatch', 'singleFileFolderAsMovie', 'myProviders', 'region']);
+  'autoplayNext', 'autoWatch', 'singleFileFolderAsMovie', 'libraryLayouts', 'myProviders', 'region']);
 
 // ---------- persistencia sencilla en JSON ----------
 function store(name, fallback) {
@@ -206,7 +206,7 @@ async function startSession() {
   send('library:updated', view());
 }
 
-async function remoteFetch(p = '/api/library', method = 'GET') {
+async function remoteFetch(p = '/api/library?slim=1', method = 'GET') {
   try {
     remoteView = await remote.request(method, p);
     remoteError = null;
@@ -230,8 +230,14 @@ function publicSettings() {
 /** Lo que necesita mpv: idiomas y reproducción automática del usuario (servidor) y opciones de este PC */
 const playSettings = () => ({ ...serverSettings, ...settings.data });
 
+// la biblioteca ha cambiado en el servidor: se vuelve a pedir (varios avisos seguidos, una sola vez)
+let libTimer = null;
+function reloadLibrary() {
+  clearTimeout(libTimer);
+  libTimer = setTimeout(() => remoteFetch().then(v => send('library:updated', v)), 300);
+}
 remote.on('event', (ev, data) => {
-  if (ev === 'library:updated') { remoteView = data; remoteError = null; send('library:updated', view()); }
+  if (ev === 'library:changed') reloadLibrary();
   else if (ev === 'progress:updated') { if (remoteView) remoteView.progress = data; send('progress:updated', data); }
   else send(ev, data);   // meta:progress, toast, library:new, requests:updated
 });
@@ -582,6 +588,7 @@ ipcMain.handle('remote:me', () => me);
 // ---------- biblioteca (del servidor) ----------
 ipcMain.handle('library:get', async () => (remote.ready && !remoteView ? remoteFetch() : view()));
 ipcMain.handle('library:scan', () => (isAdmin() ? remoteFetch('/api/scan', 'POST') : remoteFetch()));
+ipcMain.handle('library:item', (_e, id) => remote.get('/api/item/' + encodeURIComponent(id)));
 ipcMain.handle('library:refreshMeta', () => remote.post('/api/meta/refresh'));
 ipcMain.handle('meta:person', (_e, id) => remote.get('/api/person/' + encodeURIComponent(id)).catch(() => null));
 ipcMain.handle('meta:providerList', () => remote.get('/api/providers'));

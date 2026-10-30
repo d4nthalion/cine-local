@@ -1,5 +1,6 @@
 // Escáner de la biblioteca: archivo suelto = película, carpeta = serie.
 // Excepción: en la raíz, una carpeta «Películas» / «Movies» contiene películas y una «Series» / «TV» contiene series.
+// Cada carpeta de biblioteca puede organizarse «por categorías» (options.layouts[raíz]): ver scanCategories.
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
@@ -190,7 +191,9 @@ function scanLibrary(root, options = {}) {
   try { entries = fs.readdirSync(root, { withFileTypes: true }); }
   catch (e) { return { ok: false, error: e.message, items: [] }; }
 
-  scanEntries(root, entries, options, items, true);
+  const layout = options.layouts?.[root];
+  if (layout?.mode === 'categories') scanCategories(root, entries, layout, options, items);
+  else scanEntries(root, entries, options, items, true);
   items.sort((a, b) => naturalCompare(a.title, b.title));
   return { ok: true, items, scannedAt: Date.now() };
 }
@@ -214,8 +217,46 @@ function scanEntries(dir, entries, options, items, top) {
   }
 }
 
+/**
+ * Biblioteca organizada por categorías: cada carpeta de la raíz es una categoría («Peliculas Humor», «Series Sci-Fi»…).
+ * layout: { movies: [prefijos], series: [prefijos], folderMovie: bool, ignore: [nombres] }
+ * - Las que empiezan por un prefijo de películas sólo tienen películas, y las de series, sólo series.
+ * - En las demás se decide por carpeta: con episodios (S01E02, 1x02, Temporada 1…) es una serie; si no, películas.
+ * - folderMovie: una película sola en su carpeta toma el nombre de la carpeta («Dune (2021)/Dune.mkv»).
+ */
+function scanCategories(root, entries, layout, options, items) {
+  const norm = s => String(s).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').trim();
+  const starts = (name, list) => (list || []).map(norm).filter(Boolean).some(p => norm(name).startsWith(p));
+  const ignore = new Set((layout.ignore || []).map(norm));
+  const folderMovie = layout.folderMovie !== false;
+  for (const e of entries) {
+    const full = path.join(root, e.name);
+    if (e.isFile()) { if (isVideo(e.name) && !SKIP_FILES.test(e.name)) items.push(movieItem(full)); continue; }
+    if (!e.isDirectory() || SKIP_DIRS.test(e.name) || ignore.has(norm(e.name))) continue;
+    if (starts(e.name, layout.movies)) { scanMovies(full, items, folderMovie); continue; }
+    let inner;
+    try { inner = fs.readdirSync(full, { withFileTypes: true }); } catch { continue; }
+    if (starts(e.name, layout.series)) { scanEntries(full, inner, options, items, false); continue; }
+    for (const x of inner) {
+      const p = path.join(full, x.name);
+      if (x.isFile()) { if (isVideo(x.name) && !SKIP_FILES.test(x.name)) items.push(movieItem(p)); continue; }
+      if (!x.isDirectory() || SKIP_DIRS.test(x.name) || ignore.has(norm(x.name))) continue;
+      if (looksLikeSeries(p)) { const s = scanSeries(p, x.name, options); if (s) items.push(s); }
+      else { const files = walkVideos(p); for (const f of files) items.push(movieItem(f, folderMovie && files.length === 1 ? p : null)); }
+    }
+  }
+}
+
+/** ¿Carpeta de una serie? Algún vídeo con S01E02 / 1x02 / Cap.102, o subcarpetas de temporada */
+function looksLikeSeries(dir) {
+  let entries;
+  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return false; }
+  if (entries.some(e => e.isDirectory() && !SKIP_DIRS.test(e.name) && /^(season|temporada|temp|staffel|saison|s)\s*\.?\s*\d{1,2}$/i.test(e.name.trim()))) return true;
+  return walkVideos(dir).some(f => /S\d{1,2}\s*[-.]?\s*E\d{1,3}|(?:^|\D)\d{1,2}x\d{2,3}(?:\D|$)|cap(?:itulo|ítulo)?\s*\.?\s*\d{3}(?!\d)/i.test(path.basename(f)));
+}
+
 /** Carpeta «Películas»: cada vídeo es una película; si está solo en su carpeta, el título sale de la carpeta */
-function scanMovies(dir, items) {
+function scanMovies(dir, items, folderMovie = true) {
   let entries;
   try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
   for (const e of entries) {
@@ -223,7 +264,7 @@ function scanMovies(dir, items) {
     if (e.isDirectory()) {
       if (SKIP_DIRS.test(e.name)) continue;
       const files = walkVideos(full);
-      for (const f of files) items.push(movieItem(f, files.length === 1 ? full : null));
+      for (const f of files) items.push(movieItem(f, folderMovie && files.length === 1 ? full : null));
     } else if (e.isFile() && isVideo(e.name) && !SKIP_FILES.test(e.name)) {
       items.push(movieItem(full));
     }
