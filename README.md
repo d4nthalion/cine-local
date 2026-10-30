@@ -50,7 +50,7 @@ En la pantalla de inicio de sesión, *Usar sin servidor: carpetas de este PC o d
 * Mientras CineLocal está abierto, vigila las carpetas y añade lo nuevo cuando termina de copiarse.
 * Todo lo de administrador es tuyo: TMDB, carpetas, corregir fichas y eMule. Con eMule, lo descargado se copia a la primera carpeta de la biblioteca.
 * No hay peticiones ni registro de actividad: sólo existen en el servidor.
-* La primera vez se importa la biblioteca local de antes de la 1.16 si sigue en `%APPDATA%\CineLocal` (fichas, correcciones, progreso y Mi lista). Las carpetas hay que volver a añadirlas.
+* La primera vez se importa la biblioteca local de antes de la 1.16 si sigue en `%APPDATA%\CineLocal` (fichas, correcciones, progreso y Mi lista, que pasa a la Watchlist). Las carpetas hay que volver a añadirlas.
 * Por dentro, `src/main/local.js` usa la misma biblioteca que el servidor (`server/library.js`) y responde a las mismas rutas `/api/…`, así que el resto de la app no distingue los dos modos.
 
 ### Administradores y usuarios
@@ -70,8 +70,9 @@ Cualquier título que no está en la biblioteca (al buscar, en la filmografía d
 
 * Portada con carrusel destacado, *Continuar viendo*, *Añadido recientemente*, filas por género y mejor valoradas.
 * Fichas con fondo, logo, sinopsis, reparto, tráiler, temporadas y episodios con miniaturas.
-* Reanuda donde lo dejaste, marca vistos y reproduce el siguiente episodio automáticamente.
-* Mi lista, búsqueda (título, actor, director, género) y orden en Películas y Series, con filtro de vistas / sin ver y, tras el icono de filtros, por género.
+* Reanuda donde lo dejaste y reproduce el siguiente episodio automáticamente. Se marca como visto un episodio, una temporada entera (*Marcar temporada como vista*) o la serie; se ve al momento, sin esperar al servidor. Si un episodio tiene dos archivos (dos versiones, p. ej. en distinta calidad), cuenta como visto en cuanto ves cualquiera de los dos, y marcarlo o desmarcarlo afecta a los dos.
+* **Listas:** la **Watchlist** de cada uno (botón de marcador en la ficha, también en títulos que no tienes; sustituye a la antigua «Mi lista», con lo que había en ella), las listas propias y, con Letterboxd vinculado, su watchlist en otra pestaña. Añadir y quitar se ve al momento. Las apps antiguas siguen viendo «Mi lista» como los títulos de la Watchlist que están en la biblioteca.
+* Búsqueda (título, actor, director, género) y orden en Películas y Series, con filtro de vistas / sin ver y, tras el icono de filtros, por género.
 * Si la búsqueda no encuentra nada en tu biblioteca, busca la película en TMDB: cada resultado lleva *Dónde verla* y, con eMule activado, *Buscar en eMule*. Un año al final («dune 2021») afina la búsqueda.
 * Detección automática: lo que se copie o descargue en la carpeta del NAS aparece solo (cuando termina de copiarse), con aviso en la app y notificación de Windows.
 * Pantalla completa de la app: botón en la barra superior, **F11**, u opción *Iniciar en pantalla completa*.

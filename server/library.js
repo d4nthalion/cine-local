@@ -8,7 +8,7 @@ const { scanLibraries } = require('../src/main/scanner');
 const { TMDB } = require('../src/main/metadata');
 const { LibraryWatcher, isStable } = require('../src/main/watcher');
 const { GENERIC_EPISODE } = require('../src/main/discord');
-const { applyListOp } = require('../src/main/lists');
+const { applyListOp, withWatchlist, WATCHLIST } = require('../src/main/lists');
 const { store } = require('./store');
 
 const DEFAULT_SETTINGS = {
@@ -107,9 +107,42 @@ class Library extends EventEmitter {
     const key = String(name).toLowerCase();
     if (!this.users.has(key)) {
       const safe = key.replace(/[^a-z0-9._-]/g, '_');
-      this.users.set(key, store(path.join(this.dir, 'users'), safe + '.json', { progress: {}, favorites: [], lists: [], lastPlayed: {}, prefs: {} }));
+      const u = store(path.join(this.dir, 'users'), safe + '.json', { progress: {}, favorites: [], lists: [], lastPlayed: {}, prefs: {} });
+      this.users.set(key, u);
+      // la Watchlist sustituye a «Mi lista»: la primera vez se crea con lo que había en ella
+      if (!(u.data.lists || []).some(l => l.id === WATCHLIST)) {
+        u.data.lists = withWatchlist(u.data.lists || [], (u.data.favorites || []).map(id => this.entryOf(id)).filter(Boolean));
+        u.data.favorites = [];
+        u.save();
+      }
     }
     return this.users.get(key);
+  }
+
+  /** Entrada de lista de un título de la biblioteca (por su ficha de TMDB; sin ficha, por su id). Como entryOf() de app.js */
+  entryOf(id) {
+    const it = this.library.data.items.find(i => i.id === id);
+    if (!it) return null;
+    const m = this.metadata.data[id]?.meta;
+    const base = { type: it.type, title: m?.title || it.title, year: m?.year || it.year || null };
+    return m?.tmdbId ? { key: `${it.type}:${m.tmdbId}`, tmdb: m.tmdbId, ...base, poster: m.poster || null } : { key: 'id:' + id, id, ...base };
+  }
+
+  /**
+   * Para las apps de antes de la Watchlist («Mi lista» = favorites): los títulos de la biblioteca que están en ella,
+   * en su orden
+   */
+  favoritesOf(u) {
+    const wl = (u.lists || []).find(l => l.id === WATCHLIST);
+    if (!wl?.items.length) return [];
+    // por su ficha o, si se guardó antes de tenerla, por su id
+    const byKey = new Map();
+    for (const it of this.library.data.items) {
+      const t = this.metadata.data[it.id]?.meta?.tmdbId;
+      if (t) byKey.set(`${it.type}:${t}`, it.id);
+      byKey.set('id:' + it.id, it.id);
+    }
+    return [...new Set(wl.items.map(e => byKey.get(e.key)).filter(Boolean))];
   }
 
   // ---------- ajustes ----------
@@ -182,7 +215,7 @@ class Library extends EventEmitter {
       error: this.library.data.error,
       nas: null,
       progress: u.progress,
-      favorites: u.favorites,
+      favorites: this.favoritesOf(u),
       lists: u.lists || [],
       mpv: 'web',            // en la web no hace falta mpv: no mostrar el aviso
       hasKey: !!this.settings.data.tmdbKey,
@@ -503,13 +536,18 @@ class Library extends EventEmitter {
     return u.data.lists;
   }
 
+  /** «Mi lista» de las apps de antes de la Watchlist: añade o quita el título de la Watchlist */
   toggleFavorite(userName, id) {
     const u = this.user(userName);
-    const f = new Set(u.data.favorites);
-    f.has(id) ? f.delete(id) : f.add(id);
-    u.data.favorites = [...f];
-    u.save();
-    return u.data.favorites;
+    const fresh = this.entryOf(id);
+    // si ya está (por su ficha o, guardado antes de tenerla, por su id), se quita esa entrada
+    const wl = u.data.lists.find(l => l.id === WATCHLIST);
+    const entry = fresh && (wl?.items.find(x => x.key === fresh.key || x.key === 'id:' + id) || fresh);
+    if (entry) {
+      u.data.lists = applyListOp(u.data.lists, { op: 'toggle', id: WATCHLIST, entry });
+      u.save();
+    }
+    return this.favoritesOf(u.data);
   }
 
   setLastPlayed(userName, itemId, episodeId) {

@@ -23,6 +23,8 @@ const I = {
   eye: '<svg viewBox="0 0 24 24"><path d="M12 5c5 0 9 4.5 10 7-1 2.5-5 7-10 7S3 14.5 2 12c1-2.5 5-7 10-7zm0 3a4 4 0 1 0 0 8 4 4 0 0 0 0-8z"/></svg>',
   tag: '<svg viewBox="0 0 24 24"><path d="M3 3h8l10 10-8 8L3 11zm4 2.5a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3z"/></svg>',
   image: '<svg viewBox="0 0 24 24"><path d="M3 4h18v16H3zm2 2v9.6l4-4 4 4 2.5-2.5L19 16.6V6zm11 1.5a1.5 1.5 0 1 1 0 3 1.5 1.5 0 0 1 0-3z"/></svg>',
+  bookmark: '<svg viewBox="0 0 24 24"><path d="M6 3h12v18l-6-4.2L6 21zm2 2v12.2l4-2.8 4 2.8V5z"/></svg>',
+  bookmarkOn: '<svg viewBox="0 0 24 24"><path d="M6 3h12v18l-6-4.2L6 21z"/></svg>',
   download: '<svg viewBox="0 0 24 24"><path d="M11 3h2v9.2l3.3-3.3 1.4 1.4L12 16l-5.7-5.7 1.4-1.4 3.3 3.3zM4 18h16v2H4z"/></svg>',
   pause: '<svg viewBox="0 0 24 24"><path d="M7 5h4v14H7zm6 0h4v14h-4z"/></svg>',
   close: '<svg viewBox="0 0 24 24"><path d="m6.4 5 5.6 5.6L17.6 5 19 6.4 13.4 12l5.6 5.6-1.4 1.4-5.6-5.6L6.4 19 5 17.6l5.6-5.6L5 6.4z"/></svg>',
@@ -126,19 +128,27 @@ const isNewItem = it => Date.now() - (it.added || 0) < DAY;
 const T = (it) => it.meta?.title || it.title;
 const Y = (it) => it.meta?.year || it.year;
 const prog = (p) => S.lib.progress[p];
-const isFav = (id) => S.lib.favorites.includes(id);
 
-// ---------------------------------------------------------------- listas propias (src/main/lists.js)
-const listsOf = () => S.lib.lists || [];
+// ---------------------------------------------------------------- listas (src/main/lists.js)
+// La Watchlist (id «watchlist», siempre la primera) sustituye a «Mi lista»; las propias van detrás.
+const WL = 'watchlist';
+const watchlistOf = () => (S.lib.lists || []).find(l => l.id === WL) || { id: WL, name: 'Watchlist', items: [] };
+const inWatchlist = (key) => watchlistOf().items.some(x => x.key === key);
+/** Las listas propias (sin la Watchlist) */
+const listsOf = () => (S.lib.lists || []).filter(l => l.id !== WL);
 /** Entrada de lista de un título de la biblioteca: por su ficha de TMDB, que vale aunque el archivo cambie */
 function entryOf(it) {
   const t = it.meta?.tmdbId;
   return t ? { key: `${it.type}:${t}`, tmdb: t, type: it.type, title: T(it), year: Y(it), poster: it.meta?.poster || null }
     : { key: 'id:' + it.id, id: it.id, type: it.type, title: T(it), year: Y(it) };
 }
+/** Cómo puede estar un título de la biblioteca en una lista: por su ficha o, si se guardó antes de tenerla, por su id */
+const itemKeys = (it) => [entryOf(it).key, 'id:' + it.id];
+/** La entrada con la que está un título en una lista, o la nueva si no está */
+const entryIn = (list, it) => list.items.find(x => itemKeys(it).includes(x.key)) || entryOf(it);
 /** El título de la biblioteca de una entrada, si lo tienes */
 const ownedOf = (e) => e.tmdb ? S.lib.items.find(i => i.type === e.type && i.meta?.tmdbId === e.tmdb) : byId(e.id);
-const inAnyList = (key) => listsOf().some(l => l.items.some(x => x.key === key));
+const inAnyList = (key) => (S.lib.lists || []).some(l => l.items.some(x => x.key === key));
 /** Tarjeta de una entrada: la tuya si la tienes; si no, la de «Dónde verla» */
 function listEntryCard(e) {
   const it = ownedOf(e);
@@ -178,6 +188,23 @@ const GENERIC_EPISODE = /^(episode|episodio|capítulo|capitulo|folge|épisode|ep
 const seasonLabel = (it, n) => { const name = it.meta?.seasons?.[n]?.name; return name && !GENERIC_SEASON.test(name.trim()) ? name : (n === 0 ? 'Especiales' : `Temporada ${n}`); };
 const episodeLabel = (em, n) => em?.name && !GENERIC_EPISODE.test(em.name.trim()) ? em.name : `Episodio ${n}`;
 
+/**
+ * Episodios vistos de una serie, por temporada y número: un episodio cuenta como visto si se ha visto cualquiera de
+ * sus versiones (dos archivos del mismo episodio, p. ej. en distinta calidad). Se calcula una vez por cada progreso.
+ */
+const seenCache = new WeakMap();
+function seenKeys(it) {
+  let c = seenCache.get(it);
+  if (!c || c.p !== S.lib.progress) {
+    c = { p: S.lib.progress, keys: new Set(it.episodes.filter(e => prog(e.path)?.watched).map(e => e.season + 'x' + e.episode)) };
+    seenCache.set(it, c);
+  }
+  return c.keys;
+}
+const epSeen = (it, e) => seenKeys(it).has(e.season + 'x' + e.episode);
+/** Los archivos de un episodio (todas sus versiones) */
+const epPaths = (it, e) => it.episodes.filter(o => o.season === e.season && o.episode === e.episode).map(o => o.path);
+
 /** Para una serie: episodio a reproducir y estado */
 function seriesState(it) {
   const eps = it.episodes;
@@ -190,7 +217,7 @@ function seriesState(it) {
   const p = prog(last.path);
   if (!p.watched && p.pos > 0) return { ep: last, mode: 'resume', at: lastAt, p };
   const idx = eps.indexOf(last);
-  const next = eps.slice(idx + 1).find(e => !prog(e.path)?.watched);
+  const next = eps.slice(idx + 1).find(e => !epSeen(it, e));
   if (next) return { ep: next, mode: 'next', at: lastAt };
   return { ep: eps[0], mode: 'done', at: lastAt };
 }
@@ -262,7 +289,7 @@ function card(it) {
     watched = !!p?.watched;
     if (p && !p.watched && p.pos > 30) bar = `<div class="progress"><i style="width:${pct(p)}%"></i></div>`;
   } else {
-    watched = it.episodes.every(e => prog(e.path)?.watched);
+    watched = it.episodes.every(e => epSeen(it, e));
   }
   const sub = [Y(it), it.type === 'movie' ? (it.meta?.runtime ? fmtRuntime(it.meta.runtime) : 'Película')
     : `${it.seasons.length} temp.`].filter(Boolean).join(' · ');
@@ -295,7 +322,7 @@ function missingCard(f, { tag = '', sub, entry } = {}) {
     <div class="art">${f.poster ? `<img loading="lazy" src="${esc(f.poster)}" alt="">` : placeholder(ph)}
       ${tag}${lbBadge(lb)}
       ${saved ? `<span class="watched-mark in-list" title="En una de tus listas">${I.check}</span>` : ''}
-      <div class="missing-hover">${tmdbE || f.url ? `<span>${I.info}${tmdbE ? 'Ver ficha' : 'Ver en Letterboxd'}</span>` : ''}${requestButton(e)}${e ? `<button class="mh-emule" data-action="lists-pick" data-entry="${esc(JSON.stringify(e))}">${saved ? I.check : I.plus}${saved ? 'En tus listas' : 'Guardar en lista'}</button>` : ''}${emuleOn() ? `<button class="mh-emule" data-action="emule-find" data-q="${esc(f.title)}" data-alt="${esc(f.originalTitle || '')}">${I.download}Buscar en eMule</button>` : ''}</div>
+      <div class="missing-hover">${tmdbE || f.url ? `<span>${I.info}${tmdbE ? 'Ver ficha' : 'Ver en Letterboxd'}</span>` : ''}${requestButton(e)}${e ? `<button class="mh-emule" data-action="wl-toggle" data-entry="${esc(JSON.stringify(e))}">${inWatchlist(e.key) ? I.bookmarkOn : I.bookmark}${inWatchlist(e.key) ? 'En tu Watchlist' : 'Watchlist'}</button>` : ''}${e ? `<button class="mh-emule" data-action="lists-pick" data-entry="${esc(JSON.stringify(e))}">${saved ? I.check : I.plus}${saved ? 'En tus listas' : 'Guardar en lista'}</button>` : ''}${emuleOn() ? `<button class="mh-emule" data-action="emule-find" data-q="${esc(f.title)}" data-alt="${esc(f.originalTitle || '')}">${I.download}Buscar en eMule</button>` : ''}</div>
     </div>
     <div class="cap"><div class="t">${esc(f.title)}</div><div class="s">${esc(line || 'Sin fecha')}</div></div>
   </div>`;
@@ -605,13 +632,13 @@ function viewHome() {
   const recent = sortItems(items, 'added').slice(0, 24);
   const series = sortItems(items.filter(i => i.type === 'series'), 'added');
   const movies = sortItems(items.filter(i => i.type === 'movie'), 'added');
-  const favs = S.lib.favorites.map(byId).filter(Boolean);
+  const wlist = watchlistOf().items;
   const today = new Date().toDateString();   // las filas «al azar» cambian cada día, no en cada visita
 
   let rows = '';
   rows += row('Continuar viendo', cont.map(wideCard).join(''), 'cont');
   rows += row('Añadido recientemente', recent.map(card).join(''), 'recent');
-  if (favs.length) rows += row('Mi lista', favs.map(card).join(''), 'favs', 'list');
+  if (wlist.length) rows += row('Watchlist', wlist.slice(0, 30).map(listEntryCard).join(''), 'wl', 'list:' + WL);
   for (const l of listsOf()) if (l.items.length) rows += row(l.name, l.items.slice(0, 30).map(listEntryCard).join(''), 'list-' + l.id, 'list:' + l.id);
   const wl = watchlistEntries();
   if (wl.length) {
@@ -781,7 +808,7 @@ function viewEmpty() {
     </div>` : ''}</div></div>`;
 }
 
-const isSeen = it => it.type === 'movie' ? !!prog(it.path)?.watched : it.episodes.every(e => prog(e.path)?.watched);
+const isSeen = it => it.type === 'movie' ? !!prog(it.path)?.watched : it.episodes.every(e => epSeen(it, e));
 
 // Categorías: unos pocos géneros de TMDB, con sus nombres en inglés y en español (según el idioma de las fichas)
 const CATEGORIES = [
@@ -860,49 +887,49 @@ function growGrid() {
 }
 
 function viewWatchlist() {
+  return `<div class="page"><h1 class="page-title">Watchlist de Letterboxd<span class="count">${watchlistEntries().length}</span></h1>${watchlistBody()}</div>`;
+}
+/** La watchlist de Letterboxd (su página y su pestaña en Listas) */
+function watchlistBody() {
   const all = watchlistEntries();
   const mode = S.filters.watchlist;
   const have = all.filter(e => e.it).length;
   const list = mode === 'owned' ? all.filter(e => e.it) : mode === 'missing' ? all.filter(e => !e.it) : all;
-  return `<div class="page"><h1 class="page-title">Watchlist de Letterboxd<span class="count">${all.length}</span></h1>
-    ${all.length ? `<div class="toolbar"><div class="chips">
+  return `${all.length ? `<div class="toolbar"><div class="chips">
         <button class="chip ${mode === 'all' ? 'on' : ''}" data-wl="all">Todas · ${all.length}</button>
         <button class="chip ${mode === 'owned' ? 'on' : ''}" data-wl="owned"><i class="dot-own"></i>En tu biblioteca · ${have}</button>
         <button class="chip ${mode === 'missing' ? 'on' : ''}" data-wl="missing">No las tienes · ${all.length - have}</button>
       </div></div>
       <div class="grid filmo">${list.map(e => e.it ? card(e.it).replace('class="card"', 'class="card owned"').replace('<div class="cap">', '<div class="cap"><div class="own-badge">' + I.check + 'En tu biblioteca</div>') : watchlistCard(e)).join('')}</div>`
-      : `<div class="empty"><h2>Tu watchlist está vacía</h2><p>${S.settings.lbUser ? 'Sincroniza tu perfil desde Ajustes.' : 'Conecta tu perfil de Letterboxd en Ajustes.'}</p><button class="btn btn-ghost" data-nav="settings">Ajustes</button></div>`}
-  </div>`;
+      : `<div class="empty"><h2>Tu watchlist de Letterboxd está vacía</h2><p>${S.settings.lbUser ? 'Sincroniza tu perfil desde Ajustes.' : 'Conecta tu perfil de Letterboxd en Ajustes.'}</p><button class="btn btn-ghost" data-nav="settings">Ajustes</button></div>`}`;
 }
 
-/** Listas: Mi lista y las propias, una por pestaña */
+/** Listas: la Watchlist, las propias y, con Letterboxd, su watchlist; una por pestaña */
 function viewList() {
-  const favs = S.lib.favorites.map(byId).filter(Boolean);
-  const lists = listsOf();
-  const l = lists.find(x => x.id === S.listTab);
+  const lists = [watchlistOf(), ...listsOf()];
+  const lbOn = !WEB && (!!S.settings.lbUser || watchlistEntries().length > 0);
+  const tab = S.listTab === 'lb' && lbOn ? 'lb' : (lists.find(x => x.id === S.listTab) || lists[0]).id;
+  const l = lists.find(x => x.id === tab);
   const tabs = `<div class="list-tabs">
-      <button class="gchip ${l ? '' : 'on'}" data-list-tab="">Mi lista <span class="n">${favs.length}</span></button>
-      ${lists.map(x => `<button class="gchip ${x === l ? 'on' : ''}" data-list-tab="${esc(x.id)}">${esc(x.name)} <span class="n">${x.items.length}</span></button>`).join('')}
+      ${lists.map(x => `<button class="gchip ${x.id === tab ? 'on' : ''}" data-list-tab="${esc(x.id)}">${x.id === WL ? I.bookmark : ''}${esc(x.name)} <span class="n">${x.items.length}</span></button>`).join('')}
+      ${lbOn ? `<button class="gchip ${tab === 'lb' ? 'on' : ''}" data-list-tab="lb"><span class="lb-logo sm"><i></i><i></i><i></i></span>Watchlist de Letterboxd <span class="n">${watchlistEntries().length}</span></button>` : ''}
       <button class="gchip add" data-action="list-new">${I.plus}Nueva lista</button>
     </div>`;
-  if (!l) {
-    return `<div class="page"><h1 class="page-title">Listas</h1>${tabs}
-      ${favs.length ? `<div class="grid">${favs.map(card).join('')}</div>`
-        : `<div class="empty"><div class="big-ico">${I.plus}</div><h2>Aún no has añadido nada</h2><p>Pulsa el botón + en cualquier película o serie para guardarla en Mi lista o en otra de tus listas.</p></div>`}
-    </div>`;
-  }
+  if (tab === 'lb') return `<div class="page"><h1 class="page-title">Listas</h1>${tabs}${watchlistBody()}</div>`;
   const owned = l.items.filter(ownedOf).length;
+  const isWl = l.id === WL;
   return `<div class="page"><h1 class="page-title">Listas</h1>${tabs}
     <div class="list-head"><div><h2>${esc(l.name)}</h2><p>${l.items.length} ${l.items.length === 1 ? 'título' : 'títulos'}${l.items.length ? ` · ${owned} en tu biblioteca` : ''}</p></div>
-      <div class="list-actions"><button class="btn btn-ghost btn-sm" data-action="list-rename" data-list="${esc(l.id)}">Renombrar</button>
-      <button class="btn btn-ghost btn-sm" data-action="list-delete" data-list="${esc(l.id)}">Eliminar</button></div></div>
+      ${isWl ? '' : `<div class="list-actions"><button class="btn btn-ghost btn-sm" data-action="list-rename" data-list="${esc(l.id)}">Renombrar</button>
+      <button class="btn btn-ghost btn-sm" data-action="list-delete" data-list="${esc(l.id)}">Eliminar</button></div>`}</div>
     ${l.items.length ? `<div class="grid filmo">${l.items.map(listEntryCard).join('')}</div>`
+      : isWl ? `<div class="empty"><div class="big-ico">${I.bookmark}</div><h2>Tu Watchlist está vacía</h2><p>Pulsa «Watchlist» en cualquier película o serie, también en las que no tienes (en la filmografía de un director o al buscar), para apuntarla aquí.</p></div>`
       : `<div class="empty"><div class="big-ico">${I.plus}</div><h2>Lista vacía</h2><p>Pulsa + en una película o serie, o «Guardar en lista» en una película que no tengas (en la filmografía de un director o al buscar), y elige esta lista.</p></div>`}
   </div>`;
 }
 
 // ---------------------------------------------------------------- elegir listas para un título
-/** Ventana «Guardar en una lista»: itemId sólo si está en la biblioteca (Mi lista guarda títulos tuyos) */
+/** Ventana «Guardar en una lista» (la Watchlist y las propias). itemId: el título, si está en la biblioteca */
 function openListPicker(entry, itemId) {
   S.picker = { entry, itemId };
   modal(`<div class="modal-head"><h2>Guardar en una lista</h2><p>${esc(entry.title)}${entry.year ? ` (${entry.year})` : ''}</p></div>
@@ -921,19 +948,69 @@ function paintListPicker() {
   if (!box || !S.picker) return;
   const { entry, itemId } = S.picker;
   const row = (on, attrs, name, n) => `<button class="lp-row ${on ? 'on' : ''}" ${attrs}><span class="lp-check">${on ? I.check : ''}</span><span class="lp-name">${esc(name)}</span><span class="lp-n">${n}</span></button>`;
-  box.innerHTML = (itemId ? row(isFav(itemId), `data-action="pick-fav" data-id="${esc(itemId)}"`, 'Mi lista', S.lib.favorites.length) : '')
-    + listsOf().map(l => row(l.items.some(x => x.key === entry.key), `data-action="pick-list" data-list="${esc(l.id)}"`, l.name, l.items.length)).join('')
-    + (!itemId && !listsOf().length ? '<p class="filmo-note">Aún no tienes listas: escribe un nombre abajo y pulsa Crear.</p>' : '');
+  const it = itemId ? byId(itemId) : null;
+  const keys = it ? itemKeys(it) : [entry.key];
+  box.innerHTML = [watchlistOf(), ...listsOf()].map(l => row(l.items.some(x => keys.includes(x.key)), `data-action="pick-list" data-list="${esc(l.id)}"`, l.name, l.items.length)).join('')
+    + (!listsOf().length ? '<p class="filmo-note">Para crear una lista, escribe un nombre abajo y pulsa Crear.</p>' : '');
 }
 
-async function listOp(q) {
+/**
+ * Operación de listas. Añadir o quitar un título se ve al momento (sin esperar al servidor); si el servidor falla,
+ * se deshace. after(): repintar, al aplicarlo y al llegar la respuesta.
+ */
+let listSeq = 0;
+async function listOp(q, after = () => {}) {
+  const before = S.lib.lists;
+  if (q.op === 'toggle') {
+    S.lib.lists = (before || []).map(l => {
+      if (l.id !== q.id) return l;
+      const has = l.items.some(x => x.key === q.entry.key);
+      return { ...l, items: has ? l.items.filter(x => x.key !== q.entry.key) : [q.entry, ...l.items] };
+    });
+    after();
+  }
+  const seq = ++listSeq;
   try {
-    S.lib.lists = await window.api.lists.op(q);
+    const lists = await window.api.lists.op(q);
+    // con varios cambios seguidos, sólo la última respuesta (las anteriores no traen los cambios que vinieron después)
+    if (seq === listSeq && JSON.stringify(lists) !== JSON.stringify(S.lib.lists)) { S.lib.lists = lists; after(); }
     return true;
   } catch (e) {
+    if (seq === listSeq) S.lib.lists = before;
+    after();
     toast(errText(e), 'error');
     return false;
   }
+}
+/**
+ * Marcar como vistos (o no) unos archivos: se ve al momento y el servidor se entera después; si falla, se deshace.
+ * Con varios clics seguidos, sólo la última respuesta del servidor sustituye al progreso.
+ */
+let markSeq = 0;
+async function markPaths(paths, watched) {
+  const before = S.lib.progress;
+  const next = { ...before };
+  for (const p of paths) {
+    if (watched) next[p] = { pos: 0, dur: before[p]?.dur || 0, watched: true, at: Date.now() };
+    else delete next[p];
+  }
+  S.lib.progress = next;
+  render(true);
+  const seq = ++markSeq;
+  try {
+    const p = await window.api.markProgress({ paths, watched });
+    if (seq === markSeq) S.lib.progress = p;
+  } catch (e) {
+    S.lib.progress = { ...S.lib.progress };
+    for (const p of paths) { if (before[p]) S.lib.progress[p] = before[p]; else delete S.lib.progress[p]; }
+    render(true);
+    toast(errText(e), 'error');
+  }
+}
+
+/** Añadir o quitar de la Watchlist */
+function toggleWatchlist(entry, after = () => render(true)) {
+  return listOp({ op: 'toggle', id: WL, entry }, after);
 }
 
 /** Nombre para una lista nueva o para renombrar */
@@ -1095,7 +1172,7 @@ const ACCESS_KIND = {
   play: 'Reproducción', remux: 'Reproducción (reempaquetado)', transcode: 'Reproducción (convertido)', download: 'Descarga',
   login: 'Inicio de sesión', 'login-failed': 'Intento fallido', logout: 'Cierre de sesión',
   open: 'Abrir reproductor', watched: 'Marcado como visto', unwatched: 'Marcado como no visto',
-  'fav-add': 'Añadido a Mi lista', 'fav-remove': 'Quitado de Mi lista',
+  'fav-add': 'Añadido a la Watchlist', 'fav-remove': 'Quitado de la Watchlist',
   'list-create': 'Lista creada', 'list-rename': 'Lista renombrada', 'list-delete': 'Lista borrada', 'list-add': 'Añadido a una lista', 'list-remove': 'Quitado de una lista',
   'request-create': 'Petición', 'request-cancel': 'Petición cancelada', 'request-resolve': 'Petición resuelta', 'request-remove': 'Petición borrada',
   settings: 'Ajustes', scan: 'Escaneo', 'meta-refresh': 'Buscar fichas', identify: 'Ficha corregida', poster: 'Carátula cambiada',
@@ -1273,7 +1350,9 @@ function viewDetail(id) {
   const it = byId(id);
   if (!it) return `<div class="page"><div class="empty"><h2>No encontrado</h2><button class="btn btn-ghost" data-action="back">Volver</button></div></div>`;
   const m = it.meta || {};
-  const fav = isFav(it.id);
+  const keys = itemKeys(it);
+  const wl = watchlistOf().items.some(x => keys.includes(x.key));
+  const saved = listsOf().some(l => l.items.some(x => keys.includes(x.key)));
   const credit = it.type === 'movie' ? (directorsOf(it).length ? `<b>Dirección</b>${directorsOf(it).map(d => `<a class="credit-link" data-director="${esc(dirKey(d))}">${esc(d.name)}</a>`).join(', ')}` : '')
     : (m.creators ? `<b>Creada por</b>${esc(m.creators)}` : '') + (m.networks?.length ? `&nbsp;&nbsp;·&nbsp;&nbsp;<b>Cadena</b>${esc(m.networks.join(', '))}` : '');
   let restart = '';
@@ -1281,7 +1360,7 @@ function viewDetail(id) {
     const p = prog(it.path);
     if (p && !p.watched && p.pos > 30) restart = `<button class="round-btn" title="Desde el principio" data-play="${it.id}" data-from-start="1">${I.restart}</button>`;
   }
-  const watchedAll = it.type === 'movie' ? !!prog(it.path)?.watched : it.episodes.every(e => prog(e.path)?.watched);
+  const watchedAll = it.type === 'movie' ? !!prog(it.path)?.watched : it.episodes.every(e => epSeen(it, e));
 
   let body = '';
   if (it.type === 'series') body += seasonSection(it);
@@ -1315,7 +1394,8 @@ function viewDetail(id) {
         <div class="actions">
           ${playButtonFor(it)}
           ${restart}
-          <button class="round-btn ${fav || inAnyList(entryOf(it).key) ? 'on' : ''}" title="Guardar en una lista" data-action="lists-pick" data-id="${it.id}">${fav || inAnyList(entryOf(it).key) ? I.check : I.plus}</button>
+          <button class="round-btn ${wl ? 'on' : ''}" title="${wl ? 'Quitar de la Watchlist' : 'Añadir a la Watchlist'}" data-action="wl-toggle" data-id="${it.id}">${wl ? I.bookmarkOn : I.bookmark}</button>
+          <button class="round-btn ${saved ? 'on' : ''}" title="Guardar en una lista" data-action="lists-pick" data-id="${it.id}">${saved ? I.check : I.plus}</button>
           ${m.trailer ? `<button class="round-btn" title="Ver tráiler" data-action="trailer" data-url="${esc(m.trailer)}">${I.yt}</button>` : ''}
           <div class="menu-wrap">
             <button class="round-btn" title="Más opciones" data-action="menu">${I.more}</button>
@@ -1399,6 +1479,7 @@ function viewTitle(type, id) {
           ${hasRequests() ? (req ? `<button class="btn btn-ghost" data-nav="requests">${I.check}${req.status === 'pending' ? 'Pedida' : REQ_STATUS[req.status]}</button>`
             : `<button class="btn btn-primary" data-action="request" data-entry="${esc(JSON.stringify(e))}">${I.download}Pedir</button>`) : ''}
           ${type === 'movie' ? `<button class="btn btn-ghost" data-providers="${id}" data-ptitle="${esc(m.title)}" data-palt="${esc(m.originalTitle || '')}">${I.eye}Dónde verla</button>` : ''}
+          <button class="round-btn ${inWatchlist(e.key) ? 'on' : ''}" title="${inWatchlist(e.key) ? 'Quitar de la Watchlist' : 'Añadir a la Watchlist'}" data-action="wl-toggle" data-entry="${esc(JSON.stringify(e))}">${inWatchlist(e.key) ? I.bookmarkOn : I.bookmark}</button>
           <button class="round-btn ${saved ? 'on' : ''}" title="Guardar en una lista" data-action="lists-pick" data-entry="${esc(JSON.stringify(e))}">${saved ? I.check : I.plus}</button>
           ${m.trailer ? `<button class="round-btn" title="Ver tráiler" data-action="trailer" data-url="${esc(m.trailer)}">${I.yt}</button>` : ''}
           ${emuleOn() ? `<button class="round-btn" title="Buscar en eMule" data-action="emule-find" data-q="${esc(m.title)}" data-alt="${esc(m.originalTitle || '')}">${I.download}</button>` : ''}
@@ -1431,8 +1512,10 @@ function seasonSection(it) {
   const tabs = it.seasons.length > 6
     ? `<select class="select" data-season-select="${it.id}">${it.seasons.map(n => `<option value="${n}" ${n === season ? 'selected' : ''}>${esc(seasonName(n))}</option>`).join('')}</select>`
     : `<div class="season-tabs">${it.seasons.map(n => `<button class="${n === season ? 'on' : ''}" data-season="${n}" data-id="${it.id}">${esc(seasonName(n))}</button>`).join('')}</div>`;
+  const seasonSeen = eps.length > 0 && eps.every(e => epSeen(it, e));
+  const markSeason = `<button class="btn btn-ghost btn-sm season-mark ${seasonSeen ? 'on' : ''}" data-action="mark-season" data-id="${it.id}" data-season="${season}" data-watched="${seasonSeen ? 0 : 1}">${seasonSeen ? I.restart : I.check}${seasonSeen ? 'Marcar temporada como no vista' : 'Marcar temporada como vista'}</button>`;
   return `<h2 class="section-title">Episodios</h2>
-    <div class="season-bar">${tabs}</div>
+    <div class="season-bar">${tabs}${markSeason}</div>
     ${sm?.overview ? `<p class="overview" style="max-width:900px;font-size:14px;margin-bottom:18px">${esc(sm.overview)}</p>` : ''}
     <div class="episodes">${eps.map(e => {
       const em = epMeta(it, e) || {};
@@ -1450,7 +1533,7 @@ function seasonSection(it) {
           ${em.overview ? `<p>${esc(em.overview)}</p>` : ''}
           <div class="file">${esc(e.fileName)}</div>
         </div>
-        <div class="side"><button class="check-btn ${p?.watched ? 'on' : ''}" title="${p?.watched ? 'Marcar como no visto' : 'Marcar como visto'}" data-action="mark" data-path="${esc(e.path)}" data-watched="${p?.watched ? 0 : 1}">${I.check}</button></div>
+        <div class="side"><button class="check-btn ${epSeen(it, e) ? 'on' : ''}" title="${epSeen(it, e) ? 'Marcar como no visto' : 'Marcar como visto'}" data-action="mark" data-id="${it.id}" data-ep="${e.id}" data-watched="${epSeen(it, e) ? 0 : 1}">${I.check}</button></div>
       </div>`;
     }).join('')}</div>`;
 }
@@ -2600,14 +2683,20 @@ document.addEventListener('click', async (e) => {
         <div class="modal-foot"><button class="btn btn-ghost btn-sm" data-action="close-modal">Cerrar</button></div>`);
     }
     else if (a === 'scan') scanNow();
-    else if (a === 'fav') { S.lib.favorites = await window.api.toggleFavorite(action.dataset.id); render(true); }
+    else if (a === 'wl-toggle') {
+      const it = action.dataset.id ? byId(action.dataset.id) : null;
+      toggleWatchlist(it ? entryIn(watchlistOf(), it) : JSON.parse(action.dataset.entry));
+    }
     else if (a === 'lists-pick') {
       const it = action.dataset.id ? byId(action.dataset.id) : null;
       const entry = it ? entryOf(it) : JSON.parse(action.dataset.entry);
       openListPicker(entry, it?.id || null);
     }
-    else if (a === 'pick-fav') { S.lib.favorites = await window.api.toggleFavorite(action.dataset.id); paintListPicker(); render(true); }
-    else if (a === 'pick-list') { if (await listOp({ op: 'toggle', id: action.dataset.list, entry: S.picker.entry })) { paintListPicker(); render(true); } }
+    else if (a === 'pick-list') {
+      const l = [watchlistOf(), ...listsOf()].find(x => x.id === action.dataset.list);
+      const it = S.picker.itemId ? byId(S.picker.itemId) : null;
+      listOp({ op: 'toggle', id: action.dataset.list, entry: it && l ? entryIn(l, it) : S.picker.entry }, () => { paintListPicker(); render(true); });
+    }
     else if (a === 'list-create') {
       const input = $('[data-list-new-name]');
       if (input.value.trim() && await listOp({ op: 'create', name: input.value, entry: S.picker.entry })) { input.value = ''; paintListPicker(); render(true); }
@@ -2648,14 +2737,17 @@ document.addEventListener('click', async (e) => {
     else if (a === 'poster') { $('#detailMenu')?.classList.add('hidden'); pickPoster(action.dataset.id); }
     else if (a === 'reveal') window.api.showInFolder(action.dataset.path);
     else if (a === 'mark') {
+      // un episodio, con todas sus versiones
       e.stopPropagation();
-      S.lib.progress = await window.api.markProgress({ paths: [action.dataset.path], watched: action.dataset.watched === '1' });
-      render(true);
+      const it = byId(action.dataset.id);
+      const ep = it?.episodes.find(x => x.id === action.dataset.ep);
+      if (ep) markPaths(epPaths(it, ep), action.dataset.watched === '1');
+    } else if (a === 'mark-season') {
+      const it = byId(action.dataset.id);
+      markPaths(it.episodes.filter(x => x.season === +action.dataset.season).map(x => x.path), action.dataset.watched === '1');
     } else if (a === 'mark-all') {
       const it = byId(action.dataset.id);
-      const paths = it.type === 'movie' ? [it.path] : it.episodes.map(x => x.path);
-      S.lib.progress = await window.api.markProgress({ paths, watched: action.dataset.watched === '1' });
-      render(true);
+      markPaths(it.type === 'movie' ? [it.path] : it.episodes.map(x => x.path), action.dataset.watched === '1');
     } else if (a === 'fullscreen') window.api.toggleFullscreen();
     else if (a === 'logout') logout();
     else if (a === 'use-local') useLocal();

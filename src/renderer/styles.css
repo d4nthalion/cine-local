@@ -285,6 +285,8 @@ body.fullscreen #btnFullscreen .ico-enter { display: none; }
 .season-tabs button { height: 36px; padding: 0 16px; border-radius: 999px; border: 0; cursor: pointer; background: rgba(255,255,255,.07); color: var(--text-2); font-weight: 600; }
 .season-tabs button:hover { color: var(--text); background: rgba(255,255,255,.12); }
 .season-tabs button.on { background: #fff; color: #000; }
+.season-mark { margin-left: auto; }
+.season-mark svg { width: 15px; height: 15px; fill: currentColor; margin-right: 6px; }
 .episodes { display: flex; flex-direction: column; gap: 4px; }
 .episode {
   display: grid; grid-template-columns: 34px clamp(180px, 18vw, 260px) 1fr auto; gap: 20px; align-items: center;
@@ -616,6 +618,9 @@ code.path, .set-row code { background: var(--bg-3); padding: 2px 7px; border-rad
 .lb-logo i:nth-child(1) { margin-left: 0; }
 .lb-logo i:nth-child(2) { background: var(--lb-green); }
 .lb-logo i:nth-child(3) { background: var(--lb-blue); }
+.lb-logo.sm { margin-right: 6px; vertical-align: -1px; }
+.lb-logo.sm i { width: 8px; height: 8px; }
+.list-tabs .gchip svg { width: 14px; height: 14px; fill: currentColor; margin-right: 5px; vertical-align: -2px; }
 .status-pill .spinner.sm { width: 11px; height: 11px; display: inline-block; vertical-align: -1px; margin-right: 6px; }
 .lb-line .dot { width: 3px; height: 3px; border-radius: 50%; background: var(--text-3); }
 .downloads .btn:disabled { opacity: .45; cursor: default; pointer-events: none; }

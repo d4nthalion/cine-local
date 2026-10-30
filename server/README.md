@@ -58,7 +58,7 @@ Los administradores lo ven en **Registro**. `accesslog.js` apunta en `data/logs/
 
 * **Vídeo**: quién ha reproducido o descargado cada archivo, desde qué app e IP, cuánto rato y cuántos datos. Las peticiones de un mismo vídeo (saltos, trozos) se juntan en un solo acceso, que se cierra tras 10 minutos sin actividad; mientras tanto sale «en curso». Android añade `dl=1` al descargar para distinguirlo de una reproducción.
 * **Sesiones**: inicios de sesión, intentos fallidos y cierres.
-* **Acciones**: abrir el reproductor, marcar como visto, Mi lista, listas, peticiones, ajustes cambiados, escaneos y fichas corregidas.
+* **Acciones**: abrir el reproductor, marcar como visto, Watchlist, listas, peticiones, ajustes cambiados, escaneos y fichas corregidas.
 * **Errores**: los del servidor que le salen a alguien con sesión, y los de la interfaz (web y escritorio), que se envían a `/api/log` (como mucho 20 por minuto y usuario).
 
 Se guardan 12 meses (`CINELOCAL_LOG_MONTHS` para cambiarlo).
