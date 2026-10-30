@@ -241,11 +241,16 @@ class Tmdb(key: String, private val language: String = "es-ES", region: String? 
             ?.let { "https://www.youtube.com/watch?v=${it.str("key")}" }
 
         // ---------- utilidades de coincidencia ----------
+        // compiladas una vez: norm() se llama miles de veces al buscar en la biblioteca
+        private val ACCENTS = Regex("[\\u0300-\\u036f]")
+        private val NON_ALNUM = Regex("[^a-z0-9 ]+")
+        private val SPACES = Regex("\\s+")
+
         fun norm(s: String?): String = Normalizer.normalize((s ?: "").lowercase(Locale.ROOT), Normalizer.Form.NFD)
-            .replace(Regex("[\\u0300-\\u036f]"), "")
+            .replace(ACCENTS, "")
             .replace("&", " and ")
-            .replace(Regex("[^a-z0-9 ]+"), " ")
-            .replace(Regex("\\s+"), " ")
+            .replace(NON_ALNUM, " ")
+            .replace(SPACES, " ")
             .trim()
 
         fun cleanQuery(t: String) = t

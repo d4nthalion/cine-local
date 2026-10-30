@@ -40,6 +40,7 @@ import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.builtins.serializer
 import java.io.File
 import java.io.IOException
+import java.util.concurrent.atomic.AtomicInteger
 import java.net.InetSocketAddress
 import java.net.Socket
 
@@ -91,7 +92,7 @@ class Repository(private val context: Context) {
     val offline: StateFlow<Boolean> = library.flow.map { it.error != null && it.items.isNotEmpty() }
         .stateIn(scope, SharingStarted.Eagerly, false)
 
-    /** Filtro rápido "solo lo descargado" de Inicio, Películas, Series y Mi lista */
+    /** Filtro rápido "solo lo descargado" de Inicio, Películas y Series */
     val onlyDownloaded = MutableStateFlow(false)
 
     // ---------------------------------------------------------------- saltar intro (TheIntroDB)
@@ -106,6 +107,7 @@ class Repository(private val context: Context) {
     }
 
     init {
+        ensureLocalWatchlist()
         // Lo descargado (o en cola) guarda sus tramos al pedirlo, para tener el botón sin conexión
         @OptIn(kotlinx.coroutines.FlowPreview::class)
         scope.launch {
@@ -182,7 +184,7 @@ class Repository(private val context: Context) {
     fun saveSettings(new: Settings) {
         val old = settings.value
         settings.set(new)
-        if (old.server != new.server) swapLibrary(toServer = new.server)
+        if (old.server != new.server) { swapLibrary(toServer = new.server); ensureLocalWatchlist() }
         val libraryChanged = old.libraryPath != new.libraryPath || old.smbUser != new.smbUser || old.smbPassword != new.smbPassword ||
             old.server != new.server || old.serverUrl != new.serverUrl || old.serverToken != new.serverToken
         if (old.libraryPath != new.libraryPath && !new.server) library.set(LibraryData())
@@ -206,7 +208,7 @@ class Repository(private val context: Context) {
 
     suspend fun serverLogout() = withContext(Dispatchers.IO) { server().logout() }
 
-    // La biblioteca, los metadatos, el progreso y Mi lista de la carpeta de red se guardan aparte mientras se usa
+    // La biblioteca, los metadatos, el progreso y las listas de la carpeta de red se guardan aparte mientras se usa
     // el servidor (y al revés), para que cambiar de origen no mezcle ni pierda nada
     private val stash = mapOf(
         true to Stash(store("library.server.json", LibraryData.serializer(), LibraryData()), store("metadata.server.json", MapSerializer(String.serializer(), MetaEntry.serializer()), emptyMap()),
@@ -404,7 +406,7 @@ class Repository(private val context: Context) {
         fetchItem(Tmdb(s.tmdbKey, s.metaLang, s.region), item, s.metaLang, tmdbId)
     }
 
-    // ---------------------------------------------------------------- progreso y Mi lista
+    // ---------------------------------------------------------------- progreso y listas
 
     fun progressOf(path: String): Progress? = progress.value[path]
 
@@ -437,30 +439,54 @@ class Repository(private val context: Context) {
         if (settings.value.server) scope.launch(Dispatchers.IO) { runCatching { server().mark(paths, watched) } }
     }
 
-    fun isFavorite(id: String) = id in userState.value.favorites
+    private val listSeq = AtomicInteger()
 
     /**
-     * Listas propias (además de Mi lista). Con CineLocal Server, el servidor manda: se guardan en el usuario del NAS.
+     * Listas (la Watchlist y las propias). Con CineLocal Server, el servidor manda: se guardan en el usuario del NAS.
+     * Añadir o quitar se ve al momento; si el servidor falla, se deshace. Con varios cambios seguidos sólo cuenta la
+     * respuesta del último (las anteriores no traen los que vinieron después).
      * Lanza Lists.ListException / IOException con el motivo en español.
      */
-    suspend fun listOp(op: String, id: String? = null, name: String? = null, entry: ListEntry? = null) = withContext(Dispatchers.IO) {
-        val lists = if (settings.value.server) server().listOp(op, id, name, entry)
-        else userState.value.lists.let { l ->
-            when (op) {
-                "create" -> Lists.create(l, name.orEmpty(), entry)
-                "rename" -> Lists.rename(l, id!!, name.orEmpty())
-                "delete" -> Lists.delete(l, id!!)
-                else -> Lists.toggle(l, id!!, entry!!)
+    suspend fun listOp(op: String, id: String? = null, name: String? = null, entry: ListEntry? = null) {
+        val before = userState.value.lists
+        if (op == "toggle") userState.update { it.copy(lists = Lists.toggle(it.lists, id!!, entry!!)) }
+        if (!settings.value.server) {
+            if (op != "toggle") userState.update { st ->
+                st.copy(lists = when (op) {
+                    "create" -> Lists.create(st.lists, name.orEmpty(), entry)
+                    "rename" -> Lists.rename(st.lists, id!!, name.orEmpty())
+                    else -> Lists.delete(st.lists, id!!)
+                })
             }
+            return
         }
-        userState.update { it.copy(lists = lists) }
+        val seq = listSeq.incrementAndGet()
+        try {
+            val lists = withContext(Dispatchers.IO) { server().listOp(op, id, name, entry) }
+            if (seq == listSeq.get()) userState.update { it.copy(lists = lists) }
+        } catch (e: Exception) {
+            if (seq == listSeq.get()) userState.update { it.copy(lists = before) }
+            throw e
+        }
     }
 
-    fun toggleFavorite(id: String) {
-        userState.update { st ->
-            st.copy(favorites = if (id in st.favorites) st.favorites - id else listOf(id) + st.favorites)
-        }
-        if (settings.value.server) scope.launch(Dispatchers.IO) { runCatching { server().toggleFavorite(id) } }
+    /** Añadir o quitar de la Watchlist (botón de la ficha y del destacado); si falla, se deshace solo */
+    fun toggleWatchlist(t: Title) {
+        val entry = Lists.entryIn(Lists.watchlist(userState.value.lists), t)
+        scope.launch { runCatching { listOp("toggle", id = Lists.WATCHLIST, entry = entry) } }
+    }
+
+    fun inWatchlist(t: Title, lists: List<UserList> = userState.value.lists) = Lists.watchlist(lists)?.let { Lists.containsTitle(listOf(it), t) } == true
+
+    /**
+     * Carpeta de red: la Watchlist sustituye a «Mi lista»; la primera vez se crea con lo que había en ella.
+     * (Con CineLocal Server la crea el servidor.)
+     */
+    private fun ensureLocalWatchlist() {
+        if (settings.value.server || Lists.watchlist(userState.value.lists) != null) return
+        val titles = library.value.items.map { Title(it, metadata.value[it.id]?.meta) }
+        val entries = userState.value.favorites.mapNotNull { id -> titles.firstOrNull { it.id == id }?.let(Lists::entryOf) }
+        userState.update { it.copy(lists = Lists.withWatchlist(it.lists, entries), favorites = emptyList()) }
     }
 
     // ---------------------------------------------------------------- peticiones de descarga (servidor o ntfy)

@@ -13,6 +13,16 @@ import com.cinelocal.android.core.Title
 enum class SeriesMode { START, RESUME, NEXT, DONE }
 data class SeriesState(val ep: Episode, val mode: SeriesMode, val at: Long, val p: Progress? = null)
 
+/**
+ * Episodios vistos por temporada y número: un episodio cuenta como visto si se ha visto cualquiera de sus versiones
+ * (dos archivos del mismo episodio, p. ej. en distinta calidad)
+ */
+fun seenEpisodes(t: Title, progress: Map<String, Progress>): Set<Pair<Int, Int>> =
+    t.item.episodes.filter { progress[it.path]?.watched == true }.mapTo(HashSet()) { it.season to it.episode }
+
+/** Los archivos de un episodio (todas sus versiones) */
+fun episodePaths(t: Title, e: Episode): List<String> = t.item.episodes.filter { it.season == e.season && it.episode == e.episode }.map { it.path }
+
 /** Para una serie: episodio a reproducir y estado */
 fun seriesState(t: Title, progress: Map<String, Progress>): SeriesState {
     val eps = t.item.episodes
@@ -26,7 +36,8 @@ fun seriesState(t: Title, progress: Map<String, Progress>): SeriesState {
     val p = progress.getValue(last.path)
     if (!p.watched && p.pos > 0) return SeriesState(last, SeriesMode.RESUME, lastAt, p)
     val idx = eps.indexOf(last)
-    val next = eps.drop(idx + 1).firstOrNull { progress[it.path]?.watched != true }
+    val seen = seenEpisodes(t, progress)
+    val next = eps.drop(idx + 1).firstOrNull { (it.season to it.episode) !in seen }
     if (next != null) return SeriesState(next, SeriesMode.NEXT, lastAt)
     return SeriesState(eps.first(), SeriesMode.DONE, lastAt)
 }
@@ -107,7 +118,7 @@ fun allGenres(list: List<Title>): List<Pair<String, Int>> =
 
 fun isWatched(t: Title, progress: Map<String, Progress>): Boolean =
     if (t.isMovie) progress[t.item.path]?.watched == true
-    else t.item.episodes.isNotEmpty() && t.item.episodes.all { progress[it.path]?.watched == true }
+    else t.item.episodes.isNotEmpty() && seenEpisodes(t, progress).let { seen -> t.item.episodes.all { (it.season to it.episode) in seen } }
 
 fun epMeta(t: Title, e: Episode): EpisodeMeta? = t.meta?.seasons?.get(e.season)?.episodes?.get(e.episode)
 

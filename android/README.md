@@ -9,10 +9,11 @@ Versión para móvil de [CineLocal](../README.md): tus películas y series de la
 * Carátulas, sinopsis, reparto y episodios desde **TMDB** (misma búsqueda que en escritorio, con *Corregir coincidencia*).
 * Reproduce con **LibVLC**: MKV, AC3, DTS, subtítulos `.srt`/`.ass` internos o junto al vídeo, audio y subtítulos según el idioma elegido (con el modo *“Sólo si el audio está en otro idioma”*), reanuda donde lo dejaste y pasa al siguiente episodio.
 * **Saltar intro, resumen y créditos** con los tiempos de [TheIntroDB](https://theintrodb.org) (ver abajo).
-* Portada con *Continuar viendo*, *Añadido recientemente*, Mi lista, mejor valoradas y filas por género; Películas y Series con orden, filtro vistas/sin ver y géneros; búsqueda por título, reparto, director o género.
+* Portada con *Continuar viendo*, *Añadido recientemente*, la Watchlist y tus listas, mejor valoradas y filas por género; Películas y Series con orden, filtro vistas/sin ver y géneros; búsqueda por título, reparto, director o género.
 * Si la búsqueda no encuentra nada en la biblioteca, busca la película en **TMDB** (un año al final afina: `dune 2021`) y cada resultado tiene **Pedir descarga**, como en la watchlist: con CineLocal Server la petición llega a su pantalla de Peticiones (y avisa a los administradores); sin servidor, por ntfy (`core/OnlineSearch.kt`, con pruebas).
 * **Descargas para ver sin conexión** con el PC: películas, temporadas, series o episodios sueltos (ver abajo).
-* El progreso, Mi lista y las vistas son de cada móvil.
+* El progreso, las listas y las vistas son de cada móvil (con CineLocal Server, los de tu usuario). La **Watchlist** (marcador en la ficha y en el destacado) sustituye a «Mi lista»; en *Listas* está primero y, con Letterboxd, su watchlist va en otra pestaña. Añadir y quitar de una lista se ve al momento.
+* En la ficha de una serie, *Marcar temporada como vista*. Un episodio con dos archivos cuenta como visto si se ha visto cualquiera.
 * **Letterboxd**, igual que en escritorio (ver abajo).
 * **Se actualiza sola** desde las releases de GitHub (ver abajo).
 
@@ -113,7 +114,7 @@ Para publicar: sube `versionCode` y `versionName` en `app/build.gradle.kts`, com
 |---|---|
 | `core/` | Modelos, reconocimiento de nombres, escáner, idiomas y elección de actualizaciones. Sin dependencias de Android (preparado para reutilizar en Android TV). |
 | `data/` | Acceso SMB (smbj), TMDB (OkHttp), Letterboxd (WebView), actualizaciones (`Updater`), descargas (`DownloadManager` y `DownloadService`), almacenamiento JSON y `Repository` (equivale a `main.js`). |
-| `ui/` | Pantallas en Compose: Inicio, Películas/Series/Mi lista, Buscar, Ficha, Descargas y Ajustes. |
+| `ui/` | Pantallas en Compose: Inicio, Películas/Series, Listas, Buscar, Ficha, Descargas y Ajustes. |
 | `player/` | Reproductor con LibVLC y sus controles. |
 
 Bibliotecas: Compose (BOM 2026.06.01), LibVLC 3.6.5 (LGPL), smbj 0.14.0 + BouncyCastle (para NTLM), OkHttp, Coil y kotlinx.serialization. El APK incluye LibVLC para `arm64-v8a` (móviles) y `x86_64` (emulador).

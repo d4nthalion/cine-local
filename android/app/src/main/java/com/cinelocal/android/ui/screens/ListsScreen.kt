@@ -48,38 +48,64 @@ import com.cinelocal.android.ui.lbOf
 import com.cinelocal.android.ui.theme.CL
 import kotlinx.coroutines.launch
 
-/** Listas: Mi lista y las propias, una pestaña cada una, y «+ Nueva» para crear otra */
+/** Pestaña de la watchlist de Letterboxd dentro de Listas */
+private const val LB_TAB = "lb"
+
+/**
+ * Listas: la Watchlist, las propias y, con Letterboxd, su watchlist; una pestaña cada una, y «+ Nueva» para crear otra
+ */
 @Composable
 fun ListsScreen(nav: Nav) {
     val repo = LocalContext.current.repo
     val scope = rememberCoroutineScope()
     val user by repo.userState.flow.collectAsStateWithLifecycle()
+    val settings by repo.settings.flow.collectAsStateWithLifecycle()
+    val lbEntries by repo.lbEntries.collectAsStateWithLifecycle()
     var selected by rememberSaveable { mutableStateOf<String?>(null) }
     var creating by remember { mutableStateOf(false) }
     var renaming by remember { mutableStateOf<UserList?>(null) }
     var deleting by remember { mutableStateOf<UserList?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
-    val lists = user.lists
-    val current = lists.firstOrNull { it.id == selected }
+    // la Watchlist primero (aunque un servidor antiguo aún no la tenga)
+    val lists = (Lists.watchlist(user.lists) ?: UserList(Lists.WATCHLIST, "Watchlist")).let { wl -> listOf(wl) + user.lists.filter { it.id != Lists.WATCHLIST } }
+    val lbCount = lbEntries.count { it.film.watchlist }
+    val lbOn = settings.lbUser.isNotBlank() || lbCount > 0
+    val onLb = selected == LB_TAB && lbOn
+    val current = if (onLb) null else lists.firstOrNull { it.id == selected } ?: lists.first()
 
     fun op(block: suspend () -> Unit) = scope.launch {
         error = try { block(); null } catch (e: Exception) { e.message ?: e.javaClass.simpleName }
     }
 
     val tabs: @Composable () -> Unit = {
-        val names = listOf("Mi lista") + lists.map { it.name } + "+ Nueva"
+        val names = lists.map { it.name } + (if (lbOn) listOf("Watchlist de Letterboxd") else emptyList()) + "+ Nueva"
         // «+ Nueva» sin número (TextTabs no lo pone si no hay valor para esa pestaña)
-        val counts = listOf(user.favorites.size) + lists.map { it.items.size }
+        val counts = lists.map { it.items.size } + (if (lbOn) listOf(lbCount) else emptyList())
         TextTabs(
-            names, if (current == null) 0 else lists.indexOf(current) + 1,
-            { i -> if (i == names.lastIndex) creating = true else selected = if (i == 0) null else lists[i - 1].id },
+            names, if (onLb) lists.size else lists.indexOf(current),
+            { i ->
+                when {
+                    i == names.lastIndex -> creating = true
+                    i == lists.size -> selected = LB_TAB
+                    else -> selected = lists[i].id
+                }
+            },
             Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp), counts
         )
         error?.let { Text(it, Modifier.padding(horizontal = 16.dp), style = MaterialTheme.typography.bodySmall, color = CL.error) }
     }
 
-    if (current == null) BrowseScreen(BrowseKind.LIST, nav, header = tabs)
-    else UserListContent(current, nav, tabs, onRename = { renaming = current }, onDelete = { deleting = current })
+    if (current == null) Column(Modifier.fillMaxSize()) {
+        MainTopBar(nav, compactLogo = true)
+        ScreenTitle("Listas", null)
+        tabs()
+        WatchlistBody(nav)
+    }
+    else UserListContent(
+        current, nav, tabs,
+        onRename = { renaming = current }.takeIf { current.id != Lists.WATCHLIST },
+        onDelete = { deleting = current }.takeIf { current.id != Lists.WATCHLIST }
+    )
 
     if (creating) ListNameDialog("Nueva lista", onDismiss = { creating = false }) { name ->
         creating = false
@@ -103,9 +129,12 @@ fun ListsScreen(nav: Nav) {
     }
 }
 
-/** Una lista propia: lo que tienes, con su póster; lo que no, apagado y con «NO LA TIENES» */
+/**
+ * Una lista (la Watchlist o una propia): lo que tienes, con su póster; lo que no, apagado y con «NO LA TIENES».
+ * Sin [onRename] / [onDelete] (la Watchlist) no hay botones para renombrar ni eliminar.
+ */
 @Composable
-private fun UserListContent(l: UserList, nav: Nav, tabs: @Composable () -> Unit, onRename: () -> Unit, onDelete: () -> Unit) {
+private fun UserListContent(l: UserList, nav: Nav, tabs: @Composable () -> Unit, onRename: (() -> Unit)?, onDelete: (() -> Unit)?) {
     val repo = LocalContext.current.repo
     val titles by repo.titles.collectAsStateWithLifecycle()
     val progress by repo.progress.flow.collectAsStateWithLifecycle()
@@ -124,13 +153,14 @@ private fun UserListContent(l: UserList, nav: Nav, tabs: @Composable () -> Unit,
                 "${l.items.size} ${if (l.items.size == 1) "título" else "títulos"}" + if (l.items.isNotEmpty()) " · $owned en tu biblioteca" else "",
                 Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium, color = CL.text3
             )
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (onRename != null && onDelete != null) Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 SecondaryButton("Renombrar", onClick = onRename)
                 SecondaryButton("Eliminar", onClick = onDelete)
             }
         }
         if (entries.isEmpty()) {
-            EmptyState("Lista vacía", "Pulsa «Listas» en la ficha de una película o serie, o «Guardar en lista» en una que no tengas, y elige esta lista.")
+            if (l.id == Lists.WATCHLIST) EmptyState("Tu Watchlist está vacía", "Pulsa «Watchlist» en la ficha de una película o serie para apuntarla aquí.")
+            else EmptyState("Lista vacía", "Pulsa «Listas» en la ficha de una película o serie, o «Guardar en lista» en una que no tengas, y elige esta lista.")
             return
         }
         LazyVerticalGrid(

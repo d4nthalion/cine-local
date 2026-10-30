@@ -130,7 +130,7 @@ fun TextAction(text: String, color: Color = CL.text2, modifier: Modifier = Modif
     ) { Text(text, style = MaterialTheme.typography.labelLarge, color = color) }
 }
 
-/** Icono con etiqueta debajo (patrón "Mi lista / Vista") */
+/** Icono con etiqueta debajo (patrón "Watchlist / Vista") */
 @Composable
 fun ActionIcon(icon: ImageVector, label: String, modifier: Modifier = Modifier, onClick: () -> Unit) {
     Column(

@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.rememberScrollState
@@ -45,6 +46,17 @@ private enum class WlFilter { ALL, OWNED, MISSING }
 /** Watchlist de Letterboxd: las que tienes en la biblioteca y las que no */
 @Composable
 fun WatchlistScreen(nav: Nav) {
+    val grid = rememberLazyGridState()
+    val scrolled by remember { derivedStateOf { grid.firstVisibleItemIndex > 0 || grid.firstVisibleItemScrollOffset > 0 } }
+    Column(Modifier.fillMaxSize()) {
+        BackTopBar("Watchlist", onBack = { nav.back() }, kicker = "LETTERBOXD", kickerDots = true, divider = scrolled)
+        WatchlistBody(nav, grid)
+    }
+}
+
+/** El contenido de la watchlist de Letterboxd (su pantalla y su pestaña en Listas) */
+@Composable
+fun WatchlistBody(nav: Nav, grid: LazyGridState = rememberLazyGridState()) {
     val repo = LocalContext.current.repo
     val titles by repo.titles.collectAsStateWithLifecycle()
     val progress by repo.progress.flow.collectAsStateWithLifecycle()
@@ -63,13 +75,10 @@ fun WatchlistScreen(nav: Nav) {
         WlFilter.MISSING -> all.filter { it.second == null }
     }
 
-    val grid = rememberLazyGridState()
-    val scrolled by remember { derivedStateOf { grid.firstVisibleItemIndex > 0 || grid.firstVisibleItemScrollOffset > 0 } }
     Column(Modifier.fillMaxSize()) {
-        BackTopBar("Watchlist", onBack = { nav.back() }, kicker = "LETTERBOXD", kickerDots = true, divider = scrolled)
         if (all.isEmpty()) {
             EmptyState(
-                "Tu watchlist está vacía",
+                "Tu watchlist de Letterboxd está vacía",
                 if (settings.lbUser.isNotBlank()) "Sincroniza tu perfil desde Ajustes." else "Conecta tu perfil de Letterboxd en Ajustes.",
                 "Ajustes", onAction = nav::settings
             )

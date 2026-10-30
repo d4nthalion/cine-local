@@ -47,4 +47,32 @@ class ListsTest {
         assertEquals("id:xyz", Lists.entryOf(sinFicha).key)
         assertEquals(sinFicha, Lists.owned(Lists.entryOf(sinFicha), listOf(sinFicha)))
     }
+
+    @Test fun watchlistConLoDeMiListaYPrimera() {
+        val propias = Lists.create(emptyList(), "Terror", alien)
+        val l = Lists.withWatchlist(propias, listOf(dune, dune))
+        assertEquals(listOf(Lists.WATCHLIST, propias[0].id), l.map { it.id })
+        assertEquals("Watchlist", l[0].name)
+        assertEquals(listOf(dune), l[0].items)                        // sin repetidos
+        assertEquals(l, Lists.withWatchlist(l, listOf(alien)))        // si ya existe, no se toca
+    }
+
+    @Test fun laWatchlistNoSeRenombraNiSeBorra() {
+        val l = Lists.withWatchlist(emptyList(), emptyList())
+        assertThrows(Lists.ListException::class.java) { Lists.rename(l, Lists.WATCHLIST, "Otra") }
+        assertThrows(Lists.ListException::class.java) { Lists.delete(l, Lists.WATCHLIST) }
+        assertThrows(Lists.ListException::class.java) { Lists.create(l, "watchlist") }
+        assertEquals(listOf("Dune"), Lists.toggle(l, Lists.WATCHLIST, dune)[0].items.map { it.title })
+    }
+
+    @Test fun tituloGuardadoAntesDeTenerFicha() {
+        // se guardó sin ficha (por su id) y después llegó la ficha: se reconoce y se quita esa entrada
+        val item = LibraryItem("abc", "movie", "Peliculas/Dune (2021).mkv", "Dune", 2021)
+        val antes = Lists.entryOf(Title(item, null))
+        val l = Lists.toggle(Lists.withWatchlist(emptyList(), emptyList()), Lists.WATCHLIST, antes)
+        val conFicha = Title(item, Meta(438631, "Dune"))
+        assertTrue(Lists.containsTitle(l, conFicha))
+        assertEquals(antes, Lists.entryIn(Lists.watchlist(l), conFicha))
+        assertTrue(Lists.toggle(l, Lists.WATCHLIST, Lists.entryIn(Lists.watchlist(l), conFicha))[0].items.isEmpty())
+    }
 }

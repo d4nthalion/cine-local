@@ -39,6 +39,8 @@ import androidx.compose.material.icons.automirrored.rounded.OpenInNew
 import androidx.compose.material.icons.outlined.CheckCircleOutline
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.ArrowDropDown
+import androidx.compose.material.icons.rounded.Bookmark
+import androidx.compose.material.icons.rounded.BookmarkBorder
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Download
@@ -109,6 +111,8 @@ import com.cinelocal.android.ui.isWatched
 import com.cinelocal.android.ui.lbOf
 import com.cinelocal.android.ui.seriesState
 import com.cinelocal.android.ui.offlineSeriesState
+import com.cinelocal.android.ui.seenEpisodes
+import com.cinelocal.android.ui.episodePaths
 import com.cinelocal.android.ui.components.ActionIcon
 import com.cinelocal.android.ui.components.ListSheet
 import com.cinelocal.android.ui.components.DlActions
@@ -161,8 +165,8 @@ fun DetailScreen(id: String, nav: Nav) {
         return
     }
     val m = t.meta
-    val fav = id in user.favorites
-    val inLists = fav || Lists.contains(user.lists, Lists.entryOf(t).key)
+    val inWl = repo.inWatchlist(t, user.lists)
+    val inLists = Lists.containsTitle(user.lists.filter { it.id != Lists.WATCHLIST }, t)
     var showLists by remember { mutableStateOf(false) }
     val watched = isWatched(t, progress)
     var identifying by remember { mutableStateOf(false) }
@@ -212,6 +216,7 @@ fun DetailScreen(id: String, nav: Nav) {
                     DownloadButton(t, dlIndex, dla, Modifier.padding(top = 10.dp))
 
                     Row(Modifier.padding(top = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        ActionIcon(if (inWl) Icons.Rounded.Bookmark else Icons.Rounded.BookmarkBorder, "Watchlist") { repo.toggleWatchlist(t) }
                         ActionIcon(if (inLists) Icons.Rounded.Check else Icons.Rounded.Add, "Listas") { showLists = true }
                         val paths = if (t.isMovie) listOf(t.item.path) else t.item.episodes.map { it.path }
                         ActionIcon(if (watched) Icons.Rounded.CheckCircle else Icons.Outlined.CheckCircleOutline, "Vista") {
@@ -250,13 +255,19 @@ fun DetailScreen(id: String, nav: Nav) {
                     BlockTitle("Episodios")
                     SeasonPicker(t, season) { season = it }
                     SeasonDownloadRow(t, season, dlIndex, dla)
+                    SeasonWatchedRow(t, season, progress) { paths, w -> repo.markWatched(paths, w) }
                 }
                 val eps = t.item.episodes.filter { it.season == season }
+                val seen = seenEpisodes(t, progress)
                 itemsIndexed(eps, key = { _, e -> e.id }) { i, e ->
                     if (i > 0) Box(Modifier.padding(start = 16.dp).fillMaxWidth().height(1.dp).background(CL.line))
+                    // visto si se ha visto cualquiera de sus versiones
+                    val p = progress[e.path]
+                    val shown = if ((e.season to e.episode) in seen && p?.watched != true) Progress(0.0, p?.dur ?: 0.0, true, p?.at ?: 0) else p
                     EpisodeRow(
-                        t, e, progress[e.path], onPlay = { nav.play(t.id, e.id, explicit = true) },
-                        onToggleWatched = { repo.markWatched(listOf(e.path), progress[e.path]?.watched != true) }
+                        t, e, shown, onPlay = { nav.play(t.id, e.id, explicit = true) },
+                        // con todas sus versiones (dos archivos del mismo episodio)
+                        onToggleWatched = { repo.markWatched(episodePaths(t, e), (e.season to e.episode) !in seenEpisodes(t, progress)) }
                     ) {
                         val target = remember(t, e) { DlTarget(t, listOf(e), "${e.label} de «${t.name}»") }
                         EpisodeDownloadIcon(target, DlSummary.of(target.paths, dlIndex), dla)
@@ -550,6 +561,32 @@ private fun CastCard(name: String, character: String?, photo: String?) {
 }
 
 /** Temporadas: pestañas de texto o, con más de 6, un botón con menú */
+/** Marcar (o desmarcar) toda la temporada: todos sus archivos, también las versiones repetidas */
+@Composable
+private fun SeasonWatchedRow(t: Title, season: Int, progress: Map<String, Progress>, onMark: (List<String>, Boolean) -> Unit) {
+    val eps = t.item.episodes.filter { it.season == season }
+    if (eps.isEmpty()) return
+    val seen = seenEpisodes(t, progress)
+    val all = eps.all { (it.season to it.episode) in seen }
+    val n = eps.map { it.episode }.distinct().count { (season to it) in seen }
+    Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            "$n de ${eps.map { it.episode }.distinct().size} vistos",
+            Modifier.weight(1f), style = MaterialTheme.typography.bodySmall.copy(fontFeatureSettings = TNUM), color = CL.text3
+        )
+        Row(
+            Modifier.heightIn(min = 48.dp).tapFade { onMark(eps.map { it.path }, !all) }.padding(horizontal = 12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(if (all) Icons.Rounded.CheckCircle else Icons.Outlined.CheckCircleOutline, null, Modifier.size(18.dp), tint = CL.accentText)
+            Text(
+                if (all) "Marcar temporada como no vista" else "Marcar temporada como vista", Modifier.padding(start = 8.dp),
+                style = MaterialTheme.typography.labelLarge, color = CL.accentText
+            )
+        }
+    }
+}
+
 @Composable
 private fun SeasonPicker(t: Title, season: Int, onPick: (Int) -> Unit) {
     val seasons = t.item.seasons

@@ -50,7 +50,7 @@ import com.cinelocal.android.ui.components.MainTopBar
 import com.cinelocal.android.ui.components.PosterCard
 import com.cinelocal.android.ui.theme.CL
 
-enum class BrowseKind(val title: String) { MOVIES("Películas"), SERIES("Series"), LIST("Listas") }
+enum class BrowseKind(val title: String) { MOVIES("Películas"), SERIES("Series") }
 
 private enum class Seen(val label: String) { ALL("Todas"), UNSEEN("Sin ver"), SEEN("Vistas"), DOWNLOADED("Descargadas") }
 
@@ -59,13 +59,11 @@ fun BrowseScreen(kind: BrowseKind, nav: Nav, header: (@Composable () -> Unit)? =
     val repo = LocalContext.current.repo
     val titles by repo.titles.collectAsStateWithLifecycle()
     val progress by repo.progress.flow.collectAsStateWithLifecycle()
-    val user by repo.userState.flow.collectAsStateWithLifecycle()
     val lbById by repo.lbById.collectAsStateWithLifecycle()
     val onlyDownloaded by repo.onlyDownloaded.collectAsStateWithLifecycle()
     val dlIndex by rememberDlIndex()
     fun downloaded(t: Title) = DlSummary.of(videoPaths(t.item), dlIndex).done > 0
 
-    // En Mi lista, "Añadido recientemente" respeta el orden en que se añadieron a la lista
     var sort by rememberSaveable { mutableStateOf(Sort.ADDED) }
     var seen by rememberSaveable { mutableStateOf(Seen.ALL) }
     var genre by rememberSaveable { mutableStateOf<String?>(null) }
@@ -73,7 +71,6 @@ fun BrowseScreen(kind: BrowseKind, nav: Nav, header: (@Composable () -> Unit)? =
     val base = when (kind) {
         BrowseKind.MOVIES -> titles.filter { it.isMovie }
         BrowseKind.SERIES -> titles.filter { !it.isMovie }
-        BrowseKind.LIST -> user.favorites.mapNotNull { id -> titles.firstOrNull { it.id == id } }
     }.let { l -> if (onlyDownloaded) l.filter(::downloaded) else l }
     // "Descargadas" solo aparece si hay algo descargado (o si ya está elegida)
     val seenTabs = Seen.entries.filter { it != Seen.DOWNLOADED || seen == it || base.any(::downloaded) }
@@ -88,7 +85,7 @@ fun BrowseScreen(kind: BrowseKind, nav: Nav, header: (@Composable () -> Unit)? =
                 Seen.DOWNLOADED -> downloaded(it)
             }
         }
-        .let { if (kind == BrowseKind.LIST && sort == Sort.ADDED) it else sortTitles(it, sort, lbById) }
+        .let { sortTitles(it, sort, lbById) }
     // "Mi nota" sólo en Películas y con datos de Letterboxd
     val sorts = Sort.entries.filter { it != Sort.MINE || (kind == BrowseKind.MOVIES && lbById.isNotEmpty()) }
 
@@ -99,8 +96,7 @@ fun BrowseScreen(kind: BrowseKind, nav: Nav, header: (@Composable () -> Unit)? =
         if (base.isEmpty()) {
             if (onlyDownloaded) EmptyState("Nada descargado", "No tienes ${kind.title.lowercase()} descargadas para ver sin conexión.", "Ver todo") {
                 repo.onlyDownloaded.value = false
-            } else if (kind == BrowseKind.LIST) EmptyState("Mi lista está vacía", "Añade películas y series desde su ficha con el botón «Listas».")
-            else EmptyState("Nada por aquí", "No hay ${kind.title.lowercase()} en la biblioteca.")
+            } else EmptyState("Nada por aquí", "No hay ${kind.title.lowercase()} en la biblioteca.")
             return
         }
         TextTabs(

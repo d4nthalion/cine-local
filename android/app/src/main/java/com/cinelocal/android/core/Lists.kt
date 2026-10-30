@@ -2,8 +2,12 @@ package com.cinelocal.android.core
 
 import kotlin.random.Random
 
-/** Listas propias, además de Mi lista: la misma lógica que src/main/lists.js (escritorio y CineLocal Server) */
+/**
+ * Listas: la Watchlist (siempre la primera; no se puede renombrar ni borrar; sustituye a la antigua «Mi lista») y las
+ * propias. La misma lógica que src/main/lists.js (escritorio y CineLocal Server)
+ */
 object Lists {
+    const val WATCHLIST = "watchlist"
     private const val MAX_LISTS = 50
     private const val MAX_ITEMS = 5000
     private const val MAX_NAME = 60
@@ -35,6 +39,28 @@ object Lists {
 
     fun contains(lists: List<UserList>, key: String) = lists.any { l -> l.items.any { it.key == key } }
 
+    /** Cómo puede estar un título de la biblioteca en una lista: por su ficha o, si se guardó antes de tenerla, por su id */
+    fun keysOf(t: Title) = listOf(entryOf(t).key, "id:${t.id}")
+
+    /** La entrada con la que está [t] en [l], o la nueva si no está (para quitar la que se guardó sin ficha) */
+    fun entryIn(l: UserList?, t: Title): ListEntry {
+        val keys = keysOf(t)
+        return l?.items?.firstOrNull { it.key in keys } ?: entryOf(t)
+    }
+
+    fun watchlist(lists: List<UserList>) = lists.firstOrNull { it.id == WATCHLIST }
+
+    /** ¿Está [t] en alguna de [lists]? */
+    fun containsTitle(lists: List<UserList>, t: Title): Boolean {
+        val keys = keysOf(t)
+        return lists.any { l -> l.items.any { it.key in keys } }
+    }
+
+    /** Las listas con la Watchlist delante (la crea, si aún no existe, con [entries]: lo que había en «Mi lista») */
+    fun withWatchlist(lists: List<UserList>, entries: List<ListEntry>, now: Long = System.currentTimeMillis()): List<UserList> =
+        if (lists.any { it.id == WATCHLIST }) lists
+        else listOf(UserList(WATCHLIST, "Watchlist", entries.distinctBy { it.key }, now)) + lists
+
     fun create(lists: List<UserList>, name: String, entry: ListEntry? = null, now: Long = System.currentTimeMillis()): List<UserList> {
         val n = cleanName(name)
         if (n.isEmpty()) throw ListException("Escribe un nombre para la lista")
@@ -46,6 +72,7 @@ object Lists {
 
     fun rename(lists: List<UserList>, id: String, name: String): List<UserList> {
         val l = find(lists, id)
+        if (l.id == WATCHLIST) throw ListException("La Watchlist no se puede renombrar")
         val n = cleanName(name)
         if (n.isEmpty()) throw ListException("Escribe un nombre para la lista")
         if (taken(lists, n, l)) throw ListException("Ya tienes una lista llamada «$n»")
@@ -53,11 +80,11 @@ object Lists {
     }
 
     fun delete(lists: List<UserList>, id: String): List<UserList> {
-        find(lists, id)
+        if (find(lists, id).id == WATCHLIST) throw ListException("La Watchlist no se puede borrar")
         return lists.filter { it.id != id }
     }
 
-    /** Añade o quita; lo último añadido va primero (como Mi lista) */
+    /** Añade o quita; lo último añadido va primero */
     fun toggle(lists: List<UserList>, id: String, entry: ListEntry): List<UserList> {
         find(lists, id)
         return lists.map { l ->
@@ -71,5 +98,5 @@ object Lists {
     private fun find(lists: List<UserList>, id: String) = lists.firstOrNull { it.id == id } ?: throw ListException("Esa lista ya no existe")
 
     private fun taken(lists: List<UserList>, n: String, except: UserList?) =
-        n.equals("mi lista", true) || lists.any { it !== except && it.name.equals(n, true) }
+        n.equals("mi lista", true) || n.equals("watchlist", true) || lists.any { it !== except && it.name.equals(n, true) }
 }

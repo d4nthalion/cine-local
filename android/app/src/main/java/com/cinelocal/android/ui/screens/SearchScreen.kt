@@ -72,6 +72,8 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.ui.text.style.TextOverflow
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import androidx.compose.runtime.produceState
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runInterruptible
 
@@ -88,8 +90,14 @@ fun SearchScreen(nav: Nav) {
     val focus = remember { FocusRequester() }
     LaunchedEffect(Unit) { focus.requestFocus() }
 
+    // El texto de búsqueda de cada título (título, original, dirección, géneros, reparto), normalizado una sola vez y
+    // en segundo plano: antes se normalizaba todo con cada tecla, y con miles de títulos la pantalla se atascaba
+    val index by produceState<List<Pair<Title, String>>?>(null, titles) {
+        value = withContext(Dispatchers.Default) { titles.map { it to searchText(it) } }
+    }
+    val genres = remember(titles) { allGenres(titles) }
     val q = Tmdb.norm(query)
-    val results = if (q.isEmpty()) emptyList() else titles.filter { matches(it, q) }
+    val results = remember(index, q) { if (q.isEmpty()) emptyList() else index.orEmpty().filter { it.second.contains(q) }.map { it.first } }
 
     Column(Modifier.fillMaxSize()) {
         Row(
@@ -100,7 +108,8 @@ fun SearchScreen(nav: Nav) {
             SearchField(query, { query = it }, Modifier.weight(1f).padding(start = 4.dp), textModifier = Modifier.focusRequester(focus))
         }
         when {
-            q.isEmpty() -> GenreList(allGenres(titles)) { query = it }
+            q.isEmpty() -> GenreList(genres) { query = it }
+            index == null -> GridSkeleton()
             results.isEmpty() -> OnlineResults(query, titles, progress, nav)
             else -> {
                 Kicker(if (results.size == 1) "1 RESULTADO" else "${results.size} RESULTADOS")
@@ -141,14 +150,18 @@ private fun GenreList(genres: List<Pair<String, Int>>, onPick: (String) -> Unit)
     }
 }
 
-private fun matches(t: Title, q: String): Boolean {
+/**
+ * Todo lo que se puede buscar de un título, normalizado, un campo por línea: como la consulta normalizada no lleva
+ * saltos de línea, nunca coincide a caballo entre dos campos
+ */
+private fun searchText(t: Title): String {
     val m = t.meta
     val fields = buildList {
         add(t.name); add(t.item.title); m?.originalTitle?.let(::add)
         m?.director?.let(::add); m?.creators?.let(::add)
         addAll(m?.genres.orEmpty()); addAll(m?.cast.orEmpty().map { it.name })
     }
-    return fields.any { Tmdb.norm(it).contains(q) }
+    return fields.joinToString("\n") { Tmdb.norm(it) }
 }
 
 // ---------------------------------------------------------------- TMDB, cuando la biblioteca no tiene nada

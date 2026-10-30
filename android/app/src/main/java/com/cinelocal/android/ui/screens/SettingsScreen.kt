@@ -163,7 +163,7 @@ fun SettingsScreen(nav: Nav) {
                     }
                 }
                 Help(
-                    if (s.serverToken.isNotBlank()) "Conectado como ${s.serverUser}. La biblioteca, el progreso y Mi lista son los del servidor: lo que veas aquí sigue en el PC y en la web."
+                    if (s.serverToken.isNotBlank()) "Conectado como ${s.serverUser}. La biblioteca, el progreso y las listas son los del servidor: lo que veas aquí sigue en el PC y en la web."
                     else "Entra con tu usuario de DSM. La contraseña no se guarda: sólo la sesión, durante 30 días."
                 )
             } else Group(top = 12.dp) {

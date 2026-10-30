@@ -45,13 +45,15 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.cinelocal.android.core.ListEntry
+import com.cinelocal.android.core.Lists
 import com.cinelocal.android.repo
 import com.cinelocal.android.ui.theme.CL
 import kotlinx.coroutines.launch
 
 /**
- * «Guardar en una lista»: Mi lista (sólo si el título está en la biblioteca: [itemId]) y las listas propias,
- * con una casilla cada una, y un campo para crear una nueva con el título ya dentro
+ * «Guardar en una lista»: la Watchlist y las listas propias, con una casilla cada una, y un campo para crear una nueva
+ * con el título ya dentro. [itemId]: el título, si está en la biblioteca (para reconocerlo también si se guardó antes
+ * de tener ficha). Las casillas cambian al momento (sin esperar al servidor).
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -89,12 +91,18 @@ fun ListSheet(entry: ListEntry, itemId: String?, onDismiss: () -> Unit) {
                 style = MaterialTheme.typography.bodyMedium, color = CL.text2, maxLines = 1, overflow = TextOverflow.Ellipsis
             )
             Column(Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState())) {
-                if (itemId != null) CheckRow("Mi lista", user.favorites.size, itemId in user.favorites) { repo.toggleFavorite(itemId) }
+                val title = itemId?.let(repo::title)
+                val keys = title?.let(Lists::keysOf) ?: listOf(entry.key)
                 for (l in user.lists) {
-                    CheckRow(l.name, l.items.size, l.items.any { it.key == entry.key }) { run { repo.listOp("toggle", id = l.id, entry = entry) } }
+                    CheckRow(l.name, l.items.size, l.items.any { it.key in keys }) {
+                        val e = title?.let { Lists.entryIn(l, it) } ?: entry
+                        scope.launch {
+                            error = try { repo.listOp("toggle", id = l.id, entry = e); null } catch (ex: Exception) { ex.message ?: ex.javaClass.simpleName }
+                        }
+                    }
                 }
-                if (itemId == null && user.lists.isEmpty()) Text(
-                    "Aún no tienes listas: escribe un nombre abajo y pulsa Crear.", Modifier.padding(16.dp),
+                if (user.lists.none { it.id != Lists.WATCHLIST }) Text(
+                    "Para crear una lista, escribe un nombre abajo y pulsa Crear.", Modifier.padding(16.dp),
                     style = MaterialTheme.typography.bodyMedium, color = CL.text3
                 )
             }

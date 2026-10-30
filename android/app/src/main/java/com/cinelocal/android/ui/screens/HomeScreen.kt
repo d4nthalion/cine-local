@@ -31,8 +31,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Info
-import androidx.compose.material.icons.rounded.Add
-import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.Bookmark
+import androidx.compose.material.icons.rounded.BookmarkBorder
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -173,13 +173,13 @@ fun HomeScreen(nav: Nav) {
     val hero = remember(titles.size, titles.count { it.meta?.backdrop != null }) {
         sortTitles(titles.filter { it.meta?.backdrop != null }, Sort.ADDED).take(10).shuffled().firstOrNull()
     }
-    val cont = continueList(titles, progress)
-    val recent = sortTitles(titles, Sort.ADDED).take(24)
-    val series = sortTitles(titles.filter { !it.isMovie }, Sort.ADDED).take(30)
-    val movies = sortTitles(titles.filter { it.isMovie }, Sort.ADDED).take(30)
-    val favs = user.favorites.mapNotNull { id -> titles.firstOrNull { it.id == id } }
-    val topRated = titles.filter { (it.meta?.rating ?: 0.0) >= 7.5 }.sortedByDescending { it.meta?.rating }.take(24)
-    val genres = allGenres(titles).filter { it.second >= 4 }.take(8)
+    // con miles de títulos, recalcular las filas en cada recomposición (cada cambio de progreso o de listas) se nota
+    val cont = remember(titles, progress) { continueList(titles, progress) }
+    val recent = remember(titles) { sortTitles(titles, Sort.ADDED).take(24) }
+    val series = remember(titles) { sortTitles(titles.filter { !it.isMovie }, Sort.ADDED).take(30) }
+    val movies = remember(titles) { sortTitles(titles.filter { it.isMovie }, Sort.ADDED).take(30) }
+    val topRated = remember(titles) { titles.filter { (it.meta?.rating ?: 0.0) >= 7.5 }.sortedByDescending { it.meta?.rating }.take(24) }
+    val genres = remember(titles) { allGenres(titles).filter { it.second >= 4 }.take(8) }
 
     fun movieProgress(t: Title) = if (t.isMovie) fraction(progress[t.item.path]?.takeIf { !it.watched }) else 0f
 
@@ -205,7 +205,7 @@ fun HomeScreen(nav: Nav) {
     // deslizar hacia abajo vuelve a escanear (igual que el icono de la cabecera)
     ScanRefreshBox(indicatorTop = with(density) { WindowInsets.statusBars.getTop(density).toDp() } + 56.dp) {
         LazyColumn(Modifier.fillMaxSize(), state = listState, contentPadding = PaddingValues(bottom = 28.dp)) {
-            if (hero != null) item(key = "hero") { Hero(hero, hero.id in user.favorites, listState, nav) { repo.toggleFavorite(hero.id) } }
+            if (hero != null) item(key = "hero") { Hero(hero, repo.inWatchlist(hero, user.lists), listState, nav) { repo.toggleWatchlist(hero) } }
             else item(key = "pad") { Spacer(Modifier.height(100.dp)) }
 
             var first = true
@@ -233,8 +233,7 @@ fun HomeScreen(nav: Nav) {
                 }
             }
             section("Añadido recientemente", first = isFirst()) { items(recent, key = { "rec-" + it.id }) { poster(it) } }
-            if (favs.isNotEmpty()) section("Mi lista", { nav.tab("list") }) { items(favs, key = { "fav-" + it.id }) { poster(it) } }
-            // listas propias: lo que tienes, y lo que no, apagado (como la watchlist)
+            // la Watchlist (la primera) y las listas propias: lo que tienes, y lo que no, apagado (como la de Letterboxd)
             for (l in user.lists) {
                 val shown = l.items.take(30).map { it to Lists.owned(it, titles) }.filter { (e, t) -> t != null || e.tmdb != null }
                 if (shown.isNotEmpty()) section(l.name, { nav.tab("list") }) {
@@ -267,7 +266,7 @@ fun HomeScreen(nav: Nav) {
 }
 
 @Composable
-private fun Hero(t: Title, fav: Boolean, listState: LazyListState, nav: Nav, onToggleFav: () -> Unit) {
+private fun Hero(t: Title, inWatchlist: Boolean, listState: LazyListState, nav: Nav, onToggleWatchlist: () -> Unit) {
     val m = t.meta
     val motion = rememberMotionEnabled()
     // Ken Burns muy lento sobre la imagen
@@ -325,7 +324,7 @@ private fun Hero(t: Title, fav: Boolean, listState: LazyListState, nav: Nav, onT
                 style = MaterialTheme.typography.bodyMedium, color = CL.text, textAlign = TextAlign.Center
             )
             Row(Modifier.padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
-                ActionIcon(if (fav) Icons.Rounded.Check else Icons.Rounded.Add, "Mi lista", onClick = onToggleFav)
+                ActionIcon(if (inWatchlist) Icons.Rounded.Bookmark else Icons.Rounded.BookmarkBorder, "Watchlist", onClick = onToggleWatchlist)
                 PrimaryButton("Reproducir", Modifier.widthIn(min = 132.dp), Icons.Rounded.PlayArrow) { nav.play(t.id) }
                 ActionIcon(Icons.Outlined.Info, "Info") { nav.detail(t.id) }
             }

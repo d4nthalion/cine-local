@@ -127,7 +127,7 @@ data class UserList(val id: String, val name: String, val items: List<ListEntry>
 @Serializable
 data class UserState(
     val favorites: List<String> = emptyList(),
-    val lists: List<UserList> = emptyList(),      // listas propias, además de Mi lista
+    val lists: List<UserList> = emptyList(),      // la Watchlist (la primera) y las listas propias
     val requested: Map<String, Long> = emptyMap()   // películas pedidas por ntfy: clave de Letterboxd (o "tmdb:<id>" si se buscó en TMDB) → cuándo
 )
 
