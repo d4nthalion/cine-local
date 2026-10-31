@@ -61,6 +61,7 @@ class TMDB {
       title: x.title || x.name,
       originalTitle: x.original_title || x.original_name,
       year: (x.release_date || x.first_air_date || '').slice(0, 4) || null,
+      votes: x.vote_count || 0,
       poster: img(x.poster_path, 'w342'),
       overview: x.overview
     }));
@@ -73,7 +74,10 @@ class TMDB {
    * Devuelve el id de TMDB o null.
    */
   async findBest(type, rawTitle, year) {
-    const title = cleanQuery(rawTitle);
+    let title = cleanQuery(rawTitle);
+    // "1955 - El rey de los monstruos": el año delante, no un director
+    const ym = title.match(/^((?:19|20)\d\d)\s+[-–—]\s+(.+)$/);
+    if (ym) { title = ym[2]; year = year || +ym[1]; }
     const parts = title.split(/\s+[-–—]\s+/).map(s => s.trim()).filter(Boolean);
     const attempts = [];
     if (parts.length >= 2) {
@@ -87,6 +91,11 @@ class TMDB {
       if (/VV/.test(a.q)) attempts.push({ ...a, q: a.q.replace(/VV/g, 'W') });
       const rm = a.q.match(/^(.*\S)\s+(II|III|IV|V|VI)$/);
       if (rm) attempts.push({ ...a, q: `${rm[1]} Part ${rm[2]}` }, { ...a, q: `${rm[1]} ${romanToInt(rm[2])}` });
+    }
+    // "Godzilla 2000, el dinosaurio mutante" -> "Godzilla 2000" si con todo no hay nada
+    for (const a of [...attempts]) {
+      const head = a.q.split(',')[0].trim();
+      if (head !== a.q && head.length > 2) attempts.push({ ...a, q: head });
     }
 
     let fallback = null;
@@ -295,17 +304,28 @@ function personMatches(hint, name) {
 }
 
 /** Ordena resultados: título exacto y año cercano primero, manteniendo la popularidad de TMDB como desempate */
+/** Cuánto se parece el título de un resultado a la búsqueda (ya normalizada); 0 si nada */
+function titleScore(r, q) {
+  const t = norm(r.title), o = norm(r.originalTitle);
+  let s = 0;
+  if (t === q || o === q) s += 10;
+  else if (t.startsWith(q) || o.startsWith(q)) s += 4;
+  const qt = q.split(' ');
+  const has = t2 => { const set = new Set(t2.split(' ')); return qt.every(w => set.has(w)); };
+  if (has(t) || has(o)) s += 3;   // contiene todas las palabras ("The Godfather II" -> "...Part II")
+  return s;
+}
+
 function rankResults(results, query, year) {
   const q = norm(query);
   return results.map((r, i) => {
-    let s = -i * 0.5;
-    const t = norm(r.title), o = norm(r.originalTitle);
-    if (t === q || o === q) s += 10;
-    else if (t.startsWith(q) || o.startsWith(q)) s += 4;
-    const qt = q.split(' ');
-    const has = t2 => { const set = new Set(t2.split(' ')); return qt.every(w => set.has(w)); };
-    if (has(t) || has(o)) s += 3;   // contiene todas las palabras ("The Godfather II" -> "...Part II")
-    if (year && r.year) s += Math.max(0, 4 - Math.abs(+r.year - year) * 2);
+    let s = -i * 0.5 + titleScore(r, q);
+    // el año pesa más que el título exacto: «Terminator 2 (1991)» es la de Cameron y no «Shocking Dark» (1989),
+    // que en Italia se llamó «Terminator 2»; «Predator (2018)» es «The Predator» y no la de 1987
+    if (year) { const d = r.year ? Math.abs(+r.year - year) : 6; s += d === 0 ? 6 : d === 1 ? 3 : -Math.min(6, d); }
+    // y entre parecidos, la conocida (votos de TMDB: de 0 a ~9); si no, «La Niebla (1980)» acaba en
+    // «Cuando la niebla levante» y no en «The Fog», que en inglés no se parece al nombre del archivo
+    s += 2 * Math.log10((r.votes || 0) + 1);
     return { ...r, _s: s };
   }).sort((a, b) => b._s - a._s);
 }

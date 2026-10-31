@@ -32,7 +32,8 @@ const EDITABLE = new Set(Object.keys(DEFAULT_SETTINGS));
 // preferencias de cada usuario: las suyas pisan las del servidor (que quedan como valor por defecto)
 const PREF_KEYS = new Set(['audioLang', 'subLang', 'subMode', 'autoplayNext', 'myProviders']);
 
-const MATCHER_VERSION = 2;
+// al cambiar cómo se elige la ficha de TMDB (findBest / rankResults en metadata.js) se sube y se empareja todo de nuevo
+const MATCHER_VERSION = 3;
 
 const cut = (s, n) => s && s.length > n ? s.slice(0, n).replace(/\s+\S*$/, '') + '…' : s;
 
@@ -397,6 +398,10 @@ class Library extends EventEmitter {
       if (!id) id = await api.findBest(it.type, it.title, it.year);
       if (!id) {
         this.metadata.data[it.id] = { failed: true, at: Date.now(), lang, matcher: MATCHER_VERSION };
+      } else if (!forcedId && id === prev?.tmdbId && prev.meta && prev.lang === lang && prev.matcher !== MATCHER_VERSION
+        && (it.type === 'movie' || it.seasons.every(s => prev.meta.seasons?.[s]))) {
+        // el emparejador nuevo da la misma película: vale la ficha que había
+        prev.matcher = MATCHER_VERSION;
       } else {
         const meta = it.type === 'movie' ? await api.movie(id) : await api.tv(id, it.seasons);
         this.metadata.data[it.id] = { tmdbId: id, meta, at: Date.now(), lang, matcher: MATCHER_VERSION, manual: !!forcedId || !!prev?.manual, asked: it.type === 'series' ? it.seasons : undefined };

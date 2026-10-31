@@ -17,7 +17,9 @@ import java.io.IOException
 import java.text.Normalizer
 import java.util.Locale
 import kotlin.math.abs
+import kotlin.math.log10
 import kotlin.math.max
+import kotlin.math.min
 import kotlin.math.roundToInt
 
 /** Metadatos desde TMDB. Traducción de src/main/metadata.js (API key v3 o token de lectura v4). */
@@ -29,7 +31,7 @@ class Tmdb(key: String, private val language: String = "es-ES", region: String? 
 
     val enabled get() = key.isNotEmpty()
 
-    data class SearchResult(val id: Int, val title: String, val originalTitle: String?, val year: Int?, val poster: String?, val overview: String?)
+    data class SearchResult(val id: Int, val title: String, val originalTitle: String?, val year: Int?, val poster: String?, val overview: String?, val votes: Int = 0)
 
     private fun get(endpoint: String, params: Map<String, String?> = emptyMap(), attempt: Int = 0): JsonObject {
         val url = (API + endpoint).toHttpUrl().newBuilder().apply {
@@ -68,7 +70,8 @@ class Tmdb(key: String, private val language: String = "es-ES", region: String? 
                 originalTitle = x.str("original_title") ?: x.str("original_name"),
                 year = (x.str("release_date") ?: x.str("first_air_date"))?.take(4)?.toIntOrNull(),
                 poster = img(x.str("poster_path"), "w342"),
-                overview = x.str("overview")
+                overview = x.str("overview"),
+                votes = x.int("vote_count") ?: 0
             )
         }
     }
@@ -83,8 +86,14 @@ class Tmdb(key: String, private val language: String = "es-ES", region: String? 
      * Mejor coincidencia para un nombre de archivo/carpeta. Entiende "Director - Título"
      * comprobando el director contra TMDB con tolerancia a erratas. Devuelve el id de TMDB o null.
      */
-    fun findBest(type: String, rawTitle: String, year: Int?): Int? {
-        val title = cleanQuery(rawTitle)
+    fun findBest(type: String, rawTitle: String, fileYear: Int?): Int? {
+        var title = cleanQuery(rawTitle)
+        var year = fileYear
+        // "1955 - El rey de los monstruos": el año delante, no un director
+        Regex("^((?:19|20)\\d\\d)\\s+[-–—]\\s+(.+)$").find(title)?.let { m ->
+            title = m.groupValues[2]
+            if (year == null) year = m.groupValues[1].toInt()
+        }
         val parts = title.split(Regex("\\s+[-–—]\\s+")).map { it.trim() }.filter { it.isNotEmpty() }
         data class Attempt(val q: String, val hint: String?)
         val attempts = mutableListOf<Attempt>()
@@ -100,6 +109,11 @@ class Tmdb(key: String, private val language: String = "es-ES", region: String? 
                 attempts += a.copy(q = "${m.groupValues[1]} Part ${m.groupValues[2]}")
                 attempts += a.copy(q = "${m.groupValues[1]} ${romanToInt(m.groupValues[2])}")
             }
+        }
+        // "Godzilla 2000, el dinosaurio mutante" -> "Godzilla 2000" si con todo no hay nada
+        for (a in attempts.toList()) {
+            val head = a.q.substringBefore(',').trim()
+            if (head != a.q && head.length > 2) attempts += a.copy(q = head)
         }
 
         var fallback: Int? = null
@@ -288,7 +302,7 @@ class Tmdb(key: String, private val language: String = "es-ES", region: String? 
             }
         }
 
-        /** Título exacto y año cercano primero, con la popularidad de TMDB como desempate */
+        /** Como rankResults de src/main/metadata.js: año, título y, entre parecidos, la más votada en TMDB */
         fun rankResults(results: List<SearchResult>, query: String, year: Int?): List<SearchResult> {
             val q = norm(query)
             val qt = q.split(' ')
@@ -300,7 +314,12 @@ class Tmdb(key: String, private val language: String = "es-ES", region: String? 
                 if (t == q || o == q) s += 10.0
                 else if (t.startsWith(q) || o.startsWith(q)) s += 4.0
                 if (has(t) || has(o)) s += 3.0
-                if (year != null && r.year != null) s += max(0, 4 - abs(r.year - year) * 2)
+                // el año pesa más que el título exacto: «Terminator 2 (1991)» no es «Shocking Dark» (1989)
+                if (year != null) {
+                    val d = r.year?.let { abs(it - year) } ?: 6
+                    s += when (d) { 0 -> 6.0; 1 -> 3.0; else -> -min(6, d).toDouble() }
+                }
+                s += 2 * log10(r.votes + 1.0)
                 r to s
             }.sortedByDescending { it.second }.map { it.first }
         }
