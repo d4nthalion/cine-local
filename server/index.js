@@ -209,8 +209,8 @@ route('GET', '/api/library', (req, res, { user, q }) => {
   json(res, 200, v);
 });
 // ficha completa de un título (la lista ligera sólo lleva lo necesario para las carátulas)
-route('GET', '/api/item/:id', (req, res, { p }) => {
-  const it = library.item(p.id);
+route('GET', '/api/item/:id', (req, res, { p, user }) => {
+  const it = library.item(p.id, user);
   if (!it) throw httpError(404, 'Elemento no encontrado');
   json(res, 200, it);
 });
@@ -242,15 +242,15 @@ route('POST', '/api/item/:id/poster', async (req, res, { p, user }) => {
 }, { admin: true });
 route('POST', '/api/scan', async (req, res, { user }) => { act(req, user, 'scan'); await library.scan(); json(res, 200, library.view(user, { slim: true })); }, { admin: true });
 route('POST', '/api/meta/refresh', (req, res, { user }) => { act(req, user, 'meta-refresh'); library.fetchMissingMetadata(true); json(res, 200, true); }, { admin: true });
-route('GET', '/api/person/:id', async (req, res, { p }) => json(res, 200, await library.person(+p.id)));
-route('GET', '/api/providers', async (req, res) => json(res, 200, await library.providerList()));
+route('GET', '/api/person/:id', async (req, res, { p, user }) => json(res, 200, await library.person(+p.id, user)));
+route('GET', '/api/providers', async (req, res, { user }) => json(res, 200, await library.providerList(user)));
 route('GET', '/api/providers/:id', async (req, res, { p }) => json(res, 200, await library.providers(+p.id)));
-route('GET', '/api/title/:type/:id', async (req, res, { p }) => {
+route('GET', '/api/title/:type/:id', async (req, res, { p, user }) => {
   if (!['movie', 'series'].includes(p.type) || !/^\d{1,9}$/.test(p.id)) throw httpError(400, 'Título no válido');
-  try { json(res, 200, await library.title(p.type, +p.id)); }
+  try { json(res, 200, await library.title(p.type, +p.id, user)); }
   catch (e) { throw e.status ? e : httpError(/404|not be found/i.test(e.message) ? 404 : 502, e.message); }
 });
-route('POST', '/api/meta/search', async (req, res) => json(res, 200, await library.search(await readBody(req))));
+route('POST', '/api/meta/search', async (req, res, { user }) => json(res, 200, await library.search(await readBody(req), user)));
 route('POST', '/api/meta/identify', async (req, res, { user }) => {
   const b = await readBody(req);
   const it = library.library.data.items.find(i => i.id === b.itemId);

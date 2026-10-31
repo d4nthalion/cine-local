@@ -29,7 +29,7 @@ class LocalServer extends EventEmitter {
   start() {
     if (this.library) return;
     importOld(this.oldDir, this.dataDir);
-    const lib = new Library(this.dataDir, { defaults: { libraryPath: '' }, fetch: this.fetchFn, prepare: this.prepare });
+    const lib = new Library(this.dataDir, { defaults: { libraryPath: '', metaLangs: [] }, fetch: this.fetchFn, prepare: this.prepare });
     this.library = lib;
     const ev = (name, data) => { if (this.library === lib) this.emit('event', name, data); };
     lib.on('library', () => {
@@ -99,17 +99,17 @@ class LocalServer extends EventEmitter {
     });
     route('GET', '/api/library', ({ q }) => view(q.get('slim') === '1'));
     route('GET', '/api/item/:id', ({ p }) => {
-      const it = lib().item(p.id);
+      const it = lib().item(p.id, USER);
       if (!it) throw new Error('Elemento no encontrado');
       return it;
     });
     route('POST', '/api/scan', async () => { await lib().scan(); return view(true); });
     route('POST', '/api/meta/refresh', () => { lib().fetchMissingMetadata(true); return true; });
-    route('GET', '/api/person/:id', ({ p }) => lib().person(+p.id));
-    route('GET', '/api/providers', () => lib().providerList());
+    route('GET', '/api/person/:id', ({ p }) => lib().person(+p.id, USER));
+    route('GET', '/api/providers', () => lib().providerList(USER));
     route('GET', '/api/providers/:id', ({ p }) => lib().providers(+p.id));
-    route('GET', '/api/title/:type/:id', ({ p }) => lib().title(p.type === 'series' ? 'series' : 'movie', +p.id));
-    route('POST', '/api/meta/search', ({ b }) => lib().search(b));
+    route('GET', '/api/title/:type/:id', ({ p }) => lib().title(p.type === 'series' ? 'series' : 'movie', +p.id, USER));
+    route('POST', '/api/meta/search', ({ b }) => lib().search(b, USER));
     route('POST', '/api/meta/identify', ({ b }) => lib().identify(b, USER));
     route('GET', '/api/item/:id/posters', ({ p }) => lib().posters(p.id));
     route('POST', '/api/item/:id/poster', ({ p, b }) => lib().setPoster(p.id, b.poster || null));

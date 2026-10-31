@@ -51,7 +51,7 @@ const DEFAULT_SETTINGS = {
 };
 // ajustes que guarda el servidor (los de la biblioteca y TMDB sólo los cambia un administrador)
 const SERVER_KEYS = new Set(['libraryPath', 'extraLibraryPaths', 'tmdbKey', 'metaLang', 'audioLang', 'subLang', 'subMode',
-  'autoplayNext', 'autoWatch', 'singleFileFolderAsMovie', 'libraryLayouts', 'myProviders', 'region']);
+  'autoplayNext', 'autoWatch', 'singleFileFolderAsMovie', 'libraryLayouts', 'myProviders', 'region', 'userMetaLang']);
 
 // ---------- persistencia sencilla en JSON ----------
 function store(name, fallback) {
@@ -619,6 +619,8 @@ ipcMain.handle('settings:set', async (_e, patch) => {
   // lo de la biblioteca, a la biblioteca (cada usuario sus preferencias; un administrador, también las carpetas y TMDB)
   const toServer = Object.fromEntries(Object.entries(patch).filter(([k]) => SERVER_KEYS.has(k)));
   if (Object.keys(toServer).length && api().ready) serverSettings = await api().post('/api/settings', toServer);
+  // fichas en el otro idioma: la biblioteca guardada ya no vale
+  if (('userMetaLang' in toServer || 'metaLang' in toServer) && api().ready) await remoteFetch();
   const own = Object.fromEntries(Object.entries(patch).filter(([k]) => !SERVER_KEYS.has(k)));
   settings.data = { ...settings.data, ...own };
   const s = settings.data;

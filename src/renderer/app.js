@@ -1572,11 +1572,16 @@ function viewSettings() {
         <div class="d">Gratis en <a data-url="https://www.themoviedb.org/settings/api">themoviedb.org/settings/api</a>. Sirve la “Clave de la API” (v3) o el “Token de acceso de lectura” (v4).</div></div>
         <div class="ctl"><input class="input" type="password" data-set-text="tmdbKey" value="${esc(s.tmdbKey)}" placeholder="Pega aquí tu clave" style="min-width:260px">
         <button class="btn btn-ghost btn-sm" data-action="test-key">Probar</button><span id="keyStatus"></span></div></div>
-      <div class="set-row"><div class="lbl"><div class="t">Idioma de los metadatos</div><div class="d">Títulos, sinopsis y nombres de episodios, para todos los usuarios.</div></div>
+      <div class="set-row"><div class="lbl"><div class="t">${LOCAL() ? 'Idioma de los metadatos' : 'Idioma principal de los metadatos'}</div><div class="d">${LOCAL() ? 'Títulos, sinopsis y nombres de episodios.' : 'El de quien no elige otro en «Idioma de las fichas». El español y el inglés están siempre descargados; otro idioma se descarga cuando alguien lo elige.'}</div></div>
         <div class="ctl"><select class="select" data-set="metaLang">${opt(META_LANGS, s.metaLang)}</select></div></div>
       <div class="set-row"><div class="lbl"><div class="t">Volver a descargar todos los metadatos</div><div class="d">Útil si cambias de idioma o TMDB ha actualizado información. Se conservan las correcciones manuales.</div></div>
         <div class="ctl"><button class="btn btn-ghost btn-sm" data-action="refresh-meta">Actualizar</button></div></div>
     </div>` : ''}
+
+    ${LOCAL() ? '' : `<div class="set-group"><h3>Idioma</h3>
+      <div class="set-row"><div class="lbl"><div class="t">Idioma de las fichas</div><div class="d">Títulos, sinopsis y nombres de episodios, sólo para ti. Si no está descargado en el servidor, se descarga ahora (mientras tanto ves el principal).</div></div>
+        <div class="ctl"><select class="select" data-set="userMetaLang">${opt([['', 'El del servidor'], ...META_LANGS], s.userMetaLang || '')}</select></div></div>
+    </div>`}
 
     <div class="set-group"><h3>Audio y subtítulos</h3>
       <div class="set-row"><div class="lbl"><div class="t">Idioma de audio preferido</div><div class="d">Se selecciona automáticamente si el archivo tiene esa pista; si no, se usa la pista por defecto.</div></div>
@@ -2510,6 +2515,7 @@ async function saveLibPaths(list) {
 async function saveSetting(key, value) {
   S.settings = await window.api.setSettings({ [key]: value });
   if (key === 'region') S.providerList = null;   // recargar la lista del nuevo país (los ids de TMDB son los mismos en todos)
+  if (key === 'userMetaLang' || key === 'metaLang') { S.providerList = null; setLib(await window.api.getLibrary()); render(true); }
   if (key === 'subLang' || key === 'emuleEnabled' || key === 'emuleMoveToLibrary' || key === 'playerMode' || key === 'region') render(true);
   if (key === 'lbUser') { setLb(await window.api.letterboxd.get()); paintLbStatus(); }
   if (key.startsWith('emule')) paintEmule();

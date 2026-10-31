@@ -15,7 +15,8 @@ const DEFAULT_SETTINGS = {
   libraryPath: process.env.CINELOCAL_LIBRARY || '/media',
   extraLibraryPaths: [],
   tmdbKey: '',
-  metaLang: 'es-ES',
+  metaLang: 'es-ES',          // idioma principal de las fichas: el de quien no elige otro (y con el que se empareja)
+  metaLangs: ['es-ES', 'en-US'],   // idiomas que se tienen descargados además del principal (y los que elija alguien)
   audioLang: 'spa',
   subLang: 'spa',
   subMode: 'foreign',          // always | foreign | off
@@ -30,7 +31,9 @@ const DEFAULT_SETTINGS = {
 // lo único que se puede cambiar desde la web (el resto de ajustes de la app de escritorio no aplican aquí)
 const EDITABLE = new Set(Object.keys(DEFAULT_SETTINGS));
 // preferencias de cada usuario: las suyas pisan las del servidor (que quedan como valor por defecto)
-const PREF_KEYS = new Set(['audioLang', 'subLang', 'subMode', 'autoplayNext', 'myProviders']);
+// (userMetaLang: el idioma de las fichas de cada uno; sin él, el principal del servidor)
+const PREF_KEYS = new Set(['audioLang', 'subLang', 'subMode', 'autoplayNext', 'myProviders', 'userMetaLang']);
+const LANG_RE = /^[a-z]{2}-[A-Z]{2}$/;
 
 // al cambiar cómo se elige la ficha de TMDB (findBest / rankResults en metadata.js) se sube y se empareja todo de nuevo
 const MATCHER_VERSION = 3;
@@ -81,6 +84,9 @@ class Library extends EventEmitter {
     this.settings = store(dataDir, 'settings.json', { ...DEFAULT_SETTINGS, ...defaults });
     this.library = store(dataDir, 'library.json', { items: [], scannedAt: 0, error: null });
     this.metadata = store(dataDir, 'metadata.json', {});
+    // fichas en los otros idiomas: metadata-en-US.json… { [id]: { tmdbId, meta, at } }, siempre de la misma película
+    // que la ficha principal (el emparejamiento y las correcciones van sólo en metadata.json)
+    this.langStores = new Map();
     this.people = store(dataDir, 'people.json', {});
     // carátulas elegidas a mano: { [id del título]: { poster } }; aparte de metadata.json para que no las borre recargar las fichas
     this.custom = store(dataDir, 'custom.json', {});
@@ -162,8 +168,41 @@ class Library extends EventEmitter {
   setPrefs(userName, patch) {
     const u = this.user(userName);
     const clean = Object.fromEntries(Object.entries(patch || {}).filter(([k]) => PREF_KEYS.has(k)));
+    if (clean.userMetaLang && !LANG_RE.test(clean.userMetaLang)) delete clean.userMetaLang;
     u.data.prefs = { ...(u.data.prefs || {}), ...clean };
     u.save();
+    // un idioma que no tiene nadie: se descarga
+    const l = clean.userMetaLang, s = this.settings.data;
+    if (l && l !== s.metaLang && !(s.metaLangs || []).includes(l)) {
+      this.settings.data = { ...s, metaLangs: [...(s.metaLangs || []), l] };
+      this.fetchMissingMetadata();
+    }
+  }
+
+  /** Idioma de las fichas de un usuario (sin usuario o sin elegir, el principal) */
+  langOf(userName) {
+    const l = userName ? this.prefs(userName).userMetaLang : null;
+    return l && LANG_RE.test(l) ? l : this.settings.data.metaLang;
+  }
+
+  /** Idiomas descargados además del principal */
+  extraLangs() {
+    const s = this.settings.data;
+    return [...new Set((s.metaLangs || []).filter(l => LANG_RE.test(l) && l !== s.metaLang))];
+  }
+
+  langStore(lang) {
+    if (!this.langStores.has(lang)) this.langStores.set(lang, store(this.dir, `metadata-${lang}.json`, {}));
+    return this.langStores.get(lang);
+  }
+
+  /** Ficha de un título en un idioma; mientras no esté descargada, la del idioma principal */
+  metaOf(id, lang) {
+    const m = this.metadata.data[id];
+    if (!m || m.failed) return null;
+    if (!lang || lang === this.settings.data.metaLang) return m.meta;
+    const x = this.langStore(lang).data[id];
+    return x && x.tmdbId === m.tmdbId ? x.meta : m.meta;
   }
 
   async setSettings(patch) {
@@ -177,7 +216,8 @@ class Library extends EventEmitter {
     if (roots(before) !== roots(s) || before.autoWatch !== s.autoWatch) this.restartWatcher();
     if (roots(before) !== roots(s) || before.singleFileFolderAsMovie !== s.singleFileFolderAsMovie
       || JSON.stringify(before.libraryLayouts || {}) !== JSON.stringify(s.libraryLayouts || {})) await this.scan();
-    else if (before.tmdbKey !== s.tmdbKey || before.metaLang !== s.metaLang) this.fetchMissingMetadata();
+    else if (before.tmdbKey !== s.tmdbKey || before.metaLang !== s.metaLang
+      || JSON.stringify(before.metaLangs) !== JSON.stringify(s.metaLangs)) this.fetchMissingMetadata();
     return s;
   }
 
@@ -193,9 +233,9 @@ class Library extends EventEmitter {
     if (this.settings.data.autoWatch !== false) this.watcher.start(this.roots());
   }
 
-  tmdb() {
+  tmdb(lang) {
     const s = this.settings.data;
-    return new TMDB(s.tmdbKey, s.metaLang || 'es-ES', this.fetch, s.region || 'ES');
+    return new TMDB(s.tmdbKey, lang || s.metaLang || 'es-ES', this.fetch, s.region || 'ES');
   }
 
   // ---------- vista ----------
@@ -205,9 +245,10 @@ class Library extends EventEmitter {
    */
   view(userName, { slim = false } = {}) {
     const u = this.user(userName).data;
+    const lang = this.langOf(userName);
     const items = this.library.data.items.map(it => {
       const m = this.metadata.data[it.id];
-      const meta = m && !m.failed ? m.meta : null;
+      const meta = this.metaOf(it.id, lang);
       return this.withCustom({ ...it, meta: slim && meta ? slimMeta(meta) : meta, metaFailed: !!m?.failed });
     });
     return {
@@ -229,12 +270,12 @@ class Library extends EventEmitter {
     return this.library.data.items.map(it => ({ type: it.type, meta: this.metadata.data[it.id]?.meta || null }));
   }
 
-  /** Un título con su ficha completa */
-  item(id) {
+  /** Un título con su ficha completa, en el idioma del usuario */
+  item(id, userName) {
     const it = this.library.data.items.find(i => i.id === id);
     if (!it) return null;
     const m = this.metadata.data[it.id];
-    return this.withCustom({ ...it, meta: m && !m.failed ? m.meta : null, metaFailed: !!m?.failed });
+    return this.withCustom({ ...it, meta: this.metaOf(it.id, this.langOf(userName)), metaFailed: !!m?.failed });
   }
 
   /**
@@ -405,12 +446,39 @@ class Library extends EventEmitter {
       } else {
         const meta = it.type === 'movie' ? await api.movie(id) : await api.tv(id, it.seasons);
         this.metadata.data[it.id] = { tmdbId: id, meta, at: Date.now(), lang, matcher: MATCHER_VERSION, manual: !!forcedId || !!prev?.manual, asked: it.type === 'series' ? it.seasons : undefined };
+        for (const l of this.extraLangs()) await this.fetchLang(it, l);
       }
     } catch (e) {
       if (/no válida/.test(e.message)) throw e;
       console.warn('Metadatos:', it.title, e.message);
     }
     this.metadata.save();
+  }
+
+  /** ¿Falta la ficha de un título en otro idioma (o es de antes que la principal)? */
+  needsLangFetch(it, lang) {
+    const m = this.metadata.data[it.id];
+    if (!m || m.failed || !m.tmdbId || !m.meta) return false;
+    const x = this.langStore(lang).data[it.id];
+    if (!x || x.tmdbId !== m.tmdbId || x.at < m.at) return true;
+    return it.type === 'series' && Object.keys(m.meta.seasons || {}).some(n => !x.meta?.seasons?.[n]);
+  }
+
+  /** La ficha de un título en otro idioma, de la misma película o serie que la principal */
+  async fetchLang(it, lang) {
+    const m = this.metadata.data[it.id];
+    if (!m?.tmdbId) return;
+    try {
+      const api = this.tmdb(lang);
+      const seasons = Object.keys(m.meta?.seasons || {}).map(Number);
+      const meta = it.type === 'movie' ? await api.movie(m.tmdbId) : await api.tv(m.tmdbId, seasons.length ? seasons : it.seasons);
+      const st = this.langStore(lang);
+      st.data[it.id] = { tmdbId: m.tmdbId, meta, at: Date.now() };
+      st.save();
+    } catch (e) {
+      if (/no válida/.test(e.message)) throw e;
+      console.warn(`Metadatos (${lang}):`, it.title, e.message);
+    }
   }
 
   async fetchMissingMetadata(force = false) {
@@ -420,14 +488,23 @@ class Library extends EventEmitter {
     this.fetching = true;
     try {
       const lang = this.settings.data.metaLang;
-      const todo = this.library.data.items.filter(it => force || this.needsFetch(it, lang));
+      const todo = this.library.data.items.filter(it => force || this.needsFetch(it, lang)).map(it => ({ it }));
       let done = 0;
       this.emit('meta:progress', { done, total: todo.length });
       const queue = [...todo];
+      // cuando se acaban, lo que falte en los otros idiomas (de lo que acaba de pedir ya los trae fetchItem)
+      let langsQueued = false;
       const worker = async () => {
-        while (queue.length) {
-          const it = queue.shift();
-          await this.fetchItem(api, it);
+        for (;;) {
+          if (!queue.length && !langsQueued) {
+            langsQueued = true;
+            const more = this.extraLangs().flatMap(l => this.library.data.items.filter(it => this.needsLangFetch(it, l)).map(it => ({ it, l })));
+            todo.push(...more);
+            queue.push(...more);
+          }
+          if (!queue.length) break;
+          const { it, l } = queue.shift();
+          if (l) await this.fetchLang(it, l); else await this.fetchItem(api, it);
           done++;
           this.emit('meta:progress', { done, total: todo.length, title: it.title });
           if (done % 25 === 0) this.emit('library');
@@ -444,25 +521,28 @@ class Library extends EventEmitter {
     }
   }
 
-  async person(id) {
-    const s = this.settings.data;
-    const c = this.people.data[id];
-    if (c && Date.now() - c.at < 1000 * 60 * 60 * 24 * 30 && c.lang === s.metaLang && Array.isArray(c.data?.films) && c.data.films.every(f => 'popularity' in f)) return c.data;
-    const api = this.tmdb();
+  async person(id, userName) {
+    const lang = this.langOf(userName);
+    // en el idioma principal con su id, como siempre; en los otros, aparte
+    const key = lang === this.settings.data.metaLang ? id : `${id}:${lang}`;
+    const c = this.people.data[key];
+    if (c && Date.now() - c.at < 1000 * 60 * 60 * 24 * 30 && c.lang === lang && Array.isArray(c.data?.films) && c.data.films.every(f => 'popularity' in f)) return c.data;
+    const api = this.tmdb(lang);
     if (!api.enabled) return null;
     try {
       const data = await api.person(id);
-      this.people.data[id] = { data, at: Date.now(), lang: s.metaLang };
+      this.people.data[key] = { data, at: Date.now(), lang };
       this.people.save();
       return data;
     } catch { return c?.data || null; }
   }
 
-  async providerList() {
+  async providerList(userName) {
     const s = this.settings.data;
-    const k = (s.region || 'ES') + ':' + s.metaLang;
+    const lang = this.langOf(userName);
+    const k = (s.region || 'ES') + ':' + lang;
     if (this.providerListCache?.k === k && Date.now() - this.providerListCache.at < 864e5) return this.providerListCache.data;
-    const api = this.requireTmdb();
+    const api = this.requireTmdb(lang);
     const data = await api.providerList();
     this.providerListCache = { k, data, at: Date.now() };
     return data;
@@ -478,20 +558,21 @@ class Library extends EventEmitter {
   }
 
   /** Ficha de TMDB de un título que no está en la biblioteca (película o serie, sin temporadas) */
-  async title(type, id) {
+  async title(type, id, userName) {
     this.titleCache ||= new Map();
-    const k = `${type}:${id}:${this.settings.data.metaLang}`;
+    const lang = this.langOf(userName);
+    const k = `${type}:${id}:${lang}`;
     const c = this.titleCache.get(k);
     if (c && Date.now() - c.at < 1000 * 60 * 60 * 12) return c.data;
-    const api = this.requireTmdb();
+    const api = this.requireTmdb(lang);
     const data = type === 'series' ? await api.tv(id) : await api.movie(id);
     if (this.titleCache.size > 500) this.titleCache.clear();
     this.titleCache.set(k, { data, at: Date.now() });
     return data;
   }
 
-  search({ type, query, year }) {
-    return this.requireTmdb().search(type, query, year);
+  search({ type, query, year }, userName) {
+    return this.requireTmdb(this.langOf(userName)).search(type, query, year);
   }
 
   async identify({ itemId, tmdbId }, userName) {
@@ -502,8 +583,8 @@ class Library extends EventEmitter {
     return this.view(userName).items.find(i => i.id === itemId);
   }
 
-  requireTmdb() {
-    const api = this.tmdb();
+  requireTmdb(lang) {
+    const api = this.tmdb(lang);
     if (!api.enabled) throw new Error('Falta la API key de TMDB en Ajustes');
     return api;
   }
