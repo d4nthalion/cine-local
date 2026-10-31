@@ -2143,7 +2143,9 @@ function updStatusHTML() {
     case 'disabled': return 'Sólo funcionan en la versión instalada (ahora se está ejecutando desde el código).';
     case 'checking': return '<span class="status-pill"><span class="spinner sm"></span>Buscando actualizaciones…</span>';
     case 'not-available': return `<span class="status-pill ok">Tienes la última versión</span>${when}`;
-    case 'available': return u.mode === 'portable'
+    case 'available': return u.manual
+      ? `<span class="status-pill warn">CineLocal ${v} disponible</span> · esta instalación no puede actualizarse sola: descárgala desde GitHub e instálala encima`
+      : u.mode === 'portable'
       ? `<span class="status-pill warn">CineLocal ${v} disponible</span> · la versión portable no se actualiza sola: descárgala desde GitHub`
       : `<span class="status-pill"><span class="spinner sm"></span>CineLocal ${v} disponible · preparando la descarga…</span>`;
     case 'downloading': return `<span class="status-pill"><span class="spinner sm"></span>Descargando CineLocal ${v} · ${u.percent || 0} %</span>
@@ -2153,11 +2155,13 @@ function updStatusHTML() {
     default: return S.settings.autoUpdate !== false ? 'Se comprueba al abrir CineLocal.' : 'Aún no se ha comprobado.';
   }
 }
+/** La versión nueva hay que descargarla a mano: portable, o instalación que no puede actualizarse sola */
+const updManual = (u) => u.mode === 'portable' || !!u.manual;
 function updInfoHTML() {
   const u = S.update;
-  const busy = u.state === 'checking' || u.state === 'disabled' || (['available', 'downloading'].includes(u.state) && u.mode !== 'portable');
+  const busy = u.state === 'checking' || u.state === 'disabled' || (['available', 'downloading'].includes(u.state) && !updManual(u));
   const ctl = u.state === 'downloaded' ? '<button class="btn btn-primary btn-sm" data-action="upd-install">Reiniciar ahora</button>'
-    : u.state === 'available' && u.mode === 'portable' ? `<button class="btn btn-accent btn-sm" data-action="upd-open">Descargar</button>`
+    : u.state === 'available' && updManual(u) ? `<button class="btn btn-accent btn-sm" data-action="upd-open">Descargar</button>`
     : `<button class="btn btn-ghost btn-sm" data-action="upd-check" ${busy ? 'disabled' : ''}>Comprobar ahora</button>`;
   const notes = u.notes && ['available', 'downloading', 'downloaded'].includes(u.state)
     ? `<div class="upd-notes"><b>Novedades de la ${esc(u.version)}</b>${esc(u.notes)}</div>` : '';
@@ -2176,7 +2180,7 @@ function updateSettingsHTML(s, sw) {
 /** Aviso discreto abajo a la derecha: versión descargada (o, en la portable, disponible) */
 function paintUpdToast() {
   const u = S.update;
-  const show = (u.state === 'downloaded' || (u.state === 'available' && u.mode === 'portable')) && S.updDismissed !== u.version;
+  const show = (u.state === 'downloaded' || (u.state === 'available' && updManual(u))) && S.updDismissed !== u.version;
   let el = $('#updToast');
   if (!show) { el?.remove(); return; }
   const ready = u.state === 'downloaded';

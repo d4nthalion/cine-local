@@ -65,6 +65,7 @@ class Updater {
     // installer: se actualiza sola · portable: sólo avisa · dev: ejecutando desde el código (npm start)
     this.mode = this.portable ? (app.isPackaged || testApi() ? 'portable' : 'dev') : (app.isPackaged || testFeed() ? 'installer' : 'dev');
     this.au = null;
+    this.manual = false;   // sin electron-updater en el paquete: solo avisa, como la portable
     this.lastProgress = 0;
     this.st = { state: 'idle', current: app.getVersion(), mode: this.mode };
   }
@@ -85,6 +86,7 @@ class Updater {
 
   set(patch, replace = false) {
     this.st = replace ? { current: app.getVersion(), mode: this.mode, ...patch } : { ...this.st, ...patch };
+    if (this.manual) this.st.manual = true;   // instalación que no puede actualizarse sola: hay que descargarla
     this.send('update:status', this.st);
   }
 
@@ -176,8 +178,17 @@ class Updater {
       return this.st;
     }
     if (['checking', 'downloading', 'downloaded'].includes(this.st.state)) return this.st;
-    if (this.mode === 'portable') return this.checkPortable();
-    try { await this.updater().checkForUpdates(); }
+    if (this.mode === 'portable' || this.manual) return this.checkPortable();
+    let au;
+    try { au = this.updater(); }
+    catch (e) {
+      // La app se empaquetó sin electron-updater (pasó en la 1.19.0 y la 1.20.0): no puede instalarse sola,
+      // pero sí avisar de la versión nueva y abrir su página, como la portable, en vez de no hacer nada
+      this.log('error', 'No se pudo cargar el actualizador automático; se avisará para instalar a mano', e);
+      this.manual = true;
+      return this.checkPortable();
+    }
+    try { await au.checkForUpdates(); }
     catch (e) {
       // ya registrado y convertido en estado por el evento 'error'
       if (this.st.state === 'checking') this.set({ state: 'error', error: friendlyError(e), checkedAt: Date.now() }, true);

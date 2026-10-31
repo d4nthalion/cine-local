@@ -1,7 +1,7 @@
 {
   "name": "cinelocal",
   "productName": "CineLocal",
-  "version": "1.20.0",
+  "version": "1.20.1",
   "description": "Tu cine en casa: películas y series de tu disco con estilo de plataforma de streaming",
   "main": "src/main/main.js",
   "author": "Carlos",
@@ -9,8 +9,9 @@
   "scripts": {
     "start": "electron .",
     "fetch-mpv": "node scripts/fetch-mpv.js",
-    "predist": "node scripts/fetch-mpv.js",
-    "dist": "electron-builder --win nsis portable --x64 --publish never"
+    "predist": "node scripts/fetch-mpv.js && node scripts/check-deps.js",
+    "dist": "electron-builder --win nsis portable --x64 --publish never",
+    "postdist": "node scripts/check-deps.js dist/win-unpacked/resources/app.asar"
   },
   "build": {
     "appId": "com.cinelocal.app",
