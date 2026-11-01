@@ -50,10 +50,10 @@ class TMDB {
       .map(p => ({ url: img(p.file_path, 'w500'), thumb: img(p.file_path, 'w185'), lang: p.iso_639_1 || null }));
   }
 
-  async search(type, query, year) {
+  async search(type, query, year, language = this.language) {
     const ep = type === 'movie' ? '/search/movie' : '/search/tv';
     const yearKey = type === 'movie' ? 'year' : 'first_air_date_year';
-    const base = { query, language: this.language, include_adult: 'false' };
+    const base = { query, language, include_adult: 'false' };
     let r = await this.get(ep, year ? { ...base, [yearKey]: year } : base);
     if (!r.results?.length && year) r = await this.get(ep, base);
     return (r.results || []).map(x => ({
@@ -65,6 +65,21 @@ class TMDB {
       poster: img(x.poster_path, 'w342'),
       overview: x.overview
     }));
+  }
+
+  /**
+   * Para emparejar: la búsqueda en el idioma de las fichas y en español o inglés (el otro), con los títulos de los
+   * dos en `titles`: los archivos suelen llamarse en español aunque las fichas estén en inglés (y al revés)
+   */
+  async searchMatch(type, query, year) {
+    const other = /^es/.test(this.language) ? 'en-US' : 'es-ES';
+    const [main, alt] = await Promise.all([this.search(type, query, year), this.search(type, query, year, other).catch(() => [])]);
+    const byId = new Map(main.map(r => [r.id, { ...r, titles: [r.title] }]));
+    for (const r of alt) {
+      if (byId.has(r.id)) byId.get(r.id).titles.push(r.title);
+      else byId.set(r.id, { ...r, titles: [r.title] });
+    }
+    return [...byId.values()];
   }
 
   /**
@@ -97,14 +112,22 @@ class TMDB {
       const head = a.q.split(',')[0].trim();
       if (head !== a.q && head.length > 2) attempts.push({ ...a, q: head });
     }
+    // "El Cementerio Viviente" -> "Cementerio Viviente" (TMDB a veces no lo encuentra con el artículo)
+    for (const a of [...attempts]) {
+      const art = a.q.match(/^(?:el|la|los|las|the|un|una|a|an)\s+(.{3,})$/i);
+      if (art) attempts.push({ ...a, q: art[1] });
+    }
 
     let fallback = null;
     for (const a of attempts) {
       let results;
-      try { results = await this.search(type, a.q, year); } catch (e) { if (/no válida|conectar/.test(e.message)) throw e; continue; }
+      try { results = await this.searchMatch(type, a.q, year); } catch (e) { if (/no válida|conectar/.test(e.message)) throw e; continue; }
       if (!results.length) continue;
       const ranked = rankResults(results, a.q, year);
       if (!fallback) fallback = ranked[0].id;
+      // la mejor está a más de un año del archivo: se prueban las otras variantes y, si ninguna cuadra, la primera
+      // (con el título exacto sí vale: es el año del archivo el que está mal)
+      if (!a.hint && year && !(ranked[0].year && Math.abs(+ranked[0].year - year) <= 1) && titleScore(ranked[0], norm(a.q)) < 10) continue;
       if (a.hint && type === 'movie') {
         // ¿el texto que sobra es el director? Mirar los 5 primeros resultados
         for (const r of ranked.slice(0, 5)) {
@@ -273,6 +296,7 @@ function cleanQuery(t) {
   return String(t)
     .replace(/\((?:imax|remastered|remasterizad[ao]|extended|director'?s cut|version extendida|versión extendida|4k|uhd)\)/ig, ' ')
     .replace(/\s+I$/, '')            // "The Godfather I" -> "The Godfather"
+    .replace(/\b(Spider|Ant|Iron|Bat|Super|Aqua|X)(Man|Men|Woman)\b/g, '$1-$2')   // "SpiderMan", "AntMan", "XMen" -> "Spider-Man"…
     .replace(/\s+/g, ' ').trim();
 }
 
@@ -306,13 +330,14 @@ function personMatches(hint, name) {
 /** Ordena resultados: título exacto y año cercano primero, manteniendo la popularidad de TMDB como desempate */
 /** Cuánto se parece el título de un resultado a la búsqueda (ya normalizada); 0 si nada */
 function titleScore(r, q) {
-  const t = norm(r.title), o = norm(r.originalTitle);
+  // el título en el idioma de las fichas, el original y, al emparejar, también el del otro idioma (searchMatch)
+  const all = [...new Set([r.title, r.originalTitle, ...(r.titles || [])].filter(Boolean).map(norm))];
   let s = 0;
-  if (t === q || o === q) s += 10;
-  else if (t.startsWith(q) || o.startsWith(q)) s += 4;
+  if (all.some(t => t === q)) s += 10;
+  else if (all.some(t => t.startsWith(q))) s += 4;
   const qt = q.split(' ');
   const has = t2 => { const set = new Set(t2.split(' ')); return qt.every(w => set.has(w)); };
-  if (has(t) || has(o)) s += 3;   // contiene todas las palabras ("The Godfather II" -> "...Part II")
+  if (all.some(has)) s += 3;   // contiene todas las palabras ("The Godfather II" -> "...Part II")
   return s;
 }
 

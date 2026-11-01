@@ -54,6 +54,36 @@ const r = (id, title, originalTitle, year, votes) => ({ id, title, originalTitle
     assert.deepStrictEqual(asked[0], ['Godzilla 2000, el dinosaurio mutante', 1999]);
   });
 
+  await t('el título en el otro idioma cuenta (La Bruja = The Witch, con las fichas en inglés)', () => {
+    const res = [
+      { ...r(274854, 'The Last Witch Hunter', 'The Last Witch Hunter', 2015, 5000), titles: ['The Last Witch Hunter', 'El último cazador de brujas'] },
+      { ...r(310131, 'The Witch', 'The VVitch: A New-England Folktale', 2015, 6000), titles: ['The Witch', 'La bruja'] }
+    ];
+    assert.strictEqual(rankResults(res, 'La Bruja', 2015)[0].id, 310131);
+  });
+
+  await t('sin artículo si con él sale otra película de otro año (El Cementerio Viviente 1989)', async () => {
+    const api = new TMDB('x');
+    api.search = async (type, q) => q === 'El Cementerio Viviente'
+      ? [r(830764, 'Pet Sematary: Bloodlines', 'Pet Sematary: Bloodlines', 2023, 463)]
+      : q === 'Cementerio Viviente' ? [r(8913, 'Cementerio viviente', 'Pet Sematary', 1989, 2500)] : [];
+    assert.strictEqual(await api.findBest('movie', 'El Cementerio Viviente', 1989), 8913);
+  });
+
+  await t('el título exacto vale aunque el año del archivo esté mal', async () => {
+    const api = new TMDB('x');
+    api.search = async (type, q) => q.startsWith('Metallica Live Shit')
+      ? [r(1, 'Metallica: Live Shit - Binge & Purge, Seattle 1989', '', 1989, 20), r(2, 'Metallica: Live Shit - Binge & Purge, San Diego 1992', '', 1992, 15)] : [];
+    assert.strictEqual(await api.findBest('movie', 'Metallica Live Shit Binge & Purge, Seattle 1989', 1993), 1);
+  });
+
+  await t('«SpiderMan», «AntMan», «XMen» se buscan con guion; «DogMan» no', () => {
+    const { cleanQuery } = require('../src/main/metadata');
+    assert.strictEqual(cleanQuery('The Amazing SpiderMan'), 'The Amazing Spider-Man');
+    assert.strictEqual(cleanQuery('XMen 2'), 'X-Men 2');
+    assert.strictEqual(cleanQuery('DogMan'), 'DogMan');
+  });
+
   console.log(failed ? `\n${failed} fallos` : '\nTodo bien');
   process.exit(failed ? 1 : 0);
 })();
