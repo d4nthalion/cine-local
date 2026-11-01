@@ -808,6 +808,8 @@ ipcMain.handle('progress:mark', async (_e, { paths, watched }) => {
   return p;
 });
 ipcMain.handle('requests:get', () => api().get('/api/requests'));
+ipcMain.handle('notifications:get', () => api().get('/api/notifications'));
+ipcMain.handle('notifications:seen', () => api().post('/api/notifications/seen', {}));
 ipcMain.handle('requests:op', (_e, q) => api().post('/api/requests', q));
 ipcMain.handle('access:list', (_e, q) => api().get('/api/access?' + new URLSearchParams(q)));
 ipcMain.handle('log:error', (_e, e) => api().post('/api/log', e).catch(() => null));

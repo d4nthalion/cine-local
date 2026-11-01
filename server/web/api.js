@@ -77,6 +77,7 @@
     toggleFavorite: id => post('/api/favorites/toggle', { id }),
     lists: { op: q => post('/api/lists', q) },
     requests: { get: () => get('/api/requests'), op: q => post('/api/requests', q) },
+    notifications: { get: () => get('/api/notifications'), seen: () => post('/api/notifications/seen', {}) },
     accessLog: q => get('/api/access?' + new URLSearchParams(q)),
     logError: e => post('/api/log', e),
     toggleFullscreen: () => setFs(!document.fullscreenElement),

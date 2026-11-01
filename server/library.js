@@ -179,6 +179,40 @@ class Library extends EventEmitter {
     }
   }
 
+  /**
+   * Notificaciones de la campana: sus peticiones resueltas y lo añadido a la biblioteca (los últimos 30 días), lo
+   * más nuevo primero; `seenAt` es hasta cuándo las ha visto (la primera vez, ahora: no se estrena con todo sin leer).
+   * requests: las suyas (server/requests.js list()), o [] sin servidor
+   */
+  notifications(userName, requests = []) {
+    const u = this.user(userName);
+    const prefs = u.data.prefs || (u.data.prefs = {});
+    if (!prefs.notifSeenAt) { prefs.notifSeenAt = Date.now(); u.save(); }
+    const since = Date.now() - 30 * 864e5;
+    const lang = this.langOf(userName);
+    const small = p => p ? p.replace(/\/w\d+\//, '/w185/') : null;
+    const out = [];
+    for (const r of requests) {
+      if (!r.mine || r.status === 'pending' || !(r.resolvedAt > since)) continue;
+      out.push({ kind: 'request', id: r.id, at: r.resolvedAt, status: r.status, title: r.title, year: r.year || null, reply: r.reply || null, poster: small(r.poster) });
+    }
+    for (const it of this.library.data.items) {
+      if (!(it.added > since)) continue;
+      const m = this.metaOf(it.id, lang);
+      out.push({ kind: 'new', id: it.id, at: it.added, type: it.type, title: m?.title || it.title, year: m?.year || it.year || null, poster: small(this.custom.data[it.id]?.poster?.startsWith('https:') ? this.custom.data[it.id].poster : m?.poster) });
+    }
+    out.sort((a, b) => b.at - a.at);
+    return { items: out.slice(0, 40), seenAt: prefs.notifSeenAt };
+  }
+
+  /** La campana abierta: todo lo de hasta ahora queda visto */
+  notificationsSeen(userName) {
+    const u = this.user(userName);
+    u.data.prefs = { ...(u.data.prefs || {}), notifSeenAt: Date.now() };
+    u.save();
+    return u.data.prefs.notifSeenAt;
+  }
+
   /** Idioma de las fichas de un usuario (sin usuario o sin elegir, el principal) */
   langOf(userName) {
     const l = userName ? this.prefs(userName).userMetaLang : null;

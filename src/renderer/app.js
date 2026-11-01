@@ -436,18 +436,23 @@ function directorChip(d) {
   return `<div class="dir-chip" tabindex="0" data-director="${esc(d.key)}">${avatar(d)}<div class="dir-name">${esc(d.name)}</div><div class="dir-sub">${filmsLabel(d.films.length)}</div></div>`;
 }
 
+/** Películas y Directores, como pestañas de la sección Películas */
+const movieTabs = on => `<div class="list-tabs page-tabs">${[['movies', 'Películas'], ['directors', 'Directores']]
+  .map(([k, l]) => `<button class="gchip ${on === k ? 'on' : ''}" data-nav="${k}">${l}</button>`).join('')}</div>`;
+
 function viewDirectors() {
   const f = S.filters.directors;
   const all = allDirectors();
   const q = normName(f.q);
   const list = sortDirectors(all.filter(d => !q || normName(d.name).includes(q) || d.films.some(x => normName(T(x)).includes(q))), f.sort);
   if (!all.length) {
-    return `<div class="page"><h1 class="page-title">Directores</h1><div class="empty"><div class="big-ico">${I.film}</div>
+    return `<div class="page"><h1 class="page-title">Directores</h1>${movieTabs('directors')}<div class="empty"><div class="big-ico">${I.film}</div>
       <h2>Todavía no hay directores</h2><p>Se obtienen de los metadatos de TMDB. ${S.lib.hasKey ? 'Espera a que terminen de descargarse.' : 'Añade tu API key en Ajustes.'}</p>
       ${S.lib.hasKey ? '' : '<button class="btn btn-accent" data-nav="settings">Ir a Ajustes</button>'}</div></div>`;
   }
   return `<div class="page">
     <h1 class="page-title">Directores<span class="count">${all.length}</span></h1>
+    ${movieTabs('directors')}
     <div class="toolbar">
       <div class="chips">
         ${[['count', 'Más películas'], ['name', 'Nombre'], ['surname', 'Apellido']].map(([v, l]) => `<button class="chip ${f.sort === v ? 'on' : ''}" data-dir-sort="${v}">${l}</button>`).join('')}
@@ -850,6 +855,7 @@ function viewGrid(kind) {
   const shown = Math.max(GRID_PAGE, f.shown || 0);
   return `<div class="page">
     <h1 class="page-title">${title}<span class="count">${list.length}</span></h1>
+    ${kind === 'movies' ? movieTabs('movies') : ''}
     <div class="toolbar">
       <div class="chips">
         <button class="chip ${f.seen === 'all' ? 'on' : ''}" data-seen="all">Todas · ${byCat.length}</button>
@@ -1041,8 +1047,8 @@ const emuleOn = () => !WEB && !!S.settings.emuleEnabled && isAdmin();
 /** Quién soy en CineLocal Server (web, o escritorio conectado al servidor): rol, peticiones y botones de administrador */
 async function refreshMe() {
   S.me = WEB ? await window.api.me() : await window.api.remote.me().catch(() => null);
-  $('#btnScan').classList.toggle('hidden', !canManage());
   $('#navRequests').classList.toggle('hidden', !hasRequests());
+  loadNotifs();
   $('#navAccess').classList.toggle('hidden', !(hasRequests() && isAdmin() && window.api.accessLog));
   if (hasRequests()) await loadRequests(); else setRequests(null);
 }
@@ -2252,7 +2258,9 @@ function render(keepScroll = false) {
     default: html = viewHome();
   }
   view.innerHTML = html;
-  $$('#nav a').forEach(a => a.classList.toggle('active', a.dataset.nav === r.name || (r.name === 'director' && a.dataset.nav === 'directors')));
+  // Directores es una pestaña de Películas y cada saga, de Sagas
+  const section = { directors: 'movies', director: 'movies', saga: 'sagas' }[r.name] || r.name;
+  $$('#nav a').forEach(a => a.classList.toggle('active', a.dataset.nav === section));
   if (r.name === 'director') loadPerson(r.id);
   if (r.name === 'detail') ensureFull(r.id);
   if (r.name === 'downloads') loadServers(true);
@@ -2523,13 +2531,10 @@ async function saveSetting(key, value) {
 }
 
 async function scanNow() {
-  const b = $('#btnScan');
-  b.classList.add('spin');
-  try {
-    setLib(await window.api.scan());
-    render(true);
-    toast(`Biblioteca actualizada: ${S.lib.items.length} títulos`, 'ok');
-  } finally { b.classList.remove('spin'); }
+  toast('Escaneando la biblioteca…');
+  setLib(await window.api.scan());
+  render(true);
+  toast(`Biblioteca actualizada: ${S.lib.items.length} títulos`, 'ok');
 }
 
 // ---------------------------------------------------------------- eventos
@@ -3001,12 +3006,73 @@ const navEdges = () => {
 };
 $('#nav').addEventListener('scroll', navEdges, { passive: true });
 new ResizeObserver(navEdges).observe($('#nav'));
-$('#btnScan').addEventListener('click', scanNow);
-$('#btnFullscreen').addEventListener('click', () => window.api.toggleFullscreen());
+
+// ---------------------------------------------------------------- campana de notificaciones
+// Peticiones propias resueltas y novedades de la biblioteca (30 días); el punto, si hay algo desde la última vez
+const NOTIF = { items: [], seenAt: 0, shownSeen: 0, open: false };
+let notifTimer = null;
+function loadNotifs() {
+  clearTimeout(notifTimer);
+  notifTimer = setTimeout(async () => {
+    const r = await window.api.notifications?.get().catch(() => null);
+    if (!r) return;
+    NOTIF.items = r.items || [];
+    NOTIF.seenAt = r.seenAt || 0;
+    paintNotifs();
+  }, 400);
+}
+const ago = ts => {
+  const m = Math.max(1, Math.round((Date.now() - ts) / 60000));
+  if (m < 60) return `hace ${m} min`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `hace ${h} h`;
+  const d = Math.round(h / 24);
+  return d === 1 ? 'ayer' : `hace ${d} días`;
+};
+function notifText(n) {
+  const name = `«${n.title}»${n.year ? ` (${n.year})` : ''}`;
+  if (n.kind === 'request') return n.status === 'done' ? `Ya puedes ver ${name}, que pediste` : `Tu petición de ${name} se ha rechazado${n.reply ? ': ' + n.reply : ''}`;
+  return `${n.type === 'series' ? 'Novedades en la biblioteca' : 'Nueva en la biblioteca'}: ${name}`;
+}
+function paintNotifs() {
+  const unread = NOTIF.items.filter(n => n.at > NOTIF.seenAt).length;
+  $('#notifDot').classList.toggle('hidden', !unread);
+  $('#btnNotif').title = unread ? `Notificaciones · ${unread} sin ver` : 'Notificaciones';
+  const p = $('#notifPanel');
+  p.classList.toggle('hidden', !NOTIF.open);
+  if (!NOTIF.open) return;
+  p.innerHTML = '<div class="notif-h">Notificaciones</div>' + (NOTIF.items.length
+    ? '<div class="notif-list">' + NOTIF.items.map((n, i) => `<button class="notif-it ${n.at > NOTIF.shownSeen ? 'new' : ''}" data-notif="${i}">
+        <span class="np">${n.poster ? `<img src="${esc(n.poster)}" alt="" loading="lazy">` : n.kind === 'request' ? I.check : I.film}</span>
+        <span class="nt"><span>${esc(notifText(n))}</span><small>${ago(n.at)}</small></span></button>`).join('') + '</div>'
+    : '<div class="notif-empty">No hay novedades en los últimos 30 días.</div>');
+}
+async function toggleNotifs(open = !NOTIF.open) {
+  NOTIF.open = open;
+  if (open) {
+    NOTIF.shownSeen = NOTIF.seenAt;   // lo nuevo se marca mientras el panel está abierto
+    paintNotifs();
+    const r = await window.api.notifications?.seen().catch(() => null);
+    if (r?.seenAt) NOTIF.seenAt = r.seenAt;
+  }
+  paintNotifs();
+}
+$('#btnNotif').addEventListener('click', e => { e.stopPropagation(); toggleNotifs(); });
+$('#notifPanel').addEventListener('click', e => {
+  e.stopPropagation();
+  const n = NOTIF.items[e.target.closest('[data-notif]')?.dataset.notif];
+  if (!n) return;
+  toggleNotifs(false);
+  if (n.kind === 'request') go('requests');
+  else go('detail', { id: n.id });
+});
+document.addEventListener('click', () => { if (NOTIF.open) toggleNotifs(false); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && NOTIF.open) toggleNotifs(false); });
 
 // ---------------------------------------------------------------- eventos del proceso principal
 window.api.onLibrary((lib) => {
   setLib(lib);
+  loadNotifs();
   // no re-renderizar ajustes ni descargas mientras el usuario escribe
   if (['settings', 'downloads'].includes(S.route.name) && /INPUT|SELECT/.test(document.activeElement?.tagName)) return;
   render(true);
@@ -3020,6 +3086,7 @@ window.api.onFullscreen((fs) => document.body.classList.toggle('fullscreen', fs)
 window.api.onSessionExpired?.(async (msg) => { S.session = await window.api.session.get(); showLogin(msg); });
 window.api.onToast(({ type, text, action }) => toast(text, type, action === 'requests' ? () => go('requests') : null));
 window.api.onRequests?.((v) => {
+  loadNotifs();
   setRequests(v);
   if (S.route.name === 'requests' && !/INPUT/.test(document.activeElement?.tagName)) render(true);
 });

@@ -30,6 +30,7 @@ contextBridge.exposeInMainWorld('api', {
   searchMeta: (q) => ipcRenderer.invoke('meta:search', q),
   getTitle: (q) => ipcRenderer.invoke('meta:title', q),
   requests: { get: () => ipcRenderer.invoke('requests:get'), op: (q) => ipcRenderer.invoke('requests:op', q) },
+  notifications: { get: () => ipcRenderer.invoke('notifications:get'), seen: () => ipcRenderer.invoke('notifications:seen') },
   accessLog: (q) => ipcRenderer.invoke('access:list', q),
   logError: (e) => ipcRenderer.invoke('log:error', e),
   identify: (q) => ipcRenderer.invoke('meta:identify', q),

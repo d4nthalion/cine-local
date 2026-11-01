@@ -309,6 +309,9 @@ route('POST', '/api/lists', async (req, res, { user }) => {
   act(req, user, what, b.op === 'toggle' ? b.entry?.title : b.name || before?.name, b.op === 'toggle' || b.op === 'rename' ? `Lista «${b.op === 'rename' ? before?.name : after?.name}»` : null);
 });
 route('GET', '/api/requests', (req, res, { user }) => json(res, 200, requestsView(user)));
+// campana: peticiones propias resueltas y novedades de la biblioteca
+route('GET', '/api/notifications', (req, res, { user }) => json(res, 200, library.notifications(user, requests.list(user, false))));
+route('POST', '/api/notifications/seen', (req, res, { user }) => json(res, 200, { seenAt: library.notificationsSeen(user) }));
 route('POST', '/api/requests', async (req, res, { user }) => {
   const b = await readBody(req, 16384);
   const admin = auth.isAdmin(user);

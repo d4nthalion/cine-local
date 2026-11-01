@@ -78,6 +78,27 @@ img { display: block; }
 .icon-btn:hover { background: rgba(255,255,255,.1); color: var(--text); }
 .icon-btn svg { width: 22px; height: 22px; fill: currentColor; }
 .icon-btn.spin svg { animation: spin 1s linear infinite; }
+
+/* campana: punto si hay algo sin ver y panel desplegable bajo ella */
+.notif-wrap { position: relative; }
+.notif-panel { -webkit-app-region: no-drag; }
+#btnNotif { position: relative; }
+.notif-dot { position: absolute; top: 8px; right: 9px; width: 9px; height: 9px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 2px #0b0b10; }
+.notif-panel { position: absolute; top: calc(100% + 10px); right: -6px; width: min(380px, calc(100vw - 32px)); max-height: min(520px, 70vh); display: flex; flex-direction: column;
+  background: #15151d; border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 20px 50px rgba(0,0,0,.55); overflow: hidden; z-index: 60; }
+.notif-h { padding: 14px 16px 10px; font-weight: 700; font-size: 15px; border-bottom: 1px solid var(--line); }
+.notif-list { overflow-y: auto; padding: 6px; }
+.notif-it { display: flex; gap: 12px; align-items: center; width: 100%; text-align: left; background: none; border: 0; color: var(--text-2); padding: 8px 10px; border-radius: 8px; cursor: pointer; font: inherit; }
+.notif-it:hover { background: rgba(255,255,255,.06); color: var(--text); }
+.notif-it.new { color: var(--text); }
+.notif-it.new .nt small::before { content: ''; display: inline-block; width: 7px; height: 7px; margin-right: 6px; border-radius: 50%; background: var(--accent); vertical-align: 1px; }
+.notif-it .np { flex: none; width: 40px; aspect-ratio: 2/3; border-radius: 5px; overflow: hidden; background: var(--bg-3); display: grid; place-items: center; }
+.notif-it .np img { width: 100%; height: 100%; object-fit: cover; }
+.notif-it .np svg { width: 20px; height: 20px; fill: var(--text-3); }
+.notif-it .nt { display: flex; flex-direction: column; gap: 3px; font-size: 13.5px; line-height: 1.35; min-width: 0; }
+.notif-it .nt small { font-size: 12px; color: var(--text-3); }
+.notif-empty { padding: 26px 16px; color: var(--text-3); font-size: 14px; text-align: center; }
+.page-tabs { margin: -6px 0 18px; }
 @keyframes spin { to { transform: rotate(360deg); } }
 #btnFullscreen .ico-exit { display: none; }
 body.fullscreen #btnFullscreen .ico-exit { display: block; }
