@@ -2318,7 +2318,7 @@ function toast(text, type = '', onClick = null) {
   el.textContent = text;
   if (onClick) el.addEventListener('click', () => { el.remove(); onClick(); });
   $('#toasts').appendChild(el);
-  setTimeout(() => { el.style.transition = 'opacity .3s'; el.style.opacity = '0'; setTimeout(() => el.remove(), 300); }, type === 'error' ? 7000 : 3000);
+  setTimeout(() => { el.style.transition = 'opacity .3s'; el.style.opacity = '0'; setTimeout(() => el.remove(), 300); }, type === 'error' ? 7000 : onClick ? 6000 : 3000);
 }
 
 function modal(html) {

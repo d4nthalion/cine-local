@@ -47,7 +47,8 @@ const DEFAULT_SETTINGS = {
   discordDiscreet: false,        // sin título ni póster: «Viendo una película» / «Viendo una serie»
   remoteUrl: '',                 // CineLocal Server: https://cine.dominio.com
   remoteUser: '',
-  remoteTokenEnc: ''             // token de la sesión, cifrado (la contraseña no se guarda)
+  remoteTokenEnc: '',            // token de la sesión, cifrado (la contraseña no se guarda)
+  requestsSeen: {}               // peticiones propias: hasta cuándo se ha avisado de las resueltas, por usuario
 };
 // ajustes que guarda el servidor (los de la biblioteca y TMDB sólo los cambia un administrador)
 const SERVER_KEYS = new Set(['libraryPath', 'extraLibraryPaths', 'tmdbKey', 'metaLang', 'audioLang', 'subLang', 'subMode',
@@ -237,6 +238,46 @@ async function startSession() {
   emuleService.restart();
   send('library:updated', view());
   markLetterboxdWatched();
+  checkRequests();
+}
+
+/**
+ * Peticiones propias resueltas desde la última vez (también con la app cerrada): un aviso en la ventana o, si no
+ * está delante, una notificación de Windows. La primera vez sólo se apunta desde cuándo.
+ */
+let requestsCheck = Promise.resolve();
+const checkRequests = () => (requestsCheck = requestsCheck.then(checkRequestsNow).catch(() => {}));
+async function checkRequestsNow() {
+  if (localOn() || !api().ready || !settings.data.remoteUser) return;
+  const r = await api().get('/api/requests').catch(() => null);
+  if (!r) return;
+  // al abrir la app, el aviso tiene que llegar a una ventana ya cargada
+  if (win && !win.isDestroyed() && win.webContents.isLoading()) await new Promise(ok => win.webContents.once('did-finish-load', ok));
+  const key = settings.data.remoteUser.toLowerCase();
+  const seenAll = settings.data.requestsSeen || {};
+  const seen = seenAll[key];
+  const fresh = (r.items || []).filter(x => x.mine && x.status !== 'pending' && x.resolvedAt > (seen || Infinity));
+  const last = Math.max(seen || Date.now(), ...fresh.map(x => x.resolvedAt));
+  if (last !== seen) settings.data = { ...settings.data, requestsSeen: { ...seenAll, [key]: last } };
+  for (const x of fresh) {
+    const name = `«${x.title}»${x.year ? ` (${x.year})` : ''}`;
+    const done = x.status === 'done';
+    const text = done ? `Ya está en la biblioteca: ${name}, que pediste` : `Tu petición de ${name} se ha rechazado${x.reply ? ': ' + x.reply : ''}`;
+    if (win && win.isFocused()) { send('toast', { type: done ? 'ok' : 'info', text, action: 'requests' }); continue; }
+    if (!Notification.isSupported()) continue;
+    const n = new Notification({
+      title: done ? `Ya puedes verla: ${x.title}` : `Petición rechazada: ${x.title}`,
+      body: done ? 'Lo que pediste ya está en la biblioteca' + (x.reply ? `. «${x.reply}»` : '') : x.reply || 'No se va a añadir a la biblioteca',
+      icon: path.join(__dirname, '..', '..', 'build', 'icon.png')
+    });
+    n.on('click', () => {
+      if (!win) return;
+      if (win.isMinimized()) win.restore();
+      win.show(); win.focus();
+      send('toast', { type: done ? 'ok' : 'info', text, action: 'requests' });
+    });
+    n.show();
+  }
 }
 
 /** Cambia entre CineLocal Server y la biblioteca local */
@@ -283,6 +324,9 @@ function reloadLibrary() {
 function onLibraryEvent(ev, data) {
   if (ev === 'library:changed') reloadLibrary();
   else if (ev === 'progress:updated') { if (remoteView) remoteView.progress = data; send('progress:updated', data); }
+  // el aviso de una petición resuelta lo da checkRequests (con notificación si la ventana no está delante)
+  else if (ev === 'toast' && data?.request) return;
+  else if (ev === 'requests:updated') { send(ev, data); checkRequests(); }
   else send(ev, data);   // meta:progress, toast, library:new, requests:updated
 }
 remote.on('event', (ev, data) => { if (!localOn()) onLibraryEvent(ev, data); });

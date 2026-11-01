@@ -15,6 +15,7 @@ smbj = "0.14.0"
 bouncycastle = "1.78.1"
 libvlc = "3.6.5"
 junit = "4.13.2"
+work = "2.10.1"
 
 [libraries]
 androidx-core-ktx = { module = "androidx.core:core-ktx", version.ref = "coreKtx" }
@@ -37,6 +38,7 @@ smbj = { module = "com.hierynomus:smbj", version.ref = "smbj" }
 bouncycastle = { module = "org.bouncycastle:bcprov-jdk18on", version.ref = "bouncycastle" }
 libvlc = { module = "org.videolan.android:libvlc-all", version.ref = "libvlc" }
 junit = { module = "junit:junit", version.ref = "junit" }
+androidx-work = { module = "androidx.work:work-runtime-ktx", version.ref = "work" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

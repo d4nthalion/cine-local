@@ -141,6 +141,15 @@ class CineServer(url: String, private val token: String = "", private val http: 
         request(post("/api/requests", """{"op":"create","entry":$entry}"""))
     }
 
+    @Serializable data class Req(
+        val id: String, val title: String, val year: Int? = null, val status: String, val resolvedAt: Long? = null,
+        val reply: String? = null, val mine: Boolean = false
+    )
+    @Serializable private data class Reqs(val items: List<Req> = emptyList())
+
+    /** Peticiones del usuario (un administrador recibe todas: `mine` dice cuáles son suyas) */
+    fun requests(): List<Req> = json.decodeFromString<Reqs>(request(Request.Builder().url("$base/api/requests").get().auth().build())).items
+
     fun identify(itemId: String, tmdbId: Int) {
         request(post("/api/meta/identify", """{"itemId":${json.encodeToString(itemId)},"tmdbId":$tmdbId}"""))
     }

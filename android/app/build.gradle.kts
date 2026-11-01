@@ -96,6 +96,7 @@ dependencies {
     implementation(libs.smbj)
     implementation(libs.bouncycastle)
     implementation(libs.libvlc)
+    implementation(libs.androidx.work)
 
     testImplementation(libs.junit)
 }

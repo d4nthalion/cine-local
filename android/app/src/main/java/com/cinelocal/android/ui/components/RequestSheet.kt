@@ -1,6 +1,12 @@
 package com.cinelocal.android.ui.components
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.core.content.ContextCompat
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -57,8 +63,16 @@ import java.util.Locale
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun RequestSheet(e: LbEntry, nav: Nav, onDismiss: () -> Unit) {
-    val repo = LocalContext.current.repo
+    val ctx = LocalContext.current
+    val repo = ctx.repo
     val scope = rememberCoroutineScope()
+    // con el servidor, aviso en el teléfono cuando se resuelva (RequestNotifier): hace falta el permiso (Android 13+)
+    val notifLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
+    fun askNotif() {
+        if (Build.VERSION.SDK_INT >= 33 && repo.settings.value.server &&
+            ContextCompat.checkSelfPermission(ctx, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) notifLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+    }
     val settings by repo.settings.flow.collectAsStateWithLifecycle()
     val state by repo.userState.flow.collectAsStateWithLifecycle()
     val requestedAt = state.requested[e.key]
@@ -131,6 +145,7 @@ fun RequestSheet(e: LbEntry, nav: Nav, onDismiss: () -> Unit) {
                         scope.launch {
                             error = try { repo.requestDownload(e); null } catch (ex: Exception) { ex.message ?: ex.javaClass.simpleName }
                             sending = false
+                            if (error == null) askNotif()
                         }
                         Unit
                     }

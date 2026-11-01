@@ -151,7 +151,8 @@ requests.on('created', ({ request, by }) => sendTo(
 requests.on('resolved', r => {
   const names = new Set(r.users.map(u => u.name));
   const text = r.status === 'done' ? `Ya está en la biblioteca: «${r.title}», que pediste` : `Tu petición de «${r.title}» se ha rechazado${r.reply ? ': ' + r.reply : ''}`;
-  sendTo(u => names.has(u.toLowerCase()), 'toast', () => ({ type: r.status === 'done' ? 'ok' : 'info', text }));
+  // request: la app de escritorio lo sustituye por el suyo, que también avisa con la ventana cerrada (checkRequests)
+  sendTo(u => names.has(u.toLowerCase()), 'toast', () => ({ type: r.status === 'done' ? 'ok' : 'info', text, action: 'requests', request: r.id }));
 });
 library.on('meta:progress', p => broadcast('meta:progress', p));
 library.on('toast', t => broadcast('toast', t));

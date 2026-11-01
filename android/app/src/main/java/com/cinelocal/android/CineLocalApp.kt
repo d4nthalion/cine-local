@@ -4,6 +4,7 @@ import android.app.Application
 import coil.ImageLoader
 import coil.ImageLoaderFactory
 import com.cinelocal.android.data.Repository
+import com.cinelocal.android.data.RequestNotifier
 
 class CineLocalApp : Application(), ImageLoaderFactory {
     lateinit var repo: Repository
@@ -12,6 +13,7 @@ class CineLocalApp : Application(), ImageLoaderFactory {
     override fun onCreate() {
         super.onCreate()
         repo = Repository(this)
+        RequestNotifier.schedule(this)
     }
 
     /** Las imágenes entran con un fundido de 220 ms */
