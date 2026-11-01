@@ -26,13 +26,14 @@ const DEFAULT_SETTINGS = {
   // cómo está organizada cada carpeta de la biblioteca: { [ruta]: { mode: 'categories', movies, series, folderMovie, ignore } }
   libraryLayouts: {},
   myProviders: [],
-  region: 'ES'
+  region: 'ES',
+  discordClientId: ''         // aplicación de Discord (Rich Presence) para todos: cada uno lo activa en su app
 };
 // lo único que se puede cambiar desde la web (el resto de ajustes de la app de escritorio no aplican aquí)
 const EDITABLE = new Set(Object.keys(DEFAULT_SETTINGS));
 // preferencias de cada usuario: las suyas pisan las del servidor (que quedan como valor por defecto)
 // (userMetaLang: el idioma de las fichas de cada uno; sin él, el principal del servidor)
-const PREF_KEYS = new Set(['audioLang', 'subLang', 'subMode', 'autoplayNext', 'myProviders', 'userMetaLang']);
+const PREF_KEYS = new Set(['audioLang', 'subLang', 'subMode', 'autoplayNext', 'myProviders', 'userMetaLang', 'lbMarkWatched']);
 const LANG_RE = /^[a-z]{2}-[A-Z]{2}$/;
 
 // al cambiar cómo se elige la ficha de TMDB (findBest / rankResults en metadata.js) se sube y se empareja todo de nuevo
@@ -243,6 +244,7 @@ class Library extends EventEmitter {
     const before = { ...this.settings.data };
     const clean = Object.fromEntries(Object.entries(patch || {}).filter(([k]) => EDITABLE.has(k) && !PREF_KEYS.has(k)));
     if (clean.libraryLayouts) clean.libraryLayouts = cleanLayouts(clean.libraryLayouts);
+    if ('discordClientId' in clean) clean.discordClientId = /^\d{17,20}$/.test(String(clean.discordClientId).trim()) ? String(clean.discordClientId).trim() : '';
     if (!Object.keys(clean).length) return this.settings.data;
     this.settings.data = { ...this.settings.data, ...clean };
     const s = this.settings.data;

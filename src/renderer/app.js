@@ -1582,6 +1582,10 @@ function viewSettings() {
         <div class="ctl"><select class="select" data-set="metaLang">${opt(META_LANGS, s.metaLang)}</select></div></div>
       <div class="set-row"><div class="lbl"><div class="t">Volver a descargar todos los metadatos</div><div class="d">Útil si cambias de idioma o TMDB ha actualizado información. Se conservan las correcciones manuales.</div></div>
         <div class="ctl"><button class="btn btn-ghost btn-sm" data-action="refresh-meta">Actualizar</button></div></div>
+    </div>
+
+    <div class="set-group"><h3>Discord para todos</h3>
+      ${discordAdminHTML(s)}
     </div>` : ''}
 
     ${LOCAL() ? '' : `<div class="set-group"><h3>Idioma</h3>
@@ -1596,47 +1600,25 @@ function viewSettings() {
         <div class="ctl"><select class="select" data-set="subLang">${opt(SUB_LANGS, s.subLang)}</select></div></div>
       <div class="set-row ${s.subLang === 'none' ? 'hidden' : ''}"><div class="lbl"><div class="t">Mostrar subtítulos</div><div class="d">“Sólo si el audio está en otro idioma” evita subtítulos en español cuando ya escuchas en español.</div></div>
         <div class="ctl"><select class="select" data-set="subMode">${opt([['always', 'Siempre'], ['foreign', 'Sólo si el audio está en otro idioma'], ['off', 'Nunca (activables durante la reproducción)']], s.subMode)}</select></div></div>
+      <div class="set-row"><div class="lbl"><div class="t">Reproducir el siguiente episodio automáticamente</div></div><div class="ctl">${sw('autoplayNext', s.autoplayNext)}</div></div>
+      ${!WEB && !S.lib.mpv ? `<div class="set-row"><div class="lbl"><div class="t">Reproductor mpv</div>
+        <div class="d">No se encuentra. <a data-action="mpv-help">Cómo instalarlo</a></div></div>
+        <div class="ctl"><span class="status-pill bad">No encontrado</span><button class="btn btn-ghost btn-sm" data-action="pick-mpv">Seleccionar mpv.exe</button></div></div>` : ''}
     </div>
 
-    ${WEB ? `<div class="set-group"><h3>Reproducción</h3>
-      <div class="set-row"><div class="lbl"><div class="t">Reproducir el siguiente episodio automáticamente</div></div><div class="ctl">${sw('autoplayNext', s.autoplayNext)}</div></div>
-    </div>` : `<div class="set-group"><h3>Reproducción</h3>
-      ${window.api.platform === 'win32' ? `<div class="set-row"><div class="lbl"><div class="t">Dónde se reproduce</div><div class="d">Dentro de CineLocal, el vídeo ocupa la ventana de la app y al terminar vuelves a la ficha. En ventana aparte, mpv abre su propia ventana.</div></div>
-        <div class="ctl"><select class="select" data-set="playerMode">${opt([['embedded', 'Dentro de CineLocal'], ['window', 'En ventana aparte']], s.playerMode || 'embedded')}</select></div></div>` : ''}
-      <div class="set-row"><div class="lbl"><div class="t">Interfaz del reproductor</div><div class="d">La moderna es al estilo de Netflix: al mover el ratón aparecen el botón grande de pausa, la barra de tiempo con miniaturas y los controles de audio, subtítulos y episodios. La clásica usa tu propia configuración de mpv.</div></div>
-        <div class="ctl"><select class="select" data-set="playerUi">${opt([['modern', 'Moderna'], ['classic', 'Clásica de mpv']], s.playerUi || 'modern')}</select></div></div>
-      <div class="set-row"><div class="lbl"><div class="t">Reproductor a pantalla completa</div></div><div class="ctl">${sw('playerFullscreen', s.playerFullscreen)}</div></div>
-      <div class="set-row"><div class="lbl"><div class="t">Reproducir el siguiente episodio automáticamente</div></div><div class="ctl">${sw('autoplayNext', s.autoplayNext)}</div></div>
-      ${window.api.platform !== 'win32' || s.playerMode === 'window' ? `<div class="set-row"><div class="lbl"><div class="t">Minimizar CineLocal al reproducir</div></div><div class="ctl">${sw('minimizeOnPlay', s.minimizeOnPlay)}</div></div>` : ''}
-      <div class="set-row"><div class="lbl"><div class="t">Reproductor mpv</div>
-        <div class="d">${S.lib.mpv ? `Detectado: ${esc(S.lib.mpv)}` : 'No encontrado. <a data-action="mpv-help">Cómo instalarlo</a>'}</div></div>
-        <div class="ctl"><span class="status-pill ${S.lib.mpv ? 'ok' : 'bad'}">${S.lib.mpv ? 'Listo' : 'No encontrado'}</span><button class="btn btn-ghost btn-sm" data-action="pick-mpv">Seleccionar mpv.exe</button></div></div>
-      <div class="set-row"><div class="lbl"><div class="t">Argumentos extra de mpv</div><div class="d">Avanzado. Ej.: <code>--volume=80 --sub-scale=1.1</code></div></div>
-        <div class="ctl"><input class="input" data-set-text="extraMpvArgs" value="${esc(s.extraMpvArgs)}" placeholder="--opcion=valor"></div></div>
-    </div>`}
-
-    <div class="set-group" id="platforms"><h3>Mis plataformas</h3>
-      ${platformsSettingsHTML()}
-    </div>
-
-    ${WEB ? '' : `<div class="set-group" id="letterboxd"><h3>Letterboxd</h3>
+    <div class="set-group" id="letterboxd"><h3>Letterboxd</h3>
       ${letterboxdSettingsHTML(s, sw)}
-    </div>`}
+    </div>
 
     ${!WEB && isAdmin() ? `<div class="set-group"><h3>Descargas (eMule)</h3>
       ${emuleSettingsHTML(s, sw)}
     </div>` : ''}
 
-    ${window.api.platform === 'win32' ? `<div class="set-group" id="discord"><h3>Discord</h3>
+    ${!WEB && window.api.platform === 'win32' ? `<div class="set-group" id="discord"><h3>Discord</h3>
       ${discordSettingsHTML(s, sw)}
-    </div>
+    </div>` : ''}
 
-    ` : ''}${WEB ? '' : `<div class="set-group"><h3>Aplicación</h3>
-      <div class="set-row"><div class="lbl"><div class="t">Iniciar en pantalla completa</div><div class="d">Pulsa F11 en cualquier momento para entrar o salir.</div></div><div class="ctl">${sw('startFullscreen', s.startFullscreen)}</div></div>
-      <div class="set-row"><div class="lbl"><div class="t">Pantalla completa ahora</div></div><div class="ctl"><button class="btn btn-ghost btn-sm" data-action="fullscreen">Alternar (F11)</button></div></div>
-    </div>
-
-    <div class="set-group" id="updates"><h3>Actualizaciones</h3>
+    ${WEB ? '' : `<div class="set-group" id="updates"><h3>Actualizaciones</h3>
       ${updateSettingsHTML(s, sw)}
     </div>`}
   </div>`;
@@ -2050,24 +2032,6 @@ function emuleSettingsHTML(s, sw) {
       <div class="ctl"><button class="btn btn-ghost btn-sm" data-action="emule-launch">Abrir eMule</button><button class="btn btn-ghost btn-sm" data-action="pick-emule">Seleccionar emule.exe</button></div></div>`;
 }
 
-function platformsSettingsHTML() {
-  const mine = S.settings.myProviders || [];
-  const countries = [['ES', 'España'], ['MX', 'México'], ['AR', 'Argentina'], ['CO', 'Colombia'], ['CL', 'Chile'], ['PE', 'Perú'], ['US', 'Estados Unidos'], ['GB', 'Reino Unido'], ['FR', 'Francia'], ['DE', 'Alemania'], ['IT', 'Italia'], ['PT', 'Portugal']];
-  const region = S.settings.region || 'ES';
-  const head = `<div class="set-row"><div class="lbl"><div class="t">País</div><div class="d">Las plataformas y su catálogo cambian según el país.</div></div>
-      <div class="ctl"><select class="select" data-set="region">${countries.map(([k, l]) => `<option value="${k}" ${k === region ? 'selected' : ''}>${l}</option>`).join('')}</select></div></div>
-    <div class="set-row"><div class="lbl"><div class="t">Plataformas que tienes contratadas</div>
-    <div class="d">En “Dónde verla” se destacarán y tendrán un enlace para abrir la película en ellas.${mine.length ? ` Seleccionadas: ${mine.map(m => esc(m.name)).join(', ')}.` : ''}</div></div></div>`;
-  if (!S.lib.hasKey) return head + '<p class="filmo-note" style="margin:0 0 16px">Necesita la API key de TMDB.</p>';
-  if (!S.providerList) { loadProviderList(); return head + '<p class="filmo-note" style="margin:0 0 16px">Cargando plataformas…</p>'; }
-  if (S.providerList.error) return head + `<p class="filmo-note" style="margin:0 0 16px;color:#f87171">${esc(S.providerList.error)}</p>`;
-  const all = S.providerList.list;
-  const ids = new Set(mine.map(m => m.id));
-  const shown = S.allProviders ? all : all.filter((p, i) => i < 24 || ids.has(p.id));
-  return head + `<div class="plat-grid">${shown.map(p => `<button class="plat ${ids.has(p.id) ? 'on' : ''}" data-action="toggle-provider" data-id="${p.id}" data-name="${esc(p.name)}" title="${esc(p.name)}">
-      ${p.logo ? `<img loading="lazy" src="${esc(p.logo)}" alt="">` : `<i class="prov-ph">${esc(p.name[0])}</i>`}<span>${esc(p.name)}</span><i class="plat-check">${I.check}</i></button>`).join('')}</div>
-    ${all.length > shown.length || S.allProviders ? `<button class="link-btn plat-more" data-action="all-providers">${S.allProviders ? 'Mostrar sólo las principales' : `Ver todas (${all.length})`}</button>` : ''}`;
-}
 function lbStatusHTML() {
   const lb = S.lb, st = lb.status || {};
   if (st.running) return `<span class="status-pill"><span class="spinner sm"></span>${esc(st.text || 'Sincronizando…')}</span>`;
@@ -2078,17 +2042,19 @@ function lbStatusHTML() {
     + (n(f => !f.tmdbId) ? ` · ${n(f => !f.tmdbId)} sin identificar` : '');
 }
 function letterboxdSettingsHTML(s, sw) {
-  return `<div class="set-row"><div class="lbl"><div class="t">Usuario de Letterboxd</div>
+  return `${WEB ? `<div class="set-row"><div class="lbl"><div class="t">Tu Letterboxd en CineLocal</div>
+      <div class="d">Películas vistas, notas, “me gusta” y watchlist. Se sincroniza solo desde la app de escritorio (con tu usuario de Letterboxd); aquí también puedes subir la exportación .zip.</div></div></div>`
+    : `<div class="set-row"><div class="lbl"><div class="t">Usuario de Letterboxd</div>
       <div class="d">Se lee tu perfil público: películas vistas, tus notas, los “me gusta” y la watchlist. Al abrir CineLocal se añade lo último que hayas visto.</div></div>
       <div class="ctl"><input class="input" data-set-text="lbUser" value="${esc(s.lbUser || '')}" placeholder="tu_usuario" spellcheck="false" style="min-width:200px">
-      <button class="btn btn-ghost btn-sm" data-action="lb-sync" ${s.lbUser && !S.lb.status?.running ? '' : 'disabled'}>Sincronizar ahora</button></div></div>
+      <button class="btn btn-ghost btn-sm" data-action="lb-sync" ${s.lbUser && !S.lb.status?.running ? '' : 'disabled'}>Sincronizar ahora</button></div></div>`}
     <div class="set-row"><div class="lbl"><div class="t">Marcar como vistas las que has visto en Letterboxd</div>
       <div class="d">Las películas de la biblioteca que tienes vistas en Letterboxd se marcan como vistas en CineLocal (en tu usuario), sin tocar las que tienen progreso. Si desmarcas una, no se vuelve a marcar.</div></div>
       <div class="ctl">${sw('lbMarkWatched', s.lbMarkWatched !== false)}</div></div>
     <div class="set-row"><div class="lbl"><div class="t">Estado</div><div class="d" id="lbStatus">${lbStatusHTML()}</div></div>
       <div class="ctl">${S.lb.syncedAt ? '<button class="btn btn-ghost btn-sm" data-action="lb-clear">Borrar datos</button>' : ''}</div></div>
     <div class="set-row"><div class="lbl"><div class="t">Importar la exportación de Letterboxd</div>
-      <div class="d">Alternativa si la lectura del perfil falla: en Letterboxd, <a data-url="https://letterboxd.com/settings/data/">Settings → Data → Export your data</a>, y elige aquí el .zip descargado.</div></div>
+      <div class="d">${WEB ? 'En' : 'Alternativa si la lectura del perfil falla: en'} Letterboxd, <a data-url="https://letterboxd.com/settings/data/">Settings → Data → Export your data</a>, y elige aquí el .zip descargado.</div></div>
       <div class="ctl"><button class="btn btn-ghost btn-sm" data-action="lb-import" ${S.lb.status?.running ? 'disabled' : ''}>Elegir .zip</button></div></div>`;
 }
 function paintLbStatus() {
@@ -2116,18 +2082,20 @@ function discordStatusHTML() {
   }
 }
 function discordSettingsHTML(s, sw) {
-  const id = s.discordClientId || '';
+  if (!s.discordClientId) return `<div class="set-row"><div class="lbl"><div class="t">Mostrar en Discord lo que estoy viendo</div>
+      <div class="d">Un administrador tiene que configurar antes la aplicación de Discord en sus Ajustes.</div></div></div>`;
   return `<div class="set-row"><div class="lbl"><div class="t">Mostrar en Discord lo que estoy viendo</div>
       <div class="d">Mientras reproduces, tu perfil de Discord muestra «Viendo CineLocal» con el título, el póster y el tiempo que queda. Discord tiene que estar abierto en este PC.</div></div>
       <div class="ctl">${sw('discordEnabled', s.discordEnabled)}</div></div>
-    <div class="set-row"><div class="lbl"><div class="t">ID de la aplicación de Discord</div>
-      <div class="d">Crea una aplicación llamada «CineLocal» en <a data-url="https://discord.com/developers/applications">discord.com/developers/applications</a> y copia aquí su <i>Application ID</i> (General Information). El nombre de la aplicación es lo que aparece después de «Viendo».</div></div>
-      <div class="ctl"><input class="input" data-discord-id value="${esc(id)}" placeholder="123456789012345678" inputmode="numeric" spellcheck="false" style="min-width:220px">
-      <button class="btn btn-ghost btn-sm" data-action="discord-test">Probar</button></div></div>
-    <div class="set-row"><div class="lbl"><div class="t">Modo discreto</div>
-      <div class="d">Sólo «Viendo una película» o «Viendo una serie»: sin título, póster ni enlaces.</div></div>
-      <div class="ctl">${sw('discordDiscreet', s.discordDiscreet)}</div></div>
-    <div class="set-row"><div class="lbl"><div class="t">Estado</div><div class="d" id="discordStatus">${discordStatusHTML()}</div></div></div>`;
+    ${s.discordEnabled ? `<div class="set-row"><div class="lbl"><div class="t">Estado</div><div class="d" id="discordStatus">${discordStatusHTML()}</div></div></div>` : ''}`;
+}
+/** Administradores: la aplicación de Discord con la que se muestra a todos lo que ven */
+function discordAdminHTML(s) {
+  return `<div class="set-row"><div class="lbl"><div class="t">ID de la aplicación de Discord</div>
+      <div class="d">Para que cada usuario pueda mostrar en Discord lo que ve (lo activa en sus Ajustes de la app de escritorio). Crea una aplicación llamada «CineLocal» en <a data-url="https://discord.com/developers/applications">discord.com/developers/applications</a> y copia aquí su <i>Application ID</i>.</div></div>
+      <div class="ctl"><input class="input" data-discord-id value="${esc(s.discordClientId || '')}" placeholder="123456789012345678" inputmode="numeric" spellcheck="false" style="min-width:220px">
+      ${WEB ? '' : '<button class="btn btn-ghost btn-sm" data-action="discord-test">Probar</button>'}</div></div>
+    ${WEB ? '' : `<div class="set-row"><div class="lbl"><div class="t">Prueba</div><div class="d" id="discordStatus">${discordStatusHTML()}</div></div></div>`}`;
 }
 /** CineLocal Server como origen de la biblioteca: el NAS por internet, sin VPN */
 function nasStatePill() {
@@ -2847,7 +2815,8 @@ document.addEventListener('click', async (e) => {
       if (r.ok) toast('Letterboxd sincronizado', 'ok'); else toast(r.error, 'error');
     } else if (a === 'lb-import') {
       const r = await window.api.letterboxd.importZip();
-      if (r.ok) toast('Exportación de Letterboxd importada', 'ok'); else if (!r.canceled) toast(r.error, 'error');
+      if (r.started) toast('Exportación subida: se está emparejando con TMDB; puede tardar unos minutos');
+      else if (r.ok) toast('Exportación de Letterboxd importada', 'ok'); else if (!r.canceled) toast(r.error, 'error');
     } else if (a === 'lb-clear') {
       if (await confirmModal('Borrar datos de Letterboxd', 'Se quitarán tus notas y tu watchlist de CineLocal. Lo que ya está marcado como visto se mantiene.', 'Borrar')) {
         setLb(await window.api.letterboxd.clear()); render(true);
@@ -2912,7 +2881,6 @@ document.addEventListener('change', (e) => {
   else if (t.dataset.set) {
     const v = t.type === 'checkbox' ? t.checked : t.value;
     saveSetting(t.dataset.set, v).then(() => {
-      if (t.dataset.set === 'startFullscreen') window.api.setFullscreen(v);
       if (t.dataset.set === 'singleFileFolderAsMovie') window.api.getLibrary().then(l => { setLib(l); });
     });
   } else if ('discordId' in t.dataset) {

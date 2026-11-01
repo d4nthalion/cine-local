@@ -26,7 +26,7 @@
   // eventos en vivo del servidor (biblioteca, metadatos, progreso desde otro dispositivo…)
   function connect() {
     const es = new EventSource('/api/events');
-    for (const ev of ['meta:progress', 'progress:updated', 'toast', 'library:new', 'requests:updated']) {
+    for (const ev of ['meta:progress', 'progress:updated', 'toast', 'library:new', 'requests:updated', 'letterboxd:update', 'letterboxd:status']) {
       es.addEventListener(ev, e => emit(ev, JSON.parse(e.data)));
     }
     es.addEventListener('library:changed', reloadLibrary);
@@ -98,9 +98,26 @@
       results: async () => [], download: async () => true, addLink: async () => true, op: async () => true, pickExe: async () => null,
       onUpdate: noop()
     },
+    // Letterboxd guardado en el servidor (server/letterboxd.js): lo sube la app de escritorio o la exportación ZIP de aquí
     letterboxd: {
-      get: async () => ({ user: '', films: [], status: {} }), sync: async () => ({ ok: false }), importZip: async () => ({ ok: false, canceled: true }),
-      clear: async () => ({ user: '', films: [], status: {} }), onUpdate: noop(), onStatus: noop()
+      get: () => get('/api/letterboxd'),
+      sync: async () => ({ ok: false, error: 'Desde la web no se puede leer letterboxd.com: sincroniza en la app de escritorio o sube la exportación .zip' }),
+      importZip: () => new Promise(resolve => {
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = '.zip,application/zip';
+        input.onchange = async () => {
+          const file = input.files[0];
+          if (!file) return resolve({ ok: false, canceled: true });
+          const res = await fetch('/api/letterboxd/import', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/zip', 'X-CineLocal': '1' }, body: file }).catch(() => null);
+          const data = await res?.json().catch(() => null);
+          resolve(res?.ok ? { ok: true, started: true } : { ok: false, error: data?.error || 'No se pudo subir el archivo' });
+        };
+        input.addEventListener('cancel', () => resolve({ ok: false, canceled: true }));
+        input.click();
+      }),
+      clear: () => post('/api/letterboxd/clear'),
+      onUpdate: on('letterboxd:update'), onStatus: on('letterboxd:status')
     },
     discord: { status: async () => ({}), test: async () => ({ ok: false }), onStatus: noop() },
     update: { status: async () => ({ state: 'disabled' }), check: async () => ({ state: 'disabled' }), install: async () => {}, openRelease: async () => {}, onStatus: noop() },

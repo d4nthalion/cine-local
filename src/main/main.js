@@ -40,19 +40,18 @@ const DEFAULT_SETTINGS = {
   nasUser: '',                   // usuario del NAS (net use): para leer la biblioteca local y copiar ahí las descargas
   nasPasswordEnc: '',            // contraseña cifrada con safeStorage (nunca se envía a la ventana)
   lbUser: '',                    // usuario de Letterboxd
-  lbMarkWatched: true,           // marcar como vistas las películas que ya has visto en Letterboxd
   autoUpdate: true,              // buscar actualizaciones al abrir (se descargan solas y se instalan al cerrar)
   discordEnabled: false,         // mostrar en Discord lo que estás viendo (Rich Presence)
-  discordClientId: '',           // ID de la aplicación creada en discord.com/developers
   discordDiscreet: false,        // sin título ni póster: «Viendo una película» / «Viendo una serie»
   remoteUrl: '',                 // CineLocal Server: https://cine.dominio.com
   remoteUser: '',
   remoteTokenEnc: '',            // token de la sesión, cifrado (la contraseña no se guarda)
   requestsSeen: {}               // peticiones propias: hasta cuándo se ha avisado de las resueltas, por usuario
 };
-// ajustes que guarda el servidor (los de la biblioteca y TMDB sólo los cambia un administrador)
+// ajustes que guarda el servidor (los de la biblioteca, TMDB y Discord sólo los cambia un administrador)
 const SERVER_KEYS = new Set(['libraryPath', 'extraLibraryPaths', 'tmdbKey', 'metaLang', 'audioLang', 'subLang', 'subMode',
-  'autoplayNext', 'autoWatch', 'singleFileFolderAsMovie', 'libraryLayouts', 'myProviders', 'region', 'userMetaLang']);
+  'autoplayNext', 'autoWatch', 'singleFileFolderAsMovie', 'libraryLayouts', 'myProviders', 'region', 'userMetaLang',
+  'lbMarkWatched', 'discordClientId']);
 
 // ---------- persistencia sencilla en JSON ----------
 function store(name, fallback) {
@@ -234,9 +233,11 @@ async function startSession() {
   if (!api().ready) { me = null; serverSettings = {}; remoteView = null; emuleService.restart(); return; }
   me = await api().get('/api/me').catch(() => me);
   serverSettings = await api().get('/api/settings').catch(() => serverSettings);
+  discord.configure(discordConfig());
   await remoteFetch();
   emuleService.restart();
   send('library:updated', view());
+  await pullLetterboxd();
   markLetterboxdWatched();
   checkRequests();
 }
@@ -426,7 +427,8 @@ const discord = new DiscordPresence({
   // imágenes subidas a la aplicación de Discord (endpoint público): ¿está el icono «cinelocal»?
   fetchAssets: id => net.fetch(`https://discord.com/api/v10/oauth2/applications/${id}/assets`).then(r => r.ok ? r.json() : [])
 });
-const discordConfig = (s = settings.data) => ({ enabled: s.discordEnabled, clientId: s.discordClientId, discreet: s.discordDiscreet });
+// el ID de la aplicación de Discord es del servidor (lo pone un administrador); cada uno decide si lo activa
+const discordConfig = (s = settings.data) => ({ enabled: s.discordEnabled, clientId: serverSettings.discordClientId || '', discreet: s.discordDiscreet });
 discord.configure(discordConfig());
 discord.on('status', st => send('discord:status', st));
 // al empezar, pausar o reanudar, saltar, cambiar de capítulo y cada 5 s (sólo se envía a Discord si cambia algo)
@@ -597,7 +599,24 @@ const letterboxd = new LetterboxdService({
   }
 });
 letterboxd.on('status', st => send('letterboxd:status', st));
-letterboxd.on('updated', () => { send('letterboxd:update', letterboxd.snapshot()); markLetterboxdWatched(); });
+letterboxd.on('updated', () => { send('letterboxd:update', letterboxd.snapshot()); markLetterboxdWatched(); pushLetterboxd(); });
+
+/**
+ * Letterboxd también se guarda en el servidor (server/letterboxd.js), para la web y los otros PCs: lo sincronizado
+ * aquí se sube, y al abrir se baja si allí hay algo más nuevo (p. ej. la exportación ZIP subida desde la web).
+ */
+function pushLetterboxd() {
+  if (localOn() || !api().ready) return;
+  const { user, films, ids, syncedAt, fullAt, source } = lbStore.data;
+  api().post('/api/letterboxd/upload', { user, films, ids, syncedAt, fullAt, source }).catch(e => console.error('Letterboxd (subir):', e.message));
+}
+async function pullLetterboxd() {
+  if (localOn() || !api().ready) return;
+  const r = await api().get('/api/letterboxd?raw=1').catch(() => null);
+  if (!r || !(r.syncedAt > (lbStore.data.syncedAt || 0))) return;
+  lbStore.data = { ...lbStore.data, user: r.user, films: r.films || {}, ids: { ...(lbStore.data.ids || {}), ...(r.ids || {}) }, syncedAt: r.syncedAt, fullAt: r.fullAt, source: r.source };
+  send('letterboxd:update', letterboxd.snapshot());
+}
 
 /**
  * Las películas de la biblioteca que ya has visto en Letterboxd se marcan como vistas en tu usuario (del servidor o de
@@ -608,7 +627,7 @@ let lbMarkTimer = null;
 function markLetterboxdWatched() {
   clearTimeout(lbMarkTimer);
   lbMarkTimer = setTimeout(async () => {
-    if (settings.data.lbMarkWatched === false || !api().ready || !remoteView) return;
+    if (playSettings().lbMarkWatched === false || !api().ready || !remoteView) return;
     const seen = new Set(letterboxd.snapshot().films.filter(f => f.watched && f.tmdbId).map(f => f.tmdbId));
     if (!seen.size) return;
     const account = localOn() ? 'local' : `${settings.data.remoteUrl}|${(settings.data.remoteUser || '').toLowerCase()}`;
@@ -677,8 +696,8 @@ ipcMain.handle('settings:set', async (_e, patch) => {
     if (lbStore.data.user && lbStore.data.user !== s.lbUser) letterboxd.reset();
     if (s.lbUser) letterboxd.sync(s.lbUser, { full: true }).catch(() => {});
   }
-  if (before.lbMarkWatched === false && s.lbMarkWatched !== false) markLetterboxdWatched();
-  if (['discordEnabled', 'discordClientId', 'discordDiscreet'].some(k => before[k] !== s[k])) discord.configure(discordConfig(s));
+  if (toServer.lbMarkWatched === true) markLetterboxdWatched();
+  if (['discordEnabled', 'discordDiscreet'].some(k => before[k] !== s[k]) || 'discordClientId' in toServer) discord.configure(discordConfig(s));
   return publicSettings();
 });
 // Carpeta del NAS para eMule: inicia sesión con el usuario escrito (contraseña vacía = la guardada) y comprueba que se ve

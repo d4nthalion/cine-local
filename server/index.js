@@ -7,6 +7,7 @@ const zlib = require('zlib');
 const { Library } = require('./library');
 const { Auth } = require('./auth');
 const { Requests } = require('./requests');
+const { LetterboxdUsers } = require('./letterboxd');
 const { AccessLog, clientOf } = require('./accesslog');
 const media = require('./media');
 const { store } = require('./store');
@@ -39,6 +40,7 @@ const auth = new Auth({
 });
 if (auth.devUser) console.warn(`¡Atención! CINELOCAL_AUTH=none: no se pide contraseña (usuario «${auth.devUser}»). Sólo para desarrollo.`);
 const requests = new Requests(DATA);
+const lbUsers = new LetterboxdUsers(DATA, library);
 const access = new AccessLog(DATA, { months: +env.CINELOCAL_LOG_MONTHS || 12 });
 const introDb = new IntroDB({ fetch: globalThis.fetch, store: store(DATA, 'introdb.json', { entries: {} }), userAgent: `CineLocal-Server/${VERSION}` });
 
@@ -312,6 +314,36 @@ route('GET', '/api/requests', (req, res, { user }) => json(res, 200, requestsVie
 // campana: peticiones propias resueltas y novedades de la biblioteca
 route('GET', '/api/notifications', (req, res, { user }) => json(res, 200, library.notifications(user, requests.list(user, false))));
 route('POST', '/api/notifications/seen', (req, res, { user }) => json(res, 200, { seenAt: library.notificationsSeen(user) }));
+// ---------- Letterboxd de cada usuario (server/letterboxd.js) ----------
+const sameUser = name => u => u.toLowerCase() === name;
+lbUsers.on('status', (name, st) => sendTo(sameUser(name), 'letterboxd:status', () => st));
+lbUsers.on('updated', name => {
+  sendTo(sameUser(name), 'letterboxd:update', () => lbUsers.snapshot(name));
+  const n = lbUsers.markWatched(name);
+  if (!n) return;
+  const prog = library.user(name).data.progress;
+  sendTo(sameUser(name), 'progress:updated', () => prog);
+  sendTo(sameUser(name), 'toast', () => ({ type: 'ok', text: `Letterboxd: ${n === 1 ? '1 película marcada como vista' : `${n} películas marcadas como vistas`}` }));
+});
+/** Cuerpo binario (la exportación ZIP de Letterboxd) */
+function readRaw(req, limit) {
+  return new Promise((resolve, reject) => {
+    let size = 0; const chunks = [];
+    req.on('data', c => { size += c.length; if (size > limit) { reject(httpError(413, 'El archivo es demasiado grande')); req.destroy(); } else chunks.push(c); });
+    req.on('end', () => resolve(Buffer.concat(chunks)));
+    req.on('error', reject);
+  });
+}
+route('GET', '/api/letterboxd', (req, res, { user, q }) => json(res, 200, q.get('raw') === '1' ? lbUsers.raw(user) : lbUsers.snapshot(user)));
+route('POST', '/api/letterboxd/upload', async (req, res, { user }) => json(res, 200, lbUsers.upload(user, await readBody(req, 40 * 1024 * 1024))));
+route('POST', '/api/letterboxd/import', async (req, res, { user }) => {
+  const buf = await readRaw(req, 60 * 1024 * 1024);
+  if (buf.length < 22 || buf.readUInt32LE(0) !== 0x04034b50) throw httpError(400, 'No es un archivo .zip');
+  if (lbUsers.service(user).job) throw httpError(409, 'Ya se está importando');
+  lbUsers.import(user, buf).catch(() => {});   // el resultado llega por «letterboxd:update» / «letterboxd:status»
+  json(res, 200, { ok: true });
+});
+route('POST', '/api/letterboxd/clear', (req, res, { user }) => json(res, 200, lbUsers.clear(user)));
 route('POST', '/api/requests', async (req, res, { user }) => {
   const b = await readBody(req, 16384);
   const admin = auth.isAdmin(user);
