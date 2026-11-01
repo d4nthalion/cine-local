@@ -55,8 +55,16 @@ img { display: block; }
 .brand { display: flex; align-items: center; gap: 10px; cursor: pointer; font-size: 21px; letter-spacing: -.02em; font-weight: 500; }
 .brand b { font-weight: 800; background: var(--grad); -webkit-background-clip: text; color: transparent; }
 .brand-mark { width: 30px; height: 30px; }
-.nav { display: flex; gap: 6px; }
+/* si no cabe, el menú se encoge y se desplaza de lado (rueda): ni se parte en dos líneas ni empuja los botones de
+   la derecha bajo los de Windows */
+.brand, .top-actions { flex: none; }
+.nav { display: flex; gap: 6px; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+.nav::-webkit-scrollbar { display: none; }
+.nav.more-right { -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 40px), transparent); }
+.nav.more-left { -webkit-mask-image: linear-gradient(to right, transparent, #000 40px); }
+.nav.more-left.more-right { -webkit-mask-image: linear-gradient(to right, transparent, #000 40px, #000 calc(100% - 40px), transparent); }
 .nav a {
+  flex: none; white-space: nowrap;
   padding: 8px 14px; border-radius: 999px; cursor: pointer;
   color: var(--text-2); font-weight: 500; transition: color .15s, background .15s;
 }
@@ -421,6 +429,10 @@ body.fullscreen #btnFullscreen .ico-enter { display: none; }
   .topbar { gap: 18px; }
   .search { width: 160px; }
   .search:focus-within { width: 220px; }
+}
+@media (max-width: 900px) {
+  .brand span { display: none; }
+  .search { width: 130px; }
 }
 
 /* aviso de novedades */

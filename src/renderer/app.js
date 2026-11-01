@@ -2986,6 +2986,21 @@ $('#searchInput').addEventListener('input', (e) => {
 });
 
 $('#view').addEventListener('scroll', onScroll, { passive: true });
+// menú de arriba en una ventana estrecha: la rueda lo desplaza de lado
+$('#nav').addEventListener('wheel', e => {
+  const n = e.currentTarget;
+  if (n.scrollWidth <= n.clientWidth || !e.deltaY) return;
+  n.scrollLeft += e.deltaY;
+  e.preventDefault();
+}, { passive: false });
+// difuminado en el lado por el que quedan más secciones
+const navEdges = () => {
+  const n = $('#nav');
+  n.classList.toggle('more-left', n.scrollLeft > 2);
+  n.classList.toggle('more-right', n.scrollLeft + n.clientWidth < n.scrollWidth - 2);
+};
+$('#nav').addEventListener('scroll', navEdges, { passive: true });
+new ResizeObserver(navEdges).observe($('#nav'));
 $('#btnScan').addEventListener('click', scanNow);
 $('#btnFullscreen').addEventListener('click', () => window.api.toggleFullscreen());
 
