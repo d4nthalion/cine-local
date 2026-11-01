@@ -109,6 +109,10 @@ fun SettingsScreen(nav: Nav) {
     var otp by remember { mutableStateOf("") }
     var needOtp by remember { mutableStateOf(false) }
     var serverTest by remember { mutableStateOf<Pair<Boolean, String>?>(null) }
+    val serverLang by repo.serverLang.collectAsStateWithLifecycle()
+    val me by repo.me.collectAsStateWithLifecycle()
+    val pendingRequests by repo.pendingRequests.collectAsStateWithLifecycle()
+    val connected = s.serverMode && s.serverToken.isNotBlank()
     val dirty = s != saved
     val scroll = rememberScrollState()
 
@@ -196,6 +200,16 @@ fun SettingsScreen(nav: Nav) {
                 Help("Si el PC usa una cuenta de Microsoft, el usuario es el correo de la cuenta y la contraseña la de Microsoft (no el PIN).", top = 6.dp)
             }
 
+            // con el servidor, las fichas son las suyas: sólo se elige en qué idioma verlas (igual en todas tus apps)
+            if (connected) {
+                Header("Idioma")
+                Group {
+                    Picker("Idioma de las fichas", listOf("" to "El de por defecto") + META_LANGS, serverLang?.userMetaLang.orEmpty()) { lang ->
+                        scope.launch { runCatching { repo.setUserMetaLang(lang) } }
+                    }
+                }
+                Help("Títulos, sinopsis y nombres de episodios. Sólo cambia para ti, y también en el PC y en la web.")
+            } else {
             Header("Metadatos · TMDB")
             Group {
                 Field("API key de TMDB", s.tmdbKey, "") { s = s.copy(tmdbKey = it.trim()) }
@@ -210,6 +224,7 @@ fun SettingsScreen(nav: Nav) {
                 Picker("Idioma de los metadatos", META_LANGS, s.metaLang) { s = s.copy(metaLang = it, region = it.substringAfter('-')) }
             }
             Help("Carátulas, sinopsis y reparto. La clave es gratuita: themoviedb.org → Ajustes → API. Sirve la clave v3 o el token de lectura v4.")
+            }
 
             Header("Reproducción")
             Group {
@@ -234,8 +249,18 @@ fun SettingsScreen(nav: Nav) {
 
             // con CineLocal Server, «Pedir descarga» va a Peticiones del servidor: ntfy sólo hace falta sin él
             if (s.serverMode) {
-                Header("Peticiones de descarga")
-                Help("Con CineLocal Server, “Pedir descarga” (en la watchlist y en la búsqueda de TMDB) llega a la pantalla de Peticiones del servidor y avisa a los administradores.")
+                Header("Peticiones")
+                if (connected) Group {
+                    ActionRow(if (me?.admin == true && pendingRequests > 0) "Ver peticiones · $pendingRequests pendientes" else "Ver peticiones") { nav.requests() }
+                    if (me?.admin == true) {
+                        Sep()
+                        ActionRow("Registro de actividad") { nav.access() }
+                    }
+                }
+                Help(
+                    if (me?.admin == true) "Como administrador ves las peticiones de todos (y las marcas como conseguidas o rechazadas) y el registro de lo que hace cada usuario."
+                    else "“Pedir descarga” (en la watchlist y en la búsqueda, películas y series) llega a Peticiones del servidor y avisa a los administradores; te avisaremos cuando esté."
+                )
             } else {
                 Header("Peticiones de descarga · ntfy")
                 Group {

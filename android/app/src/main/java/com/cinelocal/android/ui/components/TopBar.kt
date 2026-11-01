@@ -1,6 +1,7 @@
 package com.cinelocal.android.ui.components
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -22,6 +23,7 @@ import androidx.compose.material.icons.rounded.ArrowDownward
 import androidx.compose.material.icons.rounded.DownloadDone
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material.icons.rounded.Notifications
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -70,6 +72,7 @@ fun MainTopBar(nav: Nav, bgAlpha: Float = 1f, compactLogo: Boolean = false) {
             }
             BarIcon(Icons.Rounded.Search, "Buscar", onClick = nav::search)
             DownloadsIcon(nav)
+            BellIcon(nav)
             BarIcon(Icons.Rounded.Settings, "Ajustes", onClick = nav::settings)
         }
         OfflineBanner()
@@ -80,6 +83,20 @@ fun MainTopBar(nav: Nav, bgAlpha: Float = 1f, compactLogo: Boolean = false) {
                 color = CL.accent, trackColor = Color.Transparent, gapSize = 0.dp, drawStopIndicator = {}
             )
         }
+    }
+}
+
+/** Campana (con CineLocal Server): un punto si hay algo desde la última vez que se abrió */
+@Composable
+private fun BellIcon(nav: Nav) {
+    val repo = LocalContext.current.repo
+    val settings by repo.settings.flow.collectAsStateWithLifecycle()
+    val notifs by repo.notifs.collectAsStateWithLifecycle()
+    if (!settings.server) return
+    val unread = notifs?.let { n -> n.items.count { it.at > n.seenAt } } ?: 0
+    Box {
+        BarIcon(Icons.Rounded.Notifications, if (unread > 0) "Notificaciones, $unread sin ver" else "Notificaciones", onClick = nav::notifications)
+        if (unread > 0) Box(Modifier.align(Alignment.TopEnd).padding(top = 12.dp, end = 12.dp).size(8.dp).background(CL.accent, CircleShape))
     }
 }
 

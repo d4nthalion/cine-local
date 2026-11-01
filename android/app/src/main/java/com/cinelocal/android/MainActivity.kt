@@ -74,6 +74,16 @@ import com.cinelocal.android.ui.screens.HomeScreen
 import com.cinelocal.android.ui.screens.SearchScreen
 import com.cinelocal.android.ui.screens.SettingsScreen
 import com.cinelocal.android.ui.screens.WatchlistScreen
+import com.cinelocal.android.ui.screens.AccessScreen
+import com.cinelocal.android.ui.screens.DirectorScreen
+import com.cinelocal.android.ui.screens.DirectorsScreen
+import com.cinelocal.android.ui.screens.MovieTabs
+import com.cinelocal.android.ui.screens.NotificationsScreen
+import com.cinelocal.android.ui.screens.RequestsScreen
+import com.cinelocal.android.ui.screens.SagaScreen
+import com.cinelocal.android.ui.screens.SagasScreen
+import androidx.compose.material.icons.filled.CollectionsBookmark
+import androidx.compose.material.icons.outlined.CollectionsBookmark
 import com.cinelocal.android.ui.theme.CL
 import com.cinelocal.android.ui.theme.CineLocalTheme
 
@@ -131,6 +141,12 @@ class Nav(private val nav: NavHostController, private val ctx: android.content.C
     fun settings() = nav.navigate("settings")
     fun watchlist() = nav.navigate("watchlist")
     fun downloads() = nav.navigate("downloads") { launchSingleTop = true }
+    fun saga(id: Int) = nav.navigate("saga/$id")
+    fun directors() = nav.navigate("directors") { launchSingleTop = true }
+    fun director(name: String) = nav.navigate("director/" + android.net.Uri.encode(name))
+    fun notifications() = nav.navigate("notifications") { launchSingleTop = true }
+    fun requests() = nav.navigate("requests") { launchSingleTop = true }
+    fun access() = nav.navigate("access") { launchSingleTop = true }
     fun open(url: String) = ctx.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url)))
     fun tab(route: String) = nav.navigate(route) {
         popUpTo(nav.graph.findStartDestination().id) { saveState = true }
@@ -147,9 +163,11 @@ private val tabs = listOf(
     NavTab("home", "Inicio", Icons.Outlined.Home, Icons.Filled.Home),
     NavTab("movies", "Películas", Icons.Outlined.Movie, Icons.Filled.Movie),
     NavTab("series", "Series", Icons.Outlined.Tv, Icons.Filled.Tv),
+    NavTab("sagas", "Sagas", Icons.Outlined.CollectionsBookmark, Icons.Filled.CollectionsBookmark),
     NavTab("list", "Listas", Icons.Outlined.BookmarkBorder, Icons.Filled.Bookmark)
 )
-private val tabRoutes = tabs.map { it.route }.toSet()
+// Directores es una pestaña de Películas: con la barra de abajo y Películas marcada
+private val tabRoutes = tabs.map { it.route }.toSet() + "directors"
 private fun isTab(e: NavBackStackEntry) = e.destination.route in tabRoutes
 
 @Composable
@@ -202,7 +220,7 @@ private fun App() {
             }
         },
         bottomBar = {
-            if (route in tabRoutes) BottomNav(tabs, route) { nav.tab(it.route) }
+            if (route in tabRoutes) BottomNav(tabs, if (route == "directors") "movies" else route) { nav.tab(it.route) }
         }
     ) { pad ->
         NavHost(
@@ -227,7 +245,14 @@ private fun App() {
             }
         ) {
             composable("home") { HomeScreen(nav) }
-            composable("movies") { BrowseScreen(BrowseKind.MOVIES, nav) }
+            composable("movies") { BrowseScreen(BrowseKind.MOVIES, nav, tabs = { MovieTabs(0, nav) }) }
+            composable("directors") { DirectorsScreen(nav) }
+            composable("director/{name}") { entry -> DirectorScreen(entry.arguments?.getString("name").orEmpty(), nav) }
+            composable("sagas") { SagasScreen(nav) }
+            composable("saga/{id}") { entry -> SagaScreen(entry.arguments?.getString("id")?.toIntOrNull() ?: 0, nav) }
+            composable("notifications") { NotificationsScreen(nav) }
+            composable("requests") { RequestsScreen(nav) }
+            composable("access") { AccessScreen(nav) }
             composable("series") { BrowseScreen(BrowseKind.SERIES, nav) }
             composable("list") { ListsScreen(nav) }
             composable("search") { SearchScreen(nav) }

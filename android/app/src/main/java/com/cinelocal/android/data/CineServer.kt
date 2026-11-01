@@ -15,6 +15,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -130,9 +131,9 @@ class CineServer(url: String, private val token: String = "", private val http: 
      * Pide una película que no está en la biblioteca: llega a Peticiones del servidor y a los administradores
      * (server/requests.js). Si otro usuario ya la pidió, se suma a esa petición.
      */
-    fun createRequest(tmdbId: Int, title: String, year: Int?, poster: String?, note: String?) {
+    fun createRequest(tmdbId: Int, title: String, year: Int?, poster: String?, note: String?, type: String = "movie") {
         val entry = buildString {
-            append("{\"tmdb\":").append(tmdbId).append(",\"type\":\"movie\",\"title\":").append(json.encodeToString(title))
+            append("{\"tmdb\":").append(tmdbId).append(",\"type\":").append(json.encodeToString(type)).append(",\"title\":").append(json.encodeToString(title))
             year?.let { append(",\"year\":").append(it) }
             poster?.let { append(",\"poster\":").append(json.encodeToString(it)) }
             note?.let { append(",\"note\":").append(json.encodeToString(it)) }
@@ -145,13 +146,72 @@ class CineServer(url: String, private val token: String = "", private val http: 
         val id: String, val title: String, val year: Int? = null, val status: String, val resolvedAt: Long? = null,
         val reply: String? = null, val mine: Boolean = false,
         /** cuándo se pidió (o se volvió a pedir) y quién: para avisar a los administradores */
-        val at: Long = 0, val users: List<ReqUser> = emptyList()
+        val at: Long = 0, val users: List<ReqUser> = emptyList(),
+        val type: String = "movie", val tmdb: Int? = null, val poster: String? = null, val resolvedBy: String? = null
     )
-    @Serializable data class ReqUser(val user: String = "", val note: String? = null)
-    @Serializable private data class Reqs(val items: List<Req> = emptyList())
+    @Serializable data class ReqUser(val user: String = "", val note: String? = null, val at: Long = 0)
+    @Serializable data class Reqs(val items: List<Req> = emptyList(), val pending: Int = 0)
 
     /** Peticiones del usuario (un administrador recibe todas: `mine` dice cuáles son suyas) */
-    fun requests(): List<Req> = json.decodeFromString<Reqs>(request(Request.Builder().url("$base/api/requests").get().auth().build())).items
+    fun requests(): List<Req> = requestsView().items
+    fun requestsView(): Reqs = json.decodeFromString<Reqs>(get("/api/requests"))
+
+    /** cancel (la propia) · resolve con status done | rejected | pending y respuesta opcional · remove (administradores) */
+    fun requestOp(op: String, id: String, status: String? = null, reply: String? = null) {
+        val body = buildString {
+            append("{\"op\":").append(json.encodeToString(op)).append(",\"id\":").append(json.encodeToString(id))
+            status?.let { append(",\"status\":").append(json.encodeToString(it)) }
+            reply?.let { append(",\"reply\":").append(json.encodeToString(it)) }
+            append('}')
+        }
+        request(post("/api/requests", body))
+    }
+
+    // ---------------------------------------------------------------- sesión, ajustes, campana y registro
+
+    @Serializable data class Me(val user: String = "", val admin: Boolean = false)
+    fun me(): Me = json.decodeFromString(get("/api/me"))
+
+    /** Sus ajustes (los del servidor con sus preferencias encima): de aquí sólo se usa el idioma de las fichas */
+    @Serializable data class UserSettings(val metaLang: String = "es-ES", val userMetaLang: String = "")
+    fun userSettings(): UserSettings = json.decodeFromString(get("/api/settings"))
+    fun setUserMetaLang(lang: String) { request(post("/api/settings", """{"userMetaLang":${json.encodeToString(lang)}}""")) }
+
+    /** Campana: peticiones propias resueltas, novedades y lo que llega de tu watchlist (server/library.js notifications) */
+    @Serializable data class Notif(
+        val kind: String, val id: String, val at: Long, val title: String, val year: Int? = null, val type: String? = null,
+        val status: String? = null, val reply: String? = null, val poster: String? = null
+    )
+    @Serializable data class Notifs(val items: List<Notif> = emptyList(), val seenAt: Long = 0)
+    fun notifications(): Notifs = json.decodeFromString(get("/api/notifications"))
+    fun notificationsSeen() { request(post("/api/notifications/seen", "{}")) }
+
+    /** Registro de actividad (sólo administradores) */
+    @Serializable data class Access(
+        val at: Long, val kind: String, val user: String? = null, val title: String? = null, val file: String? = null,
+        val detail: String? = null, val client: String? = null, val ip: String? = null, val end: Long? = null,
+        val bytes: Long? = null, val live: Boolean = false
+    )
+    @Serializable data class AccessPage(val items: List<Access> = emptyList(), val total: Int = 0, val users: List<String> = emptyList())
+    fun access(days: Int, user: String, type: String): AccessPage {
+        val url = "$base/api/access".toHttpUrl().newBuilder()
+            .addQueryParameter("days", days.toString()).addQueryParameter("user", user).addQueryParameter("type", type).build()
+        return json.decodeFromString(request(Request.Builder().url(url).get().auth().build()))
+    }
+
+    /** Búsqueda en TMDB a través del servidor (con su clave): películas o series («series») */
+    @Serializable private data class Found(val id: Int, val title: String = "", val originalTitle: String? = null, val year: String? = null, val poster: String? = null)
+    fun searchMeta(type: String, query: String, year: Int?): List<Tmdb.SearchResult> {
+        val body = buildString {
+            append("{\"type\":").append(json.encodeToString(type)).append(",\"query\":").append(json.encodeToString(query))
+            year?.let { append(",\"year\":").append(it) }
+            append('}')
+        }
+        return json.decodeFromString(ListSerializer(Found.serializer()), request(post("/api/meta/search", body)))
+            .map { Tmdb.SearchResult(it.id, it.title, it.originalTitle, it.year?.toIntOrNull(), it.poster, null) }
+    }
+
+    private fun get(path: String) = request(Request.Builder().url(base + path).get().auth().build())
 
     fun identify(itemId: String, tmdbId: Int) {
         request(post("/api/meta/identify", """{"itemId":${json.encodeToString(itemId)},"tmdbId":$tmdbId}"""))

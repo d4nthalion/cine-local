@@ -88,8 +88,18 @@ data class Meta(
     val creators: String? = null,
     val cast: List<CastMember> = emptyList(),
     val trailer: String? = null,
-    val seasons: Map<Int, SeasonMeta> = emptyMap()
+    val seasons: Map<Int, SeasonMeta> = emptyMap(),
+    /** saga de TMDB a la que pertenece la película (Sagas) */
+    val collection: MetaCollection? = null,
+    /** directores con su foto (Directores) */
+    val directors: List<Person> = emptyList()
 )
+
+@Serializable
+data class MetaCollection(val id: Int, val name: String, val poster: String? = null, val backdrop: String? = null)
+
+@Serializable
+data class Person(val id: Int? = null, val name: String, val photo: String? = null)
 
 /** Metadatos guardados de un título. tmdbId == null: se buscó y no se encontró. */
 @Serializable

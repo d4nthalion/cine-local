@@ -23,7 +23,7 @@ import java.util.concurrent.TimeUnit
 
 /**
  * Aviso en el teléfono cuando se resuelve una petición propia (conseguida o rechazada) y, a los administradores,
- * cuando alguien pide algo, aunque la app esté cerrada:
+ * cuando alguien pide algo, y cuando llega algo de su watchlist, aunque la app esté cerrada:
  * WorkManager la comprueba en el servidor cada ~15 minutos (Android decide el momento exacto para ahorrar batería).
  */
 class RequestNotifier(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, params) {
@@ -36,16 +36,32 @@ class RequestNotifier(ctx: Context, params: WorkerParameters) : CoroutineWorker(
         // la primera vez sólo se apunta desde cuándo: no se avisa de lo resuelto antes de instalar esta versión
         val seen = prefs.getLong(SEEN, 0L)
         if (seen == 0L) { prefs.edit().putLong(SEEN, System.currentTimeMillis()).apply(); return Result.success() }
-        val list = try { CineServer(s.serverUrl, s.serverToken).requests() } catch (_: Exception) { return Result.success() }
+        val server = CineServer(s.serverUrl, s.serverToken)
+        val list = try { server.requests() } catch (_: Exception) { return Result.success() }
+        // lo que ha llegado a la biblioteca y estaba en su watchlist (de CineLocal o de Letterboxd)
+        val arrived = runCatching { server.notifications().items }.getOrDefault(emptyList()).filter { it.kind == "watchlist" && it.at > seen }
         val fresh = list.filter { it.mine && it.status != "pending" && (it.resolvedAt ?: 0) > seen }
         // a un administrador el servidor le da las de todos: las pendientes nuevas de otros, para avisarle
         val asked = list.filter { !it.mine && it.status == "pending" && it.at > seen }
-        if (fresh.isEmpty() && asked.isEmpty()) return Result.success()
+        if (fresh.isEmpty() && asked.isEmpty() && arrived.isEmpty()) return Result.success()
         ensureChannel(ctx)
         for (r in fresh) notify(ctx, r)
         for (r in asked) notifyAsked(ctx, r)
-        prefs.edit().putLong(SEEN, (fresh.map { it.resolvedAt ?: 0 } + asked.map { it.at }).max()).apply()
+        for (n in arrived) notifyArrived(ctx, n)
+        prefs.edit().putLong(SEEN, (fresh.map { it.resolvedAt ?: 0 } + asked.map { it.at } + arrived.map { it.at }).max()).apply()
         return Result.success()
+    }
+
+    /** Ha llegado a la biblioteca algo que estaba en su watchlist */
+    private fun notifyArrived(ctx: Context, n: CineServer.Notif) {
+        val name = n.title + (n.year?.let { " ($it)" } ?: "")
+        val b = NotificationCompat.Builder(ctx, CHANNEL)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentTitle("De tu watchlist: $name")
+            .setContentText("Ya está en la biblioteca")
+            .setAutoCancel(true)
+            .setContentIntent(openApp(ctx))
+        runCatching { NotificationManagerCompat.from(ctx).notify(("llega:" + n.id).hashCode(), b.build()) }
     }
 
     /** Administrador: alguien ha pedido algo */

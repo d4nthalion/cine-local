@@ -1,5 +1,7 @@
 package com.cinelocal.android.ui.screens
 
+import kotlinx.coroutines.launch
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
@@ -170,7 +172,7 @@ private fun searchText(t: Title): String {
 private sealed interface Online {
     val q: OnlineSearch.Query
     data class Loading(override val q: OnlineSearch.Query) : Online
-    data class Done(override val q: OnlineSearch.Query, val results: List<Tmdb.SearchResult>) : Online
+    data class Done(override val q: OnlineSearch.Query, val results: List<Tmdb.SearchResult>, val series: List<Tmdb.SearchResult> = emptyList()) : Online
     data class Failed(override val q: OnlineSearch.Query, val message: String) : Online
 }
 
@@ -185,18 +187,27 @@ private fun OnlineResults(query: String, titles: List<Title>, progress: Map<Stri
     val user by repo.userState.flow.collectAsStateWithLifecycle()
     val lbById by repo.lbById.collectAsStateWithLifecycle()
     var sheet by remember { mutableStateOf<LbEntry?>(null) }
+    var seriesSheet by remember { mutableStateOf<Tmdb.SearchResult?>(null) }
 
     val key = settings.tmdbKey.trim()
+    // con CineLocal Server se busca a través de él (su clave de TMDB), también series para pedirlas
+    val viaServer = settings.server
     val q = OnlineSearch.parse(query) ?: return
     var state by remember { mutableStateOf<Online?>(null) }
     // Cada tecla relanza el efecto, que cancela la búsqueda anterior y espera a que se deje de escribir
-    LaunchedEffect(q, key, settings.metaLang, settings.region) {
-        if (key.isEmpty()) return@LaunchedEffect
+    LaunchedEffect(q, key, settings.metaLang, settings.region, viaServer) {
+        if (key.isEmpty() && !viaServer) return@LaunchedEffect
         state = Online.Loading(q)
         delay(DEBOUNCE_MS)
         state = try {
-            val found = runInterruptible(Dispatchers.IO) { Tmdb(key, settings.metaLang, settings.region).search("movie", q.text, q.year) }
-            Online.Done(q, found.distinctBy { it.id }.take(OnlineSearch.LIMIT))
+            if (viaServer) {
+                val movies = repo.searchServer("movie", q.text, q.year)
+                val series = runCatching { repo.searchServer("series", q.text, q.year) }.getOrDefault(emptyList())
+                Online.Done(q, movies.distinctBy { it.id }.take(OnlineSearch.LIMIT), series.distinctBy { it.id }.take(OnlineSearch.LIMIT / 2))
+            } else {
+                val found = runInterruptible(Dispatchers.IO) { Tmdb(key, settings.metaLang, settings.region).search("movie", q.text, q.year) }
+                Online.Done(q, found.distinctBy { it.id }.take(OnlineSearch.LIMIT))
+            }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -204,7 +215,7 @@ private fun OnlineResults(query: String, titles: List<Title>, progress: Map<Stri
         }
     }
 
-    if (key.isEmpty()) {
+    if (key.isEmpty() && !viaServer) {
         EmptyState(
             "Sin resultados",
             "No hay nada en tu biblioteca que coincida con «$query». Con una API key de TMDB en Ajustes también se buscaría en TMDB para pedir la descarga."
@@ -225,11 +236,12 @@ private fun OnlineResults(query: String, titles: List<Title>, progress: Map<Stri
             "No hay nada en tu biblioteca que coincida con «$query» y la búsqueda en TMDB ha fallado.",
             error = true, detail = current.message
         )
-        is Online.Done -> if (current.results.isEmpty()) EmptyState(
+        is Online.Done -> if (current.results.isEmpty() && current.series.isEmpty()) EmptyState(
             "Sin resultados",
             "Ni en tu biblioteca ni en TMDB hay películas que coincidan con «$query». Prueba con otro título, un actor o un género."
         ) else {
             val owned = titles.filter { it.isMovie && it.meta?.tmdbId != null }.associateBy { it.meta!!.tmdbId }
+            val ownedSeries = titles.filter { !it.isMovie && it.meta?.tmdbId != null }.associateBy { it.meta!!.tmdbId }
             LazyVerticalGrid(
                 columns = GridCells.Adaptive(104.dp),
                 contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 24.dp),
@@ -270,8 +282,69 @@ private fun OnlineResults(query: String, titles: List<Title>, progress: Map<Stri
                         }
                     }
                 }
+                if (current.series.isNotEmpty()) {
+                    item(key = "series-head", span = { GridItemSpan(maxLineSpan) }) {
+                        Text(
+                            if (current.series.size == 1) "1 SERIE EN TMDB" else "${current.series.size} SERIES EN TMDB",
+                            Modifier.padding(top = 16.dp), style = MaterialTheme.typography.labelSmall, color = CL.text3
+                        )
+                    }
+                    gridItems(current.series, key = { "tv" + it.id }) { r ->
+                        Column {
+                            val t = ownedSeries[r.id]
+                            if (t != null) PosterCard(t, isWatched(t, progress), 0f, null, null) { nav.detail(t.id) }
+                            else {
+                                val e = LbEntry("tv:${r.id}", com.cinelocal.android.core.LbFilm(title = r.title, year = r.year), r.id, r.poster, r.title)
+                                MissingCard(e, null, e.key in user.requested) { seriesSheet = r }
+                            }
+                            Text(t?.name ?: r.title, Modifier.padding(top = 6.dp), style = MaterialTheme.typography.bodySmall, color = CL.text, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                            Text(listOfNotNull("Serie", (t?.year ?: r.year)?.toString()).joinToString(" · "), style = MaterialTheme.typography.labelMedium, color = CL.text3)
+                        }
+                    }
+                }
             }
         }
     }
     sheet?.let { RequestSheet(it, nav) { sheet = null } }
+    seriesSheet?.let { r -> SeriesRequestDialog(r, "tv:${r.id}" in user.requested) { seriesSheet = null } }
+}
+
+/** Pedir una serie que no tienes (con CineLocal Server), con una nota opcional */
+@Composable
+private fun SeriesRequestDialog(r: Tmdb.SearchResult, requested: Boolean, onDismiss: () -> Unit) {
+    val repo = LocalContext.current.repo
+    val scope = rememberCoroutineScope()
+    var note by remember { mutableStateOf("") }
+    var sending by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss, containerColor = CL.bg4, shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp), tonalElevation = 0.dp,
+        title = { Text("Pedir «${r.title}»" + (r.year?.let { " ($it)" } ?: ""), style = MaterialTheme.typography.headlineSmall, color = CL.text) },
+        text = {
+            Column {
+                Text(
+                    if (requested) "Ya la pediste: puedes volver a pedirla con otra nota." else "Llegará a Peticiones y avisará a los administradores; te avisaremos cuando esté.",
+                    style = MaterialTheme.typography.bodyMedium, color = CL.text2
+                )
+                androidx.compose.material3.OutlinedTextField(
+                    note, { note = it.take(300) }, Modifier.fillMaxWidth().padding(top = 12.dp),
+                    placeholder = { Text("Nota (opcional): temporadas, idioma…") },
+                    colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(focusedTextColor = CL.text, unfocusedTextColor = CL.text, focusedBorderColor = CL.accent, cursorColor = CL.accent)
+                )
+                error?.let { Text(it, Modifier.padding(top = 8.dp), style = MaterialTheme.typography.bodySmall, color = CL.error) }
+            }
+        },
+        confirmButton = {
+            com.cinelocal.android.ui.components.TextAction(if (sending) "Enviando…" else "Pedir", CL.accentText) {
+                if (!sending) {
+                    sending = true
+                    scope.launch {
+                        try { repo.requestSeries(r.id, r.title, r.year, r.poster, note); onDismiss() }
+                        catch (e: Exception) { error = e.message ?: e.javaClass.simpleName; sending = false }
+                    }
+                }
+            }
+        },
+        dismissButton = { com.cinelocal.android.ui.components.TextAction("Cancelar") { onDismiss() } }
+    )
 }

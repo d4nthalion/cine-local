@@ -269,6 +269,7 @@ class Repository(private val context: Context) {
         // lo visto sin conexión (descargado) sube ahora
         for ((k, v) in newer) syncProgress(k, v, force = true)
         userState.update { it.copy(favorites = r.favorites, lists = r.lists) }
+        loadServerExtras()
     }
 
     private fun location(s: Settings = settings.value): SmbLocation =
@@ -521,6 +522,57 @@ class Repository(private val context: Context) {
         )
         userState.update { it.copy(requested = it.requested + (e.key to System.currentTimeMillis())) }
     }
+
+    /** Pide una serie (sólo con CineLocal Server: va a su pantalla de Peticiones). Clave en requested: "tv:<id>" */
+    suspend fun requestSeries(tmdbId: Int, title: String, year: Int?, poster: String?, note: String?) = withContext(Dispatchers.IO) {
+        server().createRequest(tmdbId, title, year, poster, note?.takeIf { it.isNotBlank() }, type = "series")
+        userState.update { it.copy(requested = it.requested + ("tv:$tmdbId" to System.currentTimeMillis())) }
+        loadServerExtras()
+    }
+
+    // ---------------------------------------------------------------- CineLocal Server: quién soy, idioma, campana, peticiones y registro
+
+    /** Usuario de la sesión (si es administrador ve Peticiones de todos y el Registro) */
+    val me = MutableStateFlow<CineServer.Me?>(null)
+    /** Idioma de las fichas: el suyo (userMetaLang, vacío = el del servidor) y el del servidor */
+    val serverLang = MutableStateFlow<CineServer.UserSettings?>(null)
+    /** Campana: lo que hay y hasta cuándo lo ha visto */
+    val notifs = MutableStateFlow<CineServer.Notifs?>(null)
+    /** Peticiones pendientes (para los administradores) */
+    val pendingRequests = MutableStateFlow(0)
+
+    /** Tras cargar la biblioteca del servidor (en segundo plano: un fallo aquí no estropea la biblioteca) */
+    private fun loadServerExtras() {
+        if (!settings.value.server) return
+        val sv = server()
+        runCatching { me.value = sv.me() }
+        runCatching { serverLang.value = sv.userSettings() }
+        runCatching { notifs.value = sv.notifications() }
+        pendingRequests.value = if (me.value?.admin == true) runCatching { sv.requestsView().pending }.getOrDefault(0) else 0
+    }
+
+    suspend fun refreshServerExtras() = withContext(Dispatchers.IO) { loadServerExtras() }
+
+    /** Cambia el idioma de sus fichas (en el servidor: igual en todas sus apps) y vuelve a cargar la biblioteca */
+    suspend fun setUserMetaLang(lang: String) {
+        withContext(Dispatchers.IO) { server().setUserMetaLang(lang); serverLang.value = server().userSettings() }
+        scan()
+    }
+
+    /** La campana abierta: lo de hasta ahora queda visto (también en el escritorio y la web) */
+    suspend fun notifsSeen() = withContext(Dispatchers.IO) {
+        runCatching { server().notificationsSeen() }
+        notifs.value = notifs.value?.copy(seenAt = System.currentTimeMillis())
+    }
+
+    suspend fun requestsView() = withContext(Dispatchers.IO) { server().requestsView() }
+    suspend fun requestOp(op: String, id: String, status: String? = null, reply: String? = null) = withContext(Dispatchers.IO) {
+        server().requestOp(op, id, status, reply)
+        loadServerExtras()
+    }
+    suspend fun access(days: Int, user: String, type: String) = withContext(Dispatchers.IO) { server().access(days, user, type) }
+    /** Búsqueda en TMDB a través del servidor (no hace falta clave en el móvil) */
+    suspend fun searchServer(type: String, query: String, year: Int?) = withContext(Dispatchers.IO) { server().searchMeta(type, query, year) }
 
     suspend fun testNtfy(s: Settings) = withContext(Dispatchers.IO) {
         Ntfy(s.ntfyServer, s.ntfyTopic, s.ntfyToken).send("CineLocal", "Aviso de prueba: las peticiones de descarga llegarán aquí.", listOf("white_check_mark"))

@@ -55,7 +55,7 @@ enum class BrowseKind(val title: String) { MOVIES("Películas"), SERIES("Series"
 private enum class Seen(val label: String) { ALL("Todas"), UNSEEN("Sin ver"), SEEN("Vistas"), DOWNLOADED("Descargadas") }
 
 @Composable
-fun BrowseScreen(kind: BrowseKind, nav: Nav, header: (@Composable () -> Unit)? = null) {
+fun BrowseScreen(kind: BrowseKind, nav: Nav, header: (@Composable () -> Unit)? = null, tabs: (@Composable () -> Unit)? = null) {
     val repo = LocalContext.current.repo
     val titles by repo.titles.collectAsStateWithLifecycle()
     val progress by repo.progress.flow.collectAsStateWithLifecycle()
@@ -92,6 +92,7 @@ fun BrowseScreen(kind: BrowseKind, nav: Nav, header: (@Composable () -> Unit)? =
     Column(Modifier.fillMaxSize()) {
         MainTopBar(nav, compactLogo = true)
         ScreenTitle(kind.title, if (header != null) null else base.size)
+        tabs?.invoke()
         header?.invoke()
         if (base.isEmpty()) {
             if (onlyDownloaded) EmptyState("Nada descargado", "No tienes ${kind.title.lowercase()} descargadas para ver sin conexión.", "Ver todo") {
