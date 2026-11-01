@@ -36,9 +36,13 @@ android {
         release {
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-            // Sin la clave propia se firma con la de depuración, para poder probarla igualmente
-            signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.findByName("release")
         }
+    }
+    // sin la clave propia no se compila una release: firmada con otra no se instala encima de las anteriores
+    // (le pasó a la 0.12.1 y a la 0.13.0)
+    tasks.matching { it.name == "assembleRelease" || it.name == "bundleRelease" }.configureEach {
+        doFirst { if (releaseKeystore == null) throw GradleException("Falta la clave de releases: CINELOCAL_KEYSTORE en ~/.gradle/gradle.properties") }
     }
 
     applicationVariants.all {
