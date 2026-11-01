@@ -249,7 +249,8 @@ private fun OnlineResults(query: String, titles: List<Title>, progress: Map<Stri
                 verticalArrangement = Arrangement.spacedBy(12.dp),
                 modifier = Modifier.fillMaxSize()
             ) {
-                item(key = "head", span = { GridItemSpan(maxLineSpan) }) {
+                // sin películas (sólo series) no se pone «0 películas en TMDB»
+                if (current.results.isNotEmpty()) item(key = "head", span = { GridItemSpan(maxLineSpan) }) {
                     Column(Modifier.padding(top = 16.dp)) {
                         val n = current.results.size
                         val someOwned = current.results.any { it.id in owned }
@@ -284,10 +285,16 @@ private fun OnlineResults(query: String, titles: List<Title>, progress: Map<Stri
                 }
                 if (current.series.isNotEmpty()) {
                     item(key = "series-head", span = { GridItemSpan(maxLineSpan) }) {
-                        Text(
-                            if (current.series.size == 1) "1 SERIE EN TMDB" else "${current.series.size} SERIES EN TMDB",
-                            Modifier.padding(top = 16.dp), style = MaterialTheme.typography.labelSmall, color = CL.text3
-                        )
+                        Column(Modifier.padding(top = 16.dp)) {
+                            Text(
+                                if (current.series.size == 1) "1 SERIE EN TMDB" else "${current.series.size} SERIES EN TMDB",
+                                style = MaterialTheme.typography.labelSmall, color = CL.text3
+                            )
+                            if (current.results.isEmpty()) Text(
+                                "Toca una para pedir que la descarguen.", Modifier.padding(top = 4.dp),
+                                style = MaterialTheme.typography.bodyMedium, color = CL.text2
+                            )
+                        }
                     }
                     gridItems(current.series, key = { "tv" + it.id }) { r ->
                         Column {

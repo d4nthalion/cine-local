@@ -212,7 +212,7 @@ class Library extends EventEmitter {
       if (!(it.added > since)) continue;
       const m = this.metaOf(it.id, lang);
       const tmdb = this.metadata.data[it.id]?.tmdbId;
-      out.push({ kind: tmdb && wanted.has(`${it.type}:${tmdb}`) ? 'watchlist' : 'new', id: it.id, at: it.added, type: it.type, title: m?.title || it.title, year: m?.year || it.year || null, poster: small(this.custom.data[it.id]?.poster?.startsWith('https:') ? this.custom.data[it.id].poster : m?.poster) });
+      out.push({ kind: tmdb && wanted.has(`${it.type}:${tmdb}`) ? 'watchlist' : 'new', id: it.id, at: Math.round(it.added), type: it.type, title: m?.title || it.title, year: m?.year || it.year || null, poster: small(this.custom.data[it.id]?.poster?.startsWith('https:') ? this.custom.data[it.id].poster : m?.poster) });
     }
     out.sort((a, b) => b.at - a.at);
     return { items: out.slice(0, 40), seenAt: prefs.notifSeenAt };
