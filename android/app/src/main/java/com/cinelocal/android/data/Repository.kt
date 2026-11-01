@@ -243,16 +243,21 @@ class Repository(private val context: Context) {
     }
 
     private val progressSent = HashMap<String, Long>()
+    /** Archivos que ya se han mandado como vistos: durante los créditos no se vuelven a mandar cada 10 s */
+    private val watchedSent: MutableSet<String> = java.util.Collections.synchronizedSet(HashSet())
 
     /** Envía el progreso al servidor como mucho cada 10 s por archivo (siempre si se ha terminado) */
     private fun syncProgress(path: String, p: Progress, force: Boolean) {
         if (!settings.value.server) return
+        if (!p.watched) watchedSent.remove(path)
+        else if (!watchedSent.add(path)) return
         val now = System.currentTimeMillis()
-        if (!force && now - (progressSent[path] ?: 0) < 10_000) return
+        if (!force && !p.watched && now - (progressSent[path] ?: 0) < 10_000) return
         progressSent[path] = now
         val id = serverId(path) ?: return
         scope.launch(Dispatchers.IO) {
             runCatching { if (p.watched) server().mark(listOf(path), true) else server().reportProgress(id, p.pos, p.dur) }
+                .onFailure { if (p.watched) watchedSent.remove(path) }   // sin conexión: se reintenta en el siguiente
         }
     }
 
@@ -433,6 +438,7 @@ class Repository(private val context: Context) {
     }
 
     fun markWatched(paths: List<String>, watched: Boolean) {
+        if (!watched) watchedSent.removeAll(paths.toSet())
         progress.update { all ->
             if (watched) all + paths.associateWith { Progress(0.0, all[it]?.dur ?: 0.0, true, System.currentTimeMillis()) }
             else all - paths.toSet()

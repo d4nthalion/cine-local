@@ -306,7 +306,10 @@ route('POST', '/api/progress', async (req, res, { user }) => {
 route('POST', '/api/progress/mark', async (req, res, { user }) => {
   const b = await readBody(req);
   const f = [...library.index.values()].find(x => x.path === b.paths?.[0]);
-  act(req, user, b.watched ? 'watched' : 'unwatched', f && (b.paths.length > 1 ? titleOf({ item: f.item }) : titleOf(f)), b.paths?.length > 1 ? `${b.paths.length} archivos` : null);
+  // al registro sólo si cambia algo: la app de Android 0.14.0 vuelve a marcarla cada 10 s durante los créditos
+  const had = library.user(user).data.progress;
+  const changes = (b.paths || []).some(p => !!b.watched !== !!had[p]?.watched || (!b.watched && had[p]));
+  if (changes) act(req, user, b.watched ? 'watched' : 'unwatched', f && (b.paths.length > 1 ? titleOf({ item: f.item }) : titleOf(f)), b.paths?.length > 1 ? `${b.paths.length} archivos` : null);
   const prog = library.markProgress(user, b);
   broadcastProgress(user, prog);
   json(res, 200, prog);
