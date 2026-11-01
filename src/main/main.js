@@ -762,8 +762,6 @@ ipcMain.handle('library:scan', () => (isAdmin() ? remoteFetch('/api/scan', 'POST
 ipcMain.handle('library:item', (_e, id) => api().get('/api/item/' + encodeURIComponent(id)));
 ipcMain.handle('library:refreshMeta', () => api().post('/api/meta/refresh'));
 ipcMain.handle('meta:person', (_e, id) => api().get('/api/person/' + encodeURIComponent(id)).catch(() => null));
-ipcMain.handle('meta:providerList', () => api().get('/api/providers'));
-ipcMain.handle('meta:providers', (_e, movieId) => api().get('/api/providers/' + encodeURIComponent(movieId)));
 ipcMain.handle('meta:search', (_e, { type, query, year }) => api().post('/api/meta/search', { type, query, year }));
 // ficha de TMDB de un título que no está en la biblioteca (para entrar igualmente a verla)
 ipcMain.handle('meta:title', (_e, { type, id }) => api().get(`/api/title/${type === 'series' ? 'series' : 'movie'}/${+id}`));

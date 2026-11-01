@@ -149,7 +149,7 @@ const entryIn = (list, it) => list.items.find(x => itemKeys(it).includes(x.key))
 /** El título de la biblioteca de una entrada, si lo tienes */
 const ownedOf = (e) => e.tmdb ? S.lib.items.find(i => i.type === e.type && i.meta?.tmdbId === e.tmdb) : byId(e.id);
 const inAnyList = (key) => (S.lib.lists || []).some(l => l.items.some(x => x.key === key));
-/** Tarjeta de una entrada: la tuya si la tienes; si no, la de «Dónde verla» */
+/** Tarjeta de una entrada: la tuya si la tienes; si no, la de una película que no tienes */
 function listEntryCard(e) {
   const it = ownedOf(e);
   if (it) return card(it);
@@ -308,7 +308,7 @@ function lbBadge(lb) {
   if (!lb?.rating && !lb?.liked) return '';
   return `<span class="lb-badge" title="Tu nota en Letterboxd">${lb.rating ? `<b>${lbStars(lb.rating)}</b>` : ''}${lb.liked ? '<i>♥</i>' : ''}</span>`;
 }
-/** Película que no está en la biblioteca: "Dónde verla" y, si eMule está activo, buscarla */
+/** Película que no está en la biblioteca: su ficha, pedirla, guardarla y, si eMule está activo, buscarla */
 function missingCard(f, { tag = '', sub, entry } = {}) {
   const ph = { title: f.title, year: f.year, type: 'movie', meta: null };
   const lb = lbOf(f.id);
@@ -327,7 +327,7 @@ function missingCard(f, { tag = '', sub, entry } = {}) {
     <div class="cap"><div class="t">${esc(f.title)}</div><div class="s">${esc(line || 'Sin fecha')}</div></div>
   </div>`;
 }
-/** Tarjeta de la watchlist: la tuya si la tienes, si no, la de "Dónde verla" */
+/** Tarjeta de la watchlist: la tuya si la tienes; si no, la de una película que no tienes */
 function watchlistCard({ f, it }) {
   if (it) return card(it);
   return missingCard({ id: f.tmdbId, title: f.localTitle || f.title, originalTitle: f.localTitle && f.localTitle !== f.title ? f.title : '', year: f.year, poster: f.poster,
@@ -549,63 +549,6 @@ function filmographyHTML(d, p) {
       const upcoming = f.date && f.date > now;
       return missingCard(f, { tag: upcoming ? '<span class="tag">Próximamente</span>' : '' });
     }).join('')}</div>`;
-}
-
-// ---------------------------------------------------------------- plataformas
-/** ¿Es una de las plataformas que tengo? Mismo id, o variante del mismo servicio ("Netflix Standard with Ads") */
-function ownsProvider(p) {
-  const mine = S.settings.myProviders || [];
-  const n = normName(p.name);
-  // sólo variantes con anuncios del mismo servicio; "Apple TV Store" o "HBO Max Amazon Channel" son otra cosa
-  return mine.some(m => m.id === p.id || n === normName(m.name) || /^(standard |basic )?with ads$/.test(n.slice(normName(m.name).length + 1)) && n.startsWith(normName(m.name) + ' '));
-}
-// TMDB no da enlaces directos a cada plataforma; se abre su buscador con el título (o la ficha de JustWatch).
-// Sólo plataformas con buscador público comprobado (Disney+ no tiene: exige iniciar sesión)
-const PROVIDER_SEARCH = [
-  [/^netflix/, q => `https://www.netflix.com/search?q=${q}`],
-  [/^amazon prime video/, q => `https://www.primevideo.com/search/ref=atv_nb_sr?phrase=${q}`],
-  [/^(hbo )?max\b|^hbo max/, q => `https://play.hbomax.com/search?q=${q}`],
-  [/^apple tv/, q => `https://tv.apple.com/es/search?term=${q}`],
-  [/^filmin/, q => `https://www.filmin.es/busqueda/texto/${q}`],
-  [/^google play/, q => `https://play.google.com/store/search?q=${q}&c=movies`],
-  [/^youtube/, q => `https://www.youtube.com/results?search_query=${q}`],
-  [/^rakuten/, q => `https://www.rakuten.tv/es/search?q=${q}`],
-  [/^mubi/, q => `https://mubi.com/es/search/films?query=${q}`]
-];
-function providerLink(p, title, fallback) {
-  const n = normName(p.name);
-  const hit = PROVIDER_SEARCH.find(([re]) => re.test(n));
-  return hit ? hit[1](encodeURIComponent(title)) : fallback;
-}
-
-function providersHTML(r, title) {
-  if (!r.groups.length) return '<p class="filmo-note">Ahora mismo no está en ninguna plataforma de tu país.</p>';
-  // primero, dónde puedes verla ya con lo que tienes contratado
-  const mine = [];
-  for (const g of r.groups) for (const p of g.providers) if (ownsProvider(p) && !mine.some(m => m.p.id === p.id)) mine.push({ p, g });
-  const top = mine.length ? `<div class="prov-mine"><h4>En tus plataformas</h4>${mine.map(({ p, g }) => {
-    const url = providerLink(p, title, r.link);
-    return `<button class="prov-watch" ${url ? `data-url="${esc(url)}"` : ''}>${p.logo ? `<img src="${esc(p.logo)}" alt="">` : ''}<span><b>Ver en ${esc(p.name)}</b><small>${esc(g.label)}</small></span>${I.right}</button>`;
-  }).join('')}</div>` : (S.settings.myProviders?.length ? '' : '<p class="filmo-note prov-tip">Indica en <a data-nav="settings">Ajustes → Mis plataformas</a> cuáles tienes y aquí aparecerá el enlace para verla.</p>');
-  return top + r.groups.map(g => `<div class="prov-group"><h4>${esc(g.label)}</h4><div class="prov-list">${g.providers.map(x => {
-    const own = ownsProvider(x);
-    const url = own ? providerLink(x, title, r.link) : null;
-    return `<div class="prov ${own ? 'own' : ''}" ${url ? `data-url="${esc(url)}" title="Abrir en ${esc(x.name)}"` : ''}>${x.logo ? `<img src="${esc(x.logo)}" alt="">` : `<i class="prov-ph">${esc(x.name[0])}</i>`}<span>${esc(x.name)}</span>${own ? '<em>La tienes</em>' : ''}</div>`;
-  }).join('')}</div></div>`).join('')
-    + (r.link ? `<button class="btn btn-ghost btn-sm" style="margin:6px 12px 4px" data-url="${esc(r.link)}">Ver todas las opciones</button>` : '');
-}
-
-async function showProviders(movieId, title, alt) {
-  const m = modal(`<div class="modal-head"><h2>Dónde ver “${esc(title)}”</h2><p>Disponibilidad en plataformas de tu país</p></div>
-    <div class="modal-list prov-body"><p class="filmo-note">Consultando…</p></div>
-    <div class="modal-foot prov-foot"><span class="prov-credit">Datos de JustWatch vía TMDB</span>${emuleOn() ? `<button class="btn btn-accent btn-sm" data-action="emule-find" data-q="${esc(title)}" data-alt="${esc(alt || '')}">${I.download}Buscar en eMule</button>` : ''}<button class="btn btn-ghost btn-sm" data-action="close-modal">Cerrar</button></div>`);
-  const body = $('.prov-body', m);
-  try {
-    const r = await window.api.getProviders(movieId);
-    body.innerHTML = providersHTML(r, title);
-  } catch (e) {
-    body.innerHTML = `<p class="filmo-note" style="color:#f87171">${esc(String(e.message).replace(/^Error invoking remote method '[^']+': (Error: )?/, ''))}</p>`;
-  }
 }
 
 function fmtDate(iso) {
@@ -1484,7 +1427,6 @@ function viewTitle(type, id) {
         <div class="actions">
           ${hasRequests() ? (req ? `<button class="btn btn-ghost" data-nav="requests">${I.check}${req.status === 'pending' ? 'Pedida' : REQ_STATUS[req.status]}</button>`
             : `<button class="btn btn-primary" data-action="request" data-entry="${esc(JSON.stringify(e))}">${I.download}Pedir</button>`) : ''}
-          ${type === 'movie' ? `<button class="btn btn-ghost" data-providers="${id}" data-ptitle="${esc(m.title)}" data-palt="${esc(m.originalTitle || '')}">${I.eye}Dónde verla</button>` : ''}
           <button class="round-btn ${inWatchlist(e.key) ? 'on' : ''}" title="${inWatchlist(e.key) ? 'Quitar de la Watchlist' : 'Añadir a la Watchlist'}" data-action="wl-toggle" data-entry="${esc(JSON.stringify(e))}">${inWatchlist(e.key) ? I.bookmarkOn : I.bookmark}</button>
           <button class="round-btn ${saved ? 'on' : ''}" title="Guardar en una lista" data-action="lists-pick" data-entry="${esc(JSON.stringify(e))}">${saved ? I.check : I.plus}</button>
           ${m.trailer ? `<button class="round-btn" title="Ver tráiler" data-action="trailer" data-url="${esc(m.trailer)}">${I.yt}</button>` : ''}
@@ -2184,14 +2126,6 @@ function paintUpdate() {
   if (el) el.innerHTML = updInfoHTML();
 }
 
-async function loadProviderList() {
-  if (S.providerListLoading) return;
-  S.providerListLoading = true;
-  try { S.providerList = { list: await window.api.getProviderList() }; }
-  catch (e) { S.providerList = { error: errText(e) }; }
-  S.providerListLoading = false;
-  if (S.route.name === 'settings' && !/INPUT|SELECT/.test(document.activeElement?.tagName)) render(true);
-}
 
 async function loadEmuleInfo() {
   S.emule.info = await window.api.emule.info();
@@ -2491,8 +2425,7 @@ async function saveLibPaths(list) {
 
 async function saveSetting(key, value) {
   S.settings = await window.api.setSettings({ [key]: value });
-  if (key === 'region') S.providerList = null;   // recargar la lista del nuevo país (los ids de TMDB son los mismos en todos)
-  if (key === 'userMetaLang' || key === 'metaLang') { S.providerList = null; setLib(await window.api.getLibrary()); render(true); }
+  if (key === 'userMetaLang' || key === 'metaLang') { setLib(await window.api.getLibrary()); render(true); }
   if (key === 'subLang' || key === 'emuleEnabled' || key === 'emuleMoveToLibrary' || key === 'playerMode' || key === 'region') render(true);
   if (key === 'lbUser') { setLb(await window.api.letterboxd.get()); paintLbStatus(); }
   if (key.startsWith('emule')) paintEmule();
@@ -2804,13 +2737,6 @@ document.addEventListener('click', async (e) => {
       st.innerHTML = r.ok ? '<span class="status-pill ok">Clave válida</span>' : `<span class="status-pill bad">${esc(r.error)}</span>`;
       if (r.ok && key !== S.settings.tmdbKey) { await saveSetting('tmdbKey', key); S.lib.hasKey = true; }
     } else if (a === 'refresh-meta') { await window.api.refreshMeta(); toast('Actualizando metadatos…'); }
-    else if (a === 'toggle-provider') {
-      const id = +action.dataset.id;
-      const mine = S.settings.myProviders || [];
-      const next = mine.some(m => m.id === id) ? mine.filter(m => m.id !== id) : [...mine, { id, name: action.dataset.name }];
-      S.settings = await window.api.setSettings({ myProviders: next });
-      render(true);
-    } else if (a === 'all-providers') { S.allProviders = !S.allProviders; render(true); }
     else if (a === 'lb-sync') {
       const r = await window.api.letterboxd.sync(true);
       if (r.ok) toast('Letterboxd sincronizado', 'ok'); else toast(r.error, 'error');
@@ -2848,8 +2774,6 @@ document.addEventListener('click', async (e) => {
   const lbu = t.closest('[data-lb-url]');
   if (lbu) { window.api.openExternal(lbu.dataset.lbUrl); return; }
 
-  const pv = t.closest('[data-providers]');
-  if (pv) { showProviders(+pv.dataset.providers, pv.dataset.ptitle, pv.dataset.palt); return; }
 
   const ds = t.closest('[data-dir-sort]');
   if (ds) { S.filters.directors.sort = ds.dataset.dirSort; render(); return; }
@@ -2915,7 +2839,7 @@ document.addEventListener('keydown', (e) => {
     back();
   } else if (e.key === 'Enter' && !inInput) {
     const el = document.activeElement;
-    if (el?.classList.contains('card') || el?.dataset?.director || el?.dataset?.providers) el.click();
+    if (el?.classList.contains('card') || el?.dataset?.director) el.click();
   }
 });
 window.addEventListener('mouseup', (e) => { if (e.button === 3) { e.preventDefault(); back(); } });
@@ -3001,6 +2925,7 @@ const ago = ts => {
 function notifText(n) {
   const name = `«${n.title}»${n.year ? ` (${n.year})` : ''}`;
   if (n.kind === 'request') return n.status === 'done' ? `Ya puedes ver ${name}, que pediste` : `Tu petición de ${name} se ha rechazado${n.reply ? ': ' + n.reply : ''}`;
+  if (n.kind === 'watchlist') return `De tu watchlist: ${name} ya está en la biblioteca`;
   return `${n.type === 'series' ? 'Novedades en la biblioteca' : 'Nueva en la biblioteca'}: ${name}`;
 }
 function paintNotifs() {

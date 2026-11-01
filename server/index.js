@@ -59,7 +59,7 @@ function json(res, status, data) {
   // la biblioteca con miles de títulos: comprimida ocupa unas 6 veces menos
   if (body.length > 16384 && /gzip/.test(res.req?.headers['accept-encoding'] || '')) {
     res.writeHead(status, { ...headers, 'Content-Encoding': 'gzip', Vary: 'Accept-Encoding' });
-    return res.end(zlib.gzipSync(body, { level: 6 }));
+    return res.end(zlib.gzipSync(body, { level: body.length > 1e6 ? 1 : 6 }));
   }
   res.writeHead(status, headers);
   res.end(body);
@@ -206,10 +206,29 @@ route('POST', '/api/tmdb/test', async (req, res) => {
   catch (e) { json(res, 200, { ok: false, error: e.message }); }
 }, { admin: true });
 
+/**
+ * La biblioteca de un usuario, ya comprimida: se guarda hasta que cambia algo de lo que lleva (library.cacheKey) y se
+ * monta con la lista de títulos ya preparada. Para las apps (enlaces firmados de 7 días) se rehace cada 6 horas.
+ */
+const libCache = new Map();
 route('GET', '/api/library', (req, res, { user, q }) => {
-  const v = library.view(user, { slim: q.get('slim') === '1' });
-  if (q.get('client') === 'app') withLinks(v, user);
-  json(res, 200, v);
+  const slim = q.get('slim') === '1', app = q.get('client') === 'app';
+  const who = `${user.toLowerCase()}|${slim}|${app}|`;
+  const key = who + library.cacheKey(user) + (app ? '|' + Math.floor(Date.now() / 216e5) : '');
+  let gz = libCache.get(key);
+  if (!gz) {
+    let body;
+    if (app) { const v = library.view(user, { slim }); withLinks(v, user); body = JSON.stringify(v); }
+    else { const { items, ...rest } = library.view(user, { slim }); body = '{"items":' + library.itemsJson(user, slim) + ',' + JSON.stringify(rest).slice(1); }
+    gz = zlib.gzipSync(Buffer.from(body), { level: 1 });
+    for (const k of libCache.keys()) if (k.startsWith(who)) libCache.delete(k);
+    if (libCache.size >= 40) libCache.delete(libCache.keys().next().value);
+    libCache.set(key, gz);
+  }
+  const headers = { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' };
+  if (/gzip/.test(req.headers['accept-encoding'] || '')) { res.writeHead(200, { ...headers, 'Content-Encoding': 'gzip', Vary: 'Accept-Encoding' }); return res.end(gz); }
+  res.writeHead(200, headers);
+  res.end(zlib.gunzipSync(gz));
 });
 // ficha completa de un título (la lista ligera sólo lleva lo necesario para las carátulas)
 route('GET', '/api/item/:id', (req, res, { p, user }) => {
@@ -246,8 +265,6 @@ route('POST', '/api/item/:id/poster', async (req, res, { p, user }) => {
 route('POST', '/api/scan', async (req, res, { user }) => { act(req, user, 'scan'); await library.scan(); json(res, 200, library.view(user, { slim: true })); }, { admin: true });
 route('POST', '/api/meta/refresh', (req, res, { user }) => { act(req, user, 'meta-refresh'); library.fetchMissingMetadata(true); json(res, 200, true); }, { admin: true });
 route('GET', '/api/person/:id', async (req, res, { p, user }) => json(res, 200, await library.person(+p.id, user)));
-route('GET', '/api/providers', async (req, res, { user }) => json(res, 200, await library.providerList(user)));
-route('GET', '/api/providers/:id', async (req, res, { p }) => json(res, 200, await library.providers(+p.id)));
 route('GET', '/api/title/:type/:id', async (req, res, { p, user }) => {
   if (!['movie', 'series'].includes(p.type) || !/^\d{1,9}$/.test(p.id)) throw httpError(400, 'Título no válido');
   try { json(res, 200, await library.title(p.type, +p.id, user)); }
@@ -312,7 +329,8 @@ route('POST', '/api/lists', async (req, res, { user }) => {
 });
 route('GET', '/api/requests', (req, res, { user }) => json(res, 200, requestsView(user)));
 // campana: peticiones propias resueltas y novedades de la biblioteca
-route('GET', '/api/notifications', (req, res, { user }) => json(res, 200, library.notifications(user, requests.list(user, false))));
+route('GET', '/api/notifications', (req, res, { user }) => json(res, 200, library.notifications(user, requests.list(user, false),
+  lbUsers.snapshot(user).films.filter(f => f.watchlist && f.tmdbId).map(f => 'movie:' + f.tmdbId))));
 route('POST', '/api/notifications/seen', (req, res, { user }) => json(res, 200, { seenAt: library.notificationsSeen(user) }));
 // ---------- Letterboxd de cada usuario (server/letterboxd.js) ----------
 const sameUser = name => u => u.toLowerCase() === name;

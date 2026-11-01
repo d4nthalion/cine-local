@@ -60,8 +60,6 @@
     scan: () => post('/api/scan'),
     refreshMeta: () => post('/api/meta/refresh'),
     getPerson: id => get('/api/person/' + encodeURIComponent(id)),
-    getProviders: id => get('/api/providers/' + encodeURIComponent(id)),
-    getProviderList: () => get('/api/providers'),
     searchMeta: q => post('/api/meta/search', q),
     getTitle: q => get('/api/title/' + (q.type === 'series' ? 'series' : 'movie') + '/' + encodeURIComponent(q.id)),
     identify: q => post('/api/meta/identify', q),

@@ -96,12 +96,14 @@ class Library extends EventEmitter {
     this.fetchAgain = false;
     this.scanning = null;
     this.rescan = false;
-    this.providersCache = new Map();
-    this.providerListCache = null;
     this.watcher = new LibraryWatcher();
     this.watcher.on('change', () => this.scan());
     this.index = new Map();
     this.reindex();
+    // lista de títulos ya preparada (por idioma y ligera o completa): se rehace sólo cuando cambia la biblioteca
+    this.gen = 0;
+    this.itemsCache = new Map();
+    this.on('library', () => { this.gen++; this.itemsCache.clear(); });
   }
 
   start() {
@@ -115,7 +117,13 @@ class Library extends EventEmitter {
     const key = String(name).toLowerCase();
     if (!this.users.has(key)) {
       const safe = key.replace(/[^a-z0-9._-]/g, '_');
-      const u = store(path.join(this.dir, 'users'), safe + '.json', { progress: {}, favorites: [], lists: [], lastPlayed: {}, prefs: {} });
+      const raw = store(path.join(this.dir, 'users'), safe + '.json', { progress: {}, favorites: [], lists: [], lastPlayed: {}, prefs: {} });
+      // ver: sube con cada cambio (progreso, listas, preferencias), para saber si su biblioteca guardada sigue valiendo
+      let ver = 0;
+      const u = {
+        get data() { return raw.data; }, set data(v) { ver++; raw.data = v; },
+        save() { ver++; raw.save(); }, flushSync: () => raw.flushSync(), get ver() { return ver; }
+      };
       this.users.set(key, u);
       // la Watchlist sustituye a «Mi lista»: la primera vez se crea con lo que había en ella
       if (!(u.data.lists || []).some(l => l.id === WATCHLIST)) {
@@ -183,9 +191,10 @@ class Library extends EventEmitter {
   /**
    * Notificaciones de la campana: sus peticiones resueltas y lo añadido a la biblioteca (los últimos 30 días), lo
    * más nuevo primero; `seenAt` es hasta cuándo las ha visto (la primera vez, ahora: no se estrena con todo sin leer).
-   * requests: las suyas (server/requests.js list()), o [] sin servidor
+   * requests: las suyas (server/requests.js list()), o [] sin servidor · watch: claves «movie:id» de su watchlist de
+   * Letterboxd: lo nuevo que estaba en una de sus watchlists se avisa aparte («De tu watchlist»)
    */
-  notifications(userName, requests = []) {
+  notifications(userName, requests = [], watch = []) {
     const u = this.user(userName);
     const prefs = u.data.prefs || (u.data.prefs = {});
     if (!prefs.notifSeenAt) { prefs.notifSeenAt = Date.now(); u.save(); }
@@ -197,10 +206,13 @@ class Library extends EventEmitter {
       if (!r.mine || r.status === 'pending' || !(r.resolvedAt > since)) continue;
       out.push({ kind: 'request', id: r.id, at: r.resolvedAt, status: r.status, title: r.title, year: r.year || null, reply: r.reply || null, poster: small(r.poster) });
     }
+    const wl = (u.data.lists || []).find(l => l.id === WATCHLIST);
+    const wanted = new Set([...(wl?.items || []).map(e => e.key), ...watch]);
     for (const it of this.library.data.items) {
       if (!(it.added > since)) continue;
       const m = this.metaOf(it.id, lang);
-      out.push({ kind: 'new', id: it.id, at: it.added, type: it.type, title: m?.title || it.title, year: m?.year || it.year || null, poster: small(this.custom.data[it.id]?.poster?.startsWith('https:') ? this.custom.data[it.id].poster : m?.poster) });
+      const tmdb = this.metadata.data[it.id]?.tmdbId;
+      out.push({ kind: tmdb && wanted.has(`${it.type}:${tmdb}`) ? 'watchlist' : 'new', id: it.id, at: it.added, type: it.type, title: m?.title || it.title, year: m?.year || it.year || null, poster: small(this.custom.data[it.id]?.poster?.startsWith('https:') ? this.custom.data[it.id].poster : m?.poster) });
     }
     out.sort((a, b) => b.at - a.at);
     return { items: out.slice(0, 40), seenAt: prefs.notifSeenAt };
@@ -281,12 +293,7 @@ class Library extends EventEmitter {
    */
   view(userName, { slim = false } = {}) {
     const u = this.user(userName).data;
-    const lang = this.langOf(userName);
-    const items = this.library.data.items.map(it => {
-      const m = this.metadata.data[it.id];
-      const meta = this.metaOf(it.id, lang);
-      return this.withCustom({ ...it, meta: slim && meta ? slimMeta(meta) : meta, metaFailed: !!m?.failed });
-    });
+    const items = this.items(this.langOf(userName), slim);
     return {
       items,
       scannedAt: this.library.data.scannedAt,
@@ -299,6 +306,34 @@ class Library extends EventEmitter {
       hasKey: !!this.settings.data.tmdbKey,
       fetching: this.fetching
     };
+  }
+
+  /** Los títulos con su ficha en un idioma (la misma lista para todos los que lo usan; no se modifica) */
+  items(lang, slim) {
+    const k = lang + '|' + slim;
+    let c = this.itemsCache.get(k);
+    if (!c) {
+      const list = this.library.data.items.map(it => {
+        const meta = this.metaOf(it.id, lang);
+        return this.withCustom({ ...it, meta: slim && meta ? slimMeta(meta) : meta, metaFailed: !!this.metadata.data[it.id]?.failed });
+      });
+      c = { list, json: null };
+      this.itemsCache.set(k, c);
+    }
+    return c.list;
+  }
+
+  /** La misma lista ya en JSON (para montar la respuesta de /api/library sin volver a convertirla) */
+  itemsJson(userName, slim) {
+    const lang = this.langOf(userName);
+    this.items(lang, slim);
+    const c = this.itemsCache.get(lang + '|' + slim);
+    return c.json || (c.json = JSON.stringify(c.list));
+  }
+
+  /** Cambia si cambia algo de lo que lleva su /api/library: la biblioteca, su idioma o sus datos */
+  cacheKey(userName) {
+    return `${this.gen}|${this.langOf(userName)}|${this.user(userName).ver}`;
   }
 
   /** Títulos de la biblioteca con su ficha (para dar por conseguidas las peticiones) */
@@ -571,26 +606,6 @@ class Library extends EventEmitter {
       this.people.save();
       return data;
     } catch { return c?.data || null; }
-  }
-
-  async providerList(userName) {
-    const s = this.settings.data;
-    const lang = this.langOf(userName);
-    const k = (s.region || 'ES') + ':' + lang;
-    if (this.providerListCache?.k === k && Date.now() - this.providerListCache.at < 864e5) return this.providerListCache.data;
-    const api = this.requireTmdb(lang);
-    const data = await api.providerList();
-    this.providerListCache = { k, data, at: Date.now() };
-    return data;
-  }
-
-  async providers(movieId) {
-    const k = movieId + ':' + (this.settings.data.region || 'ES');
-    const c = this.providersCache.get(k);
-    if (c && Date.now() - c.at < 432e5) return c.data;
-    const data = await this.requireTmdb().watchProviders(movieId);
-    this.providersCache.set(k, { data, at: Date.now() });
-    return data;
   }
 
   /** Ficha de TMDB de un título que no está en la biblioteca (película o serie, sin temporadas) */

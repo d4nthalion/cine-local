@@ -25,8 +25,6 @@ contextBridge.exposeInMainWorld('api', {
   scan: () => ipcRenderer.invoke('library:scan'),
   refreshMeta: () => ipcRenderer.invoke('library:refreshMeta'),
   getPerson: (id) => ipcRenderer.invoke('meta:person', id),
-  getProviders: (id) => ipcRenderer.invoke('meta:providers', id),
-  getProviderList: () => ipcRenderer.invoke('meta:providerList'),
   searchMeta: (q) => ipcRenderer.invoke('meta:search', q),
   getTitle: (q) => ipcRenderer.invoke('meta:title', q),
   requests: { get: () => ipcRenderer.invoke('requests:get'), op: (q) => ipcRenderer.invoke('requests:op', q) },

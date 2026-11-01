@@ -41,7 +41,8 @@ const fakeFetch = async (url) => {
   await t('el principal y los descargados (español) con la misma ficha de TMDB', () => {
     assert.strictEqual(titleFor('ana'), TITLES['en-US']);
     assert.strictEqual(lib.langStore('es-ES').data[id].tmdbId, 280);
-    assert.strictEqual(calls.filter(c => c.startsWith('/3/search')).length, 1);   // se emparejó una sola vez
+    // se emparejó una sola vez (una búsqueda en cada idioma: el de las fichas y el otro de español/inglés)
+    assert.deepStrictEqual(calls.filter(c => c.startsWith('/3/search')).map(c => c.split(' ')[1]).sort(), ['en-US', 'es-ES']);
   });
 
   await t('cada usuario ve su idioma (lista y ficha completa)', () => {
@@ -65,6 +66,23 @@ const fakeFetch = async (url) => {
     assert.strictEqual(titleFor('luis'), TITLES['en-US']);
     lib.setPrefs('luis', { userMetaLang: '../x' });
     assert.strictEqual(lib.langOf('luis'), 'en-US');
+  });
+
+  await t('la biblioteca guardada se rehace sólo si cambia la biblioteca, el idioma o los datos del usuario', () => {
+    const k0 = lib.cacheKey('ana');
+    assert.strictEqual(lib.cacheKey('ana'), k0);
+    assert.strictEqual(lib.items('en-US', true), lib.items('en-US', true));   // la misma lista, sin rehacerla
+    lib.markProgress('ana', { paths: [lib.library.data.items[0].path], watched: true });
+    const k1 = lib.cacheKey('ana');
+    assert.notStrictEqual(k1, k0);                                         // su progreso
+    lib.setPrefs('ana', { userMetaLang: 'es-ES' });
+    assert.notStrictEqual(lib.cacheKey('ana'), k1);                        // su idioma (y sus preferencias)
+    const k2 = lib.cacheKey('ana');
+    const before = lib.items('es-ES', true);
+    lib.emit('library');
+    assert.notStrictEqual(lib.cacheKey('ana'), k2);                        // la biblioteca
+    assert.notStrictEqual(lib.items('es-ES', true), before);
+    assert.strictEqual(lib.itemsJson('ana', true), JSON.stringify(lib.items('es-ES', true)));
   });
 
   lib.watcher.stop();

@@ -204,27 +204,6 @@ class TMDB {
     };
   }
 
-  /** Plataformas donde ver una película (datos de JustWatch vía TMDB) */
-  async watchProviders(movieId) {
-    const r = await this.get(`/movie/${movieId}/watch/providers`);
-    const reg = r.results?.[this.region];
-    if (!reg) return { region: this.region, link: null, groups: [] };
-    const map = list => (list || []).sort((a, b) => (a.display_priority ?? 99) - (b.display_priority ?? 99))
-      .map(p => ({ id: p.provider_id, name: p.provider_name, logo: img(p.logo_path, 'w92') }));
-    const groups = [
-      ['Suscripción', reg.flatrate], ['Gratis', reg.free], ['Con anuncios', reg.ads], ['Alquiler', reg.rent], ['Compra', reg.buy]
-    ].filter(([, l]) => l?.length).map(([label, l]) => ({ label, providers: map(l) }));
-    return { region: this.region, link: reg.link || null, groups };
-  }
-
-  /** Plataformas de películas disponibles en la región, en el orden en que las destaca TMDB/JustWatch */
-  async providerList() {
-    const r = await this.get('/watch/providers/movie', { watch_region: this.region, language: this.language });
-    return (r.results || [])
-      .map(p => ({ id: p.provider_id, name: p.provider_name, logo: img(p.logo_path, 'w92'), priority: p.display_priorities?.[this.region] ?? p.display_priority ?? 999 }))
-      .sort((a, b) => a.priority - b.priority);
-  }
-
   async tv(id, seasons = []) {
     const lang = this.language.split('-')[0];
     const d = await this.get(`/tv/${id}`, {
