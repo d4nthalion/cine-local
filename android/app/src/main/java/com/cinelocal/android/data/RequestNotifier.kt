@@ -22,7 +22,8 @@ import com.cinelocal.android.repo
 import java.util.concurrent.TimeUnit
 
 /**
- * Aviso en el teléfono cuando se resuelve una petición propia (conseguida o rechazada), aunque la app esté cerrada:
+ * Aviso en el teléfono cuando se resuelve una petición propia (conseguida o rechazada) y, a los administradores,
+ * cuando alguien pide algo, aunque la app esté cerrada:
  * WorkManager la comprueba en el servidor cada ~15 minutos (Android decide el momento exacto para ahorrar batería).
  */
 class RequestNotifier(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, params) {
@@ -37,12 +38,37 @@ class RequestNotifier(ctx: Context, params: WorkerParameters) : CoroutineWorker(
         if (seen == 0L) { prefs.edit().putLong(SEEN, System.currentTimeMillis()).apply(); return Result.success() }
         val list = try { CineServer(s.serverUrl, s.serverToken).requests() } catch (_: Exception) { return Result.success() }
         val fresh = list.filter { it.mine && it.status != "pending" && (it.resolvedAt ?: 0) > seen }
-        if (fresh.isEmpty()) return Result.success()
+        // a un administrador el servidor le da las de todos: las pendientes nuevas de otros, para avisarle
+        val asked = list.filter { !it.mine && it.status == "pending" && it.at > seen }
+        if (fresh.isEmpty() && asked.isEmpty()) return Result.success()
         ensureChannel(ctx)
         for (r in fresh) notify(ctx, r)
-        prefs.edit().putLong(SEEN, fresh.maxOf { it.resolvedAt ?: 0 }).apply()
+        for (r in asked) notifyAsked(ctx, r)
+        prefs.edit().putLong(SEEN, (fresh.map { it.resolvedAt ?: 0 } + asked.map { it.at }).max()).apply()
         return Result.success()
     }
+
+    /** Administrador: alguien ha pedido algo */
+    private fun notifyAsked(ctx: Context, r: CineServer.Req) {
+        val name = r.title + (r.year?.let { " ($it)" } ?: "")
+        val who = r.users.map { it.user }.filter { it.isNotBlank() }.distinct().joinToString(", ").ifBlank { "Un usuario" }
+        val note = r.users.lastOrNull { !it.note.isNullOrBlank() }?.note
+        val text = "Pedida por $who" + (note?.let { ": «$it»" } ?: "")
+        val b = NotificationCompat.Builder(ctx, CHANNEL)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentTitle("Nueva petición: $name")
+            .setContentText(text)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(text))
+            .setAutoCancel(true)
+            .setContentIntent(openApp(ctx))
+        runCatching { NotificationManagerCompat.from(ctx).notify(("nueva:" + r.id).hashCode(), b.build()) }
+    }
+
+    private fun openApp(ctx: Context) = PendingIntent.getActivity(
+        ctx, 0,
+        Intent(ctx, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP),
+        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+    )
 
     private fun notify(ctx: Context, r: CineServer.Req) {
         val name = r.title + (r.year?.let { " ($it)" } ?: "")
@@ -55,11 +81,7 @@ class RequestNotifier(ctx: Context, params: WorkerParameters) : CoroutineWorker(
                 if (done) "Lo que pediste ya está en la biblioteca" + (r.reply?.let { ". «$it»" } ?: "") else r.reply ?: "No se va a añadir a la biblioteca"
             ))
             .setAutoCancel(true)
-            .setContentIntent(PendingIntent.getActivity(
-                ctx, 0,
-                Intent(ctx, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP),
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-            ))
+            .setContentIntent(openApp(ctx))
         runCatching { NotificationManagerCompat.from(ctx).notify(r.id.hashCode(), b.build()) }
     }
 

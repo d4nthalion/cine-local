@@ -143,8 +143,11 @@ class CineServer(url: String, private val token: String = "", private val http: 
 
     @Serializable data class Req(
         val id: String, val title: String, val year: Int? = null, val status: String, val resolvedAt: Long? = null,
-        val reply: String? = null, val mine: Boolean = false
+        val reply: String? = null, val mine: Boolean = false,
+        /** cuándo se pidió (o se volvió a pedir) y quién: para avisar a los administradores */
+        val at: Long = 0, val users: List<ReqUser> = emptyList()
     )
+    @Serializable data class ReqUser(val user: String = "", val note: String? = null)
     @Serializable private data class Reqs(val items: List<Req> = emptyList())
 
     /** Peticiones del usuario (un administrador recibe todas: `mine` dice cuáles son suyas) */
