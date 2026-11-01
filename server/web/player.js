@@ -61,6 +61,7 @@
       <video playsinline preload="auto"></video>
       <div class="wp-subs"></div>
       <div class="wp-spinner"><div class="spinner"></div></div>
+      <div class="wp-flash"></div>
       <div class="wp-shade top"></div><div class="wp-shade bottom"></div>
       <div class="wp-top"><button class="wp-btn" data-wp="close" title="Volver (Esc)">${IC.back}</button><div class="wp-title"><b class="wp-t1"></b><span class="wp-t2"></span></div></div>
       <button class="wp-skip hidden" data-wp="skip"></button>
@@ -434,7 +435,20 @@
     try { localStorage.setItem('wp-volume', P.video.volume); localStorage.setItem('wp-muted', P.video.muted ? '1' : '0'); } catch {}
   }
 
-  function toggle() { P.video.paused ? P.video.play().catch(() => {}) : P.video.pause(); }
+  function toggle() {
+    const play = P.video.paused;
+    play ? P.video.play().catch(() => {}) : P.video.pause();
+    flash(play ? IC.play : IC.pause);
+  }
+
+  /** Al pausar o reanudar: el icono aparece en el centro y se desvanece */
+  function flash(icon) {
+    const f = $('.wp-flash', P.el);
+    f.innerHTML = icon;
+    f.classList.remove('go');
+    void f.offsetWidth;   // reinicia la animación aunque se pulse seguido
+    f.classList.add('go');
+  }
 
   function onKey(e) {
     if (!P || e.target.closest?.('input:not(.wp-volbar), textarea, select')) return;

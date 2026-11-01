@@ -186,9 +186,9 @@ local function render()
   local s = math.max(0.55, math.min(w / 1920, h / 1080))
   local mx, my = state.mx, state.my
 
-  -- Indicador central breve al pausar/reanudar con el teclado (con la interfaz oculta)
-  if state.flash and f < 0.05 then
-    local k = 1 - math.min(1, (mp.get_time() - state.flash.at) / 0.6)
+  -- Al pausar o reanudar: el icono de pausa o de reproducir aparece en el centro y se desvanece
+  if state.flash and not state.panel then
+    local k = 1 - math.min(1, (mp.get_time() - state.flash.at) / 0.7)
     if k > 0 then
       icon_soft(w / 2, h / 2, state.flash.icon, 96 * s * (1.1 - 0.1 * k), alpha(0, k), alpha(0x80, k))
     else
@@ -700,7 +700,7 @@ end)
 mp.observe_property('pause', 'bool', function(_, v)
   local changed = state.pause ~= v
   state.pause = v
-  if changed and state.fade < 0.05 then state.flash = { at = mp.get_time(), icon = v and 'pause' or 'play_arrow' } end
+  if changed and state.pos > 0.5 then state.flash = { at = mp.get_time(), icon = v and 'pause' or 'play_arrow' } end
   if v then show() end
   wake()
 end)
