@@ -2267,6 +2267,7 @@ function back() {
   const prev = S.history.pop();
   if (!prev) { if (S.route.name !== 'home') { S.route = { name: 'home' }; render(); } return; }
   S.route = prev.route;
+  if (S.route.name === 'search') { S.query = S.route.q || ''; $('#searchInput').value = S.query; }
   render();
   const v = $('#view');
   v.style.scrollBehavior = 'auto'; v.scrollTop = prev.scroll; v.style.scrollBehavior = '';
@@ -2952,7 +2953,7 @@ $('#searchInput').addEventListener('input', (e) => {
     S.query = e.target.value;
     if (S.query.trim()) {
       if (S.route.name !== 'search') { S.history.push({ route: S.route, scroll: $('#view').scrollTop }); }
-      S.route = { name: 'search' };
+      S.route = { name: 'search', q: S.query };   // al volver desde una ficha se recupera la búsqueda
       render();
     } else if (S.route.name === 'search') back();
   }, 180);
