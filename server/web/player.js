@@ -26,6 +26,8 @@
     audio: '<svg viewBox="0 0 24 24"><path d="M12 3v10.55A4 4 0 1 0 14 17V7h4V3h-6z"/></svg>',
     subs: '<svg viewBox="0 0 24 24"><path d="M20 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2zM4 12h4v2H4v-2zm10 6H4v-2h10v2zm6 0h-4v-2h4v2zm0-4H10v-2h10v2z"/></svg>',
     full: '<svg viewBox="0 0 24 24"><path d="M4 4h6v2H6v4H4zm10 0h6v6h-2V6h-4zM4 14h2v4h4v2H4zm14 0h2v6h-6v-2h4z"/></svg>',
+    episodes: '<svg viewBox="0 0 24 24"><path d="M4 6H2v14a2 2 0 0 0 2 2h14v-2H4V6zm16-4H8a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2zm-8 12.5v-9l6 4.5-6 4.5z"/></svg>',
+    check: '<svg viewBox="0 0 24 24"><path d="M9 16.2 4.8 12l-1.4 1.4L9 19 21 7l-1.4-1.4z"/></svg>',
     exitFull: '<svg viewBox="0 0 24 24"><path d="M8 4h2v6H4V8h4zm6 0h2v4h4v2h-6zM4 14h6v6H8v-4H4zm10 0h6v2h-4v4h-2z"/></svg>'
   };
 
@@ -60,22 +62,20 @@
       <div class="wp-subs"></div>
       <div class="wp-spinner"><div class="spinner"></div></div>
       <div class="wp-shade top"></div><div class="wp-shade bottom"></div>
-      <div class="wp-top"><button class="wp-btn" data-wp="close" title="Volver (Esc)">${IC.back}</button><div class="wp-title"></div></div>
-      <div class="wp-center">
-        <button class="wp-btn big" data-wp="rew" title="Retroceder 10 s (←)">${IC.rew}</button>
-        <button class="wp-btn huge" data-wp="toggle" title="Reproducir / pausa (espacio)">${IC.play}</button>
-        <button class="wp-btn big" data-wp="fwd" title="Avanzar 10 s (→)">${IC.fwd}</button>
-      </div>
+      <div class="wp-top"><button class="wp-btn" data-wp="close" title="Volver (Esc)">${IC.back}</button><div class="wp-title"><b class="wp-t1"></b><span class="wp-t2"></span></div></div>
       <button class="wp-skip hidden" data-wp="skip"></button>
       <div class="wp-bottom">
         <div class="wp-seek"><div class="wp-rail"><div class="wp-buf"></div><div class="wp-fill"></div><div class="wp-knob"></div></div><div class="wp-tip"></div></div>
         <div class="wp-row">
+          <button class="wp-btn" data-wp="toggle" title="Reproducir / pausa (espacio)">${IC.play}</button>
+          <button class="wp-btn" data-wp="rew" title="Retroceder 10 s (←)">${IC.rew}</button>
+          <button class="wp-btn" data-wp="fwd" title="Avanzar 10 s (→)">${IC.fwd}</button>
+          <div class="wp-vol"><button class="wp-btn" data-wp="mute" title="Silenciar (m)">${IC.vol}</button><input type="range" min="0" max="1" step="0.02" value="1" class="wp-volbar" title="Volumen (↑ ↓)"></div>
           <span class="wp-time"></span>
           <div class="wp-spacer"></div>
-          <div class="wp-vol"><button class="wp-btn" data-wp="mute" title="Silenciar (m)">${IC.vol}</button><input type="range" min="0" max="1" step="0.02" value="1" class="wp-volbar" title="Volumen (↑ ↓)"></div>
           <button class="wp-btn" data-wp="next" title="Siguiente episodio (n)">${IC.next}</button>
-          <button class="wp-btn" data-wp="menu-audio" title="Audio">${IC.audio}</button>
-          <button class="wp-btn" data-wp="menu-subs" title="Subtítulos">${IC.subs}</button>
+          <button class="wp-btn" data-wp="menu-episodes" title="Episodios">${IC.episodes}</button>
+          <button class="wp-btn" data-wp="menu-tracks" title="Audio y subtítulos">${IC.subs}</button>
           <button class="wp-btn" data-wp="fs" title="Pantalla completa (f)">${IC.full}</button>
         </div>
       </div>
@@ -96,8 +96,13 @@
     const token = ++P.token;
     P.idx = idx;
     P.info = null; P.cues = []; P.segs = []; P.sub = null;
-    $('.wp-title', P.el).textContent = cur.title;
+    // «Serie · T1:E2 · Nombre»: la serie y, a su lado y más tenue, «T1:E2 Nombre»
+    const tm = cur.title.match(/^(.*?) · (T\d+:E\d+.*)$/);
+    $('.wp-t1', P.el).textContent = tm ? tm[1] : cur.title;
+    $('.wp-t2', P.el).textContent = tm ? tm[2].replace(/ · /g, ' ') : '';
     $('[data-wp="next"]', P.el).classList.toggle('hidden', idx >= P.playlist.length - 1);
+    $('[data-wp="menu-episodes"]', P.el).classList.toggle('hidden', !cur.episodeId);
+    $('.wp-menu', P.el).classList.add('hidden');
     $('.wp-subs', P.el).innerHTML = '';
     spinner(true);
     let info;
@@ -280,24 +285,49 @@
     note(msg);
   }
 
+  /** Panel de audio y subtítulos (dos columnas) o de episodios; el mismo botón lo cierra */
   function menu(kind) {
     const m = $('.wp-menu', P.el);
     if (!m.classList.contains('hidden') && m.dataset.kind === kind) return m.classList.add('hidden');
-    const info = P.info;
-    if (!info) return;
-    let items;
-    if (kind === 'audio') {
-      items = info.audio.map((a, i) => ({ v: i, on: i === P.audio, label: [langName(a.lang) || `Pista ${i + 1}`, a.title, a.codec.toUpperCase() + (a.channels > 2 ? ` ${a.channels === 6 ? '5.1' : a.channels === 8 ? '7.1' : a.channels + 'ch'}` : '')].filter(Boolean).join(' · ') }));
-    } else {
-      items = [{ v: '', on: !P.sub, label: 'Desactivados' }].concat(info.subs.map(s => ({
+    m.dataset.kind = kind;
+    m.className = 'wp-menu ' + kind;
+    if (kind === 'tracks') {
+      const info = P.info;
+      if (!info) return;
+      const audio = info.audio.map((a, i) => ({ v: i, on: i === P.audio, label: [langName(a.lang) || `Pista ${i + 1}`, a.title].filter(Boolean).join(' · ') }));
+      const subs = [{ v: '', on: !P.sub, label: 'Desactivados' }].concat(info.subs.map(s => ({
         v: s.key, on: P.sub?.key === s.key, off: !s.text,
         label: [langName(s.lang) || 'Subtítulos', s.title, s.forced ? 'forzados' : '', s.text ? '' : '(imagen, no disponible)'].filter(Boolean).join(' · ')
       })));
+      const col = (k, title, items) => `<div class="wp-col"><div class="wp-menu-h">${title}</div>` +
+        items.map(x => `<button class="wp-mi${x.on ? ' on' : ''}" ${x.off ? 'disabled' : ''} data-kind="${k}" data-wp-pick="${esc(x.v)}">${IC.check}<span>${esc(x.label)}</span></button>`).join('') + '</div>';
+      m.innerHTML = col('audio', 'Audio', audio) + col('subs', 'Subtítulos', subs);
+    } else {
+      m.innerHTML = '<div class="wp-menu-h">Episodios</div><div class="wp-eps"><div class="wp-loading">Cargando…</div></div>';
+      episodes();
     }
-    m.dataset.kind = kind;
-    m.innerHTML = `<div class="wp-menu-h">${kind === 'audio' ? 'Audio' : 'Subtítulos'}</div>` +
-      items.map(x => `<button class="wp-mi${x.on ? ' on' : ''}" ${x.off ? 'disabled' : ''} data-wp-pick="${esc(x.v)}">${esc(x.label)}</button>`).join('');
     m.classList.remove('hidden');
+  }
+
+  /** Episodios de la serie que se está viendo, por temporadas (la ficha completa se pide una vez) */
+  async function episodes(season) {
+    const cur = P.playlist[P.idx];
+    const token = P.token;
+    if (!P.item || P.item.id !== cur.itemId) {
+      try { P.item = await (await fetch('/api/item/' + encodeURIComponent(cur.itemId))).json(); } catch { P.item = null; }
+    }
+    const m = $('.wp-menu', P.el);
+    if (!P || token !== P.token || m.dataset.kind !== 'episodes' || !P.item?.episodes) return;
+    const eps = P.item.episodes;
+    const curEp = eps.find(e => e.id === cur.episodeId);
+    const seasons = [...new Set(eps.map(e => e.season))].sort((a, b) => a - b);
+    season = season ?? curEp?.season ?? seasons[0];
+    const name = e => P.item.meta?.seasons?.[e.season]?.episodes?.[e.episode]?.name;
+    m.innerHTML = '<div class="wp-menu-h">Episodios</div>' +
+      (seasons.length > 1 ? `<div class="wp-seasons">${seasons.map(n => `<button class="${n === season ? 'on' : ''}" data-wp-season="${n}">T${n}</button>`).join('')}</div>` : '') +
+      '<div class="wp-eps">' + eps.filter(e => e.season === season).map(e =>
+        `<button class="wp-mi${e.id === cur.episodeId ? ' on' : ''}" data-wp-ep="${esc(e.id)}">${IC.check}<span><b>${e.episode}</b> ${esc(name(e) || 'Episodio ' + e.episode)}</span></button>`).join('') + '</div>';
+    $('.wp-mi.on', m)?.scrollIntoView({ block: 'nearest' });
   }
 
   function pick(kind, value) {
@@ -325,7 +355,17 @@
     el.addEventListener('click', e => {
       const b = e.target.closest('[data-wp]');
       const pk = e.target.closest('[data-wp-pick]');
-      if (pk) return pick($('.wp-menu', el).dataset.kind, pk.dataset.wpPick);
+      if (pk) return pick(pk.dataset.kind, pk.dataset.wpPick);
+      const sn = e.target.closest('[data-wp-season]');
+      if (sn) return episodes(+sn.dataset.wpSeason);
+      const ep = e.target.closest('[data-wp-ep]');
+      if (ep) {
+        const cur = P.playlist[P.idx];
+        if (ep.dataset.wpEp === cur.episodeId) return $('.wp-menu', el).classList.add('hidden');
+        report(true);
+        return window.api.play({ itemId: cur.itemId, episodeId: ep.dataset.wpEp, fromStart: false });
+      }
+      if (e.target.closest('.wp-menu')) return;
       if (!b) {
         if (e.target === video || e.target.classList.contains('wp-subs') || e.target.classList.contains('wp-shade')) {
           if (!$('.wp-menu', el).classList.contains('hidden')) return $('.wp-menu', el).classList.add('hidden');
@@ -342,8 +382,8 @@
       else if (a === 'skip') skip();
       else if (a === 'mute') { video.muted = !video.muted; saveVol(); }
       else if (a === 'fs') window.api.toggleFullscreen();
-      else if (a === 'menu-audio') menu('audio');
-      else if (a === 'menu-subs') menu('subs');
+      else if (a === 'menu-tracks') menu('tracks');
+      else if (a === 'menu-episodes') menu('episodes');
       showUi(); paint();
     });
     video.addEventListener('dblclick', () => window.api.toggleFullscreen());

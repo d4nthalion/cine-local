@@ -23,8 +23,10 @@ body.wp-open { overflow: hidden; }
 .wp-btn.hidden { display: none; }
 
 .wp-top { position: absolute; top: 0; left: 0; right: 0; display: flex; align-items: center; gap: 12px; padding: 22px var(--gutter); }
-.wp-title { font-size: clamp(16px, 1.6vw, 22px); font-weight: 600; text-shadow: 0 1px 6px rgba(0,0,0,.6); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.wp-center { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); display: flex; align-items: center; gap: clamp(24px, 6vw, 80px); }
+/* «Twin Peaks  T3:E1 Parte 1»: la serie en negrita y el episodio a su lado, más tenue */
+.wp-title { font-size: clamp(18px, 2vw, 30px); text-shadow: 0 1px 6px rgba(0,0,0,.6); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wp-t1 { font-weight: 800; }
+.wp-t2 { margin-left: .55em; font-weight: 500; color: rgba(255,255,255,.7); }
 
 .wp-bottom { position: absolute; left: 0; right: 0; bottom: 0; padding: 0 var(--gutter) 18px; }
 .wp-seek { position: relative; padding: 14px 0; cursor: pointer; touch-action: none; }
@@ -36,8 +38,8 @@ body.wp-open { overflow: hidden; }
 .wp-seek:hover .wp-knob { transform: scale(1); }
 .wp-tip { position: absolute; bottom: 30px; transform: translateX(-50%); background: rgba(16,16,24,.92); padding: 4px 8px; border-radius: 6px; font-size: 13px; font-variant-numeric: tabular-nums; opacity: 0; pointer-events: none; transition: opacity .12s; }
 .wp-seek:hover .wp-tip { opacity: 1; }
-.wp-row { display: flex; align-items: center; gap: 4px; }
-.wp-time { font-size: 14px; font-variant-numeric: tabular-nums; color: rgba(255,255,255,.85); }
+.wp-row { display: flex; align-items: center; gap: 10px; }
+.wp-time { margin-left: 14px; font-size: 16px; font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .wp-spacer { flex: 1; }
 .wp-vol { display: flex; align-items: center; }
 .wp-volbar { width: 0; opacity: 0; transition: width .2s, opacity .2s; accent-color: var(--accent); }
@@ -51,24 +53,35 @@ body.wp-open { overflow: hidden; }
 .wp-skip:hover { background: #fff; color: #000; }
 .wp-skip.hidden { display: none; }
 
-.wp-menu { position: absolute; right: var(--gutter); bottom: 90px; z-index: 3; min-width: 260px; max-width: min(420px, 90vw); max-height: 60vh; overflow: auto; background: rgba(16,16,24,.96); border: 1px solid var(--line); border-radius: 12px; padding: 6px; box-shadow: 0 20px 50px rgba(0,0,0,.5); }
+/* paneles sobre la barra de tiempo, a la derecha: audio y subtítulos (dos columnas) y episodios */
+.wp-menu { position: absolute; right: var(--gutter); bottom: 112px; z-index: 3; max-height: calc(100vh - 220px); overflow: auto; background: rgba(34,34,46,.97); border: 1px solid rgba(255,255,255,.08); border-radius: 6px; padding: 22px 26px; box-shadow: 0 20px 50px rgba(0,0,0,.5); }
 .wp-menu.hidden { display: none; }
-.wp-menu-h { font-size: 12px; text-transform: uppercase; letter-spacing: .1em; color: var(--text-3); padding: 10px 12px 6px; }
-.wp-mi { display: block; width: 100%; text-align: left; background: none; border: 0; color: var(--text); padding: 10px 12px 10px 34px; border-radius: 8px; font: inherit; font-size: 14px; cursor: pointer; position: relative; }
-.wp-mi:hover:not(:disabled) { background: rgba(255,255,255,.08); }
-.wp-mi.on::before { content: ''; position: absolute; left: 13px; top: 50%; width: 8px; height: 8px; margin-top: -4px; border-radius: 50%; background: var(--accent); }
-.wp-mi:disabled { color: var(--text-3); cursor: default; }
+.wp-menu.tracks { display: grid; grid-template-columns: repeat(2, minmax(200px, 280px)); gap: 0 28px; }
+.wp-menu.episodes { width: min(440px, calc(100vw - 2 * var(--gutter))); }
+.wp-menu-h { font-size: 22px; font-weight: 800; padding: 0 0 14px 30px; }
+.wp-mi { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; background: none; border: 0; color: rgba(255,255,255,.62); padding: 11px 6px 11px 0; border-radius: 6px; font: inherit; font-size: 16px; cursor: pointer; }
+.wp-mi svg { width: 20px; height: 20px; flex: none; fill: var(--accent); visibility: hidden; }
+.wp-mi.on { color: #fff; font-weight: 700; }
+.wp-mi.on svg { visibility: visible; }
+.wp-mi:hover:not(:disabled) { color: #fff; }
+.wp-mi:disabled { color: rgba(255,255,255,.3); cursor: default; }
+.wp-mi b { display: inline-block; min-width: 1.6em; color: rgba(255,255,255,.5); font-weight: 600; }
+.wp-seasons { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 0 12px 30px; }
+.wp-seasons button { background: rgba(255,255,255,.08); border: 0; color: rgba(255,255,255,.75); padding: 6px 12px; border-radius: 999px; font: inherit; font-size: 14px; font-weight: 600; cursor: pointer; }
+.wp-seasons button.on { background: var(--accent); color: #fff; }
+.wp-loading { padding: 8px 30px; color: rgba(255,255,255,.6); }
 
 .wp-spinner { position: absolute; inset: 0; display: none; place-items: center; pointer-events: none; }
 .wp.loading .wp-spinner { display: grid; }
-.wp.loading .wp-center .huge { opacity: 0; }
 .wp-note { position: absolute; top: 90px; left: 50%; transform: translateX(-50%); background: rgba(16,16,24,.9); padding: 10px 16px; border-radius: 8px; font-size: 14px; }
 .wp-note.hidden { display: none; }
 
 @media (max-width: 700px) {
-  .wp-btn.big { width: 52px; height: 52px; }
-  .wp-btn.huge { width: 72px; height: 72px; }
   .wp-vol .wp-volbar { display: none; }
+  .wp-row { gap: 2px; }
+  .wp-time { margin-left: 4px; font-size: 13px; }
+  .wp-t2 { display: block; margin: 2px 0 0; font-size: .8em; }
+  .wp-menu.tracks { grid-template-columns: 1fr 1fr; gap: 0 12px; padding: 16px; }
 }
 
 /* ---------- ajustes: cuenta ---------- */

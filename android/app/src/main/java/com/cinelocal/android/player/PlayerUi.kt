@@ -12,7 +12,6 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.slideInHorizontally
-import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -46,7 +45,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.AspectRatio
-import androidx.compose.material.icons.rounded.Audiotrack
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.FastForward
 import androidx.compose.material.icons.rounded.Forward10
@@ -124,7 +122,6 @@ fun PlayerScreen(
     var lastTouch by remember { mutableLongStateOf(0L) }
     var dragging by remember { mutableStateOf<Float?>(null) }
     var dialog by remember { mutableStateOf<String?>(null) }
-    var lastPanel by remember { mutableStateOf("audio") }
     // aviso de doble toque: lado (-1 izquierda, 1 derecha), segundos acumulados y momento del último toque
     var hintSide by remember { mutableIntStateOf(0) }
     var hintSecs by remember { mutableIntStateOf(0) }
@@ -178,15 +175,15 @@ fun PlayerScreen(
                 Box(Modifier.fillMaxSize().background(Brush.verticalGradient(0f to CL.veil(0.7f), 0.22f to Color.Transparent)))
                 Box(Modifier.fillMaxSize().background(Brush.verticalGradient(0.6f to Color.Transparent, 1f to CL.veil(0.85f))))
                 Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing).padding(horizontal = 16.dp, vertical = 8.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        BarIcon(Icons.AutoMirrored.Rounded.ArrowBack, "Volver", onClick = onBack)
-                        Column(Modifier.padding(start = 8.dp)) {
-                            Text(
-                                state.title, color = CL.text, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                                style = TextStyle(fontFamily = Display, fontWeight = FontWeight.Bold, fontSize = 22.sp, lineHeight = 26.sp)
-                            )
-                            state.subtitle?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = CL.text2, maxLines = 1, overflow = TextOverflow.Ellipsis) }
-                        }
+                    // arriba: volver · el episodio (o la película) centrado · ajustar/llenar la pantalla
+                    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                        BarIcon(Icons.AutoMirrored.Rounded.ArrowBack, "Volver", Modifier.align(Alignment.CenterStart), onClick = onBack)
+                        Text(
+                            state.subtitle?.replace(" · ", " ") ?: state.title, Modifier.padding(horizontal = 64.dp),
+                            color = CL.text, maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center,
+                            style = TextStyle(fontFamily = Display, fontWeight = FontWeight.Medium, fontSize = 20.sp, lineHeight = 24.sp)
+                        )
+                        BarIcon(Icons.Rounded.AspectRatio, if (state.fill) "Ajustar a la pantalla" else "Llenar la pantalla", Modifier.align(Alignment.CenterEnd)) { onToggleFill(); touch() }
                     }
                     Spacer(Modifier.weight(1f))
                     SeekBar(
@@ -194,12 +191,10 @@ fun PlayerScreen(
                         onDrag = { dragging = it; touch() },
                         onSeek = { f -> onSeekTo((f * state.length.coerceAtLeast(1)).toLong()); dragging = null; touch() }
                     )
-                    Row(Modifier.fillMaxWidth().padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(24.dp)) {
-                        ControlButton(Icons.Rounded.Audiotrack, "Audio") { dialog = "audio"; lastPanel = "audio"; touch() }
-                        ControlButton(Icons.Rounded.Subtitles, "Subtítulos") { dialog = "subs"; lastPanel = "subs"; touch() }
-                        ControlButton(Icons.Rounded.AspectRatio, if (state.fill) "Ajustar" else "Llenar") { onToggleFill(); touch() }
-                        Spacer(Modifier.weight(1f))
-                        if (hasNext()) NextButton { onNext(); touch() }
+                    // abajo, centrados: audio y subtítulos · siguiente episodio
+                    Row(Modifier.fillMaxWidth().padding(top = 2.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(40.dp, Alignment.CenterHorizontally)) {
+                        ControlButton(Icons.Rounded.Subtitles, "Audio y subtítulos") { dialog = "tracks"; touch() }
+                        if (hasNext()) ControlButton(Icons.Rounded.SkipNext, "Siguiente episodio") { onNext(); touch() }
                     }
                 }
                 // controles centrales, centrados en la pantalla
@@ -244,26 +239,13 @@ fun PlayerScreen(
             }
         }
 
-        // panel lateral de pistas
-        AnimatedVisibility(
-            dialog != null,
-            enter = fadeIn(tween(240)),
-            exit = fadeOut(tween(200))
-        ) {
-            Box(Modifier.fillMaxSize().background(CL.veil(0.25f)).clickable(remember { MutableInteractionSource() }, indication = null) { dialog = null })
-        }
-        AnimatedVisibility(
-            dialog != null,
-            modifier = Modifier.align(Alignment.CenterEnd),
-            enter = slideInHorizontally(tween(240)) { it },
-            exit = slideOutHorizontally(tween(200)) { it }
-        ) {
-            val audio = lastPanel == "audio"
-            TrackPanel(
-                if (audio) "Audio" else "Subtítulos",
-                remember(lastPanel) { if (audio) audioTracks() else subTracks() },
-                remember(lastPanel, dialog) { if (audio) currentAudio() else currentSub() }
-            ) { id -> if (audio) onAudio(id) else onSub(id); dialog = null }
+        // audio y subtítulos: pantalla completa con las dos columnas
+        AnimatedVisibility(dialog != null, enter = fadeIn(tween(200)), exit = fadeOut(tween(180))) {
+            TracksScreen(
+                audio = remember(dialog) { audioTracks() }, subs = remember(dialog) { subTracks() },
+                currentAudio = remember(dialog) { currentAudio() }, currentSub = remember(dialog) { currentSub() },
+                onAudio = { onAudio(it); dialog = null }, onSub = { onSub(it); dialog = null }, onClose = { dialog = null }
+            )
         }
     }
 }
@@ -297,19 +279,21 @@ private fun PlayPause(playing: Boolean, onClick: () -> Unit) {
     }
 }
 
-/** Barra de tiempo propia: pista de 3 dp, avance con el degradado de la marca y pulgar blanco que crece al arrastrar */
+/**
+ * Barra de tiempo propia: pista de 4 dp, avance con el degradado de la marca y pulgar violeta que crece al arrastrar;
+ * a la derecha, el tiempo (al tocarlo, lo que queda)
+ */
 @Composable
 private fun SeekBar(time: Long, length: Long, dragging: Float?, onDrag: (Float) -> Unit, onSeek: (Float) -> Unit) {
     val len = length.coerceAtLeast(1)
     val frac = dragging ?: (time.toFloat() / len).coerceIn(0f, 1f)
-    val thumb by animateDpAsState(if (dragging != null) 18.dp else 12.dp, tween(120), label = "thumb")
+    val thumb by animateDpAsState(if (dragging != null) 24.dp else 18.dp, tween(120), label = "thumb")
     var showLeft by remember { mutableStateOf(false) }
     var widthPx by remember { mutableFloatStateOf(1f) }
-    val tnum = MaterialTheme.typography.labelMedium.copy(fontFeatureSettings = TNUM)
+    val tnum = MaterialTheme.typography.labelLarge.copy(fontFeatureSettings = TNUM)
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Text(fmtClock(dragging?.let { (it * len).toLong() } ?: time), style = tnum, color = CL.text2)
         BoxWithConstraints(
-            Modifier.weight(1f).padding(horizontal = 14.dp).height(40.dp)
+            Modifier.weight(1f).padding(start = 6.dp, end = 18.dp).height(44.dp)
                 .onSizeChanged { widthPx = it.width.toFloat().coerceAtLeast(1f) }
                 .pointerInput(Unit) {
                     detectTapGestures { o -> onSeek((o.x / widthPx).coerceIn(0f, 1f)) }
@@ -326,9 +310,9 @@ private fun SeekBar(time: Long, length: Long, dragging: Float?, onDrag: (Float) 
             contentAlignment = Alignment.CenterStart
         ) {
             val w = maxWidth
-            Box(Modifier.fillMaxWidth().height(3.dp).background(Color(0x40FFFFFF)))
-            Box(Modifier.fillMaxWidth(frac).height(3.dp).background(BrandGradientH))
-            Box(Modifier.offset(x = w * frac - thumb / 2).size(thumb).background(CL.text, CircleShape))
+            Box(Modifier.fillMaxWidth().height(4.dp).background(Color(0x59FFFFFF), CircleShape))
+            Box(Modifier.fillMaxWidth(frac).height(4.dp).background(BrandGradientH, CircleShape))
+            Box(Modifier.offset(x = w * frac - thumb / 2).size(thumb).background(CL.accent, CircleShape))
             if (dragging != null) {
                 val label = fmtClock((dragging * len).toLong())
                 Text(
@@ -339,35 +323,26 @@ private fun SeekBar(time: Long, length: Long, dragging: Float?, onDrag: (Float) 
                 )
             }
         }
+        val at = dragging?.let { (it * len).toLong() } ?: time
         Text(
-            if (showLeft) "−" + fmtClock(len - time) else fmtClock(length),
-            Modifier.tapFade { showLeft = !showLeft }, style = tnum, color = CL.text2
+            if (showLeft) "−" + fmtClock(len - at) else fmtClock(at),
+            Modifier.tapFade { showLeft = !showLeft }, style = tnum, color = CL.text
         )
     }
 }
 
+/** Icono y texto en mayúsculas («AUDIO Y SUBTÍTULOS», «SIGUIENTE EPISODIO») */
 @Composable
 private fun ControlButton(icon: ImageVector, label: String, onClick: () -> Unit) {
     Row(
         Modifier.heightIn(min = 48.dp).tapFade(onClick = onClick),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Icon(icon, null, Modifier.size(20.dp), tint = CL.text)
-        Text(label, color = CL.text, style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(start = 8.dp))
-    }
-}
-
-/** "Siguiente episodio" con contorno, para destacarlo */
-@Composable
-private fun NextButton(onClick: () -> Unit) {
-    Row(
-        Modifier.height(40.dp).background(CL.bg3.copy(alpha = .55f), RoundedCornerShape(4.dp))
-            .border(1.dp, CL.lineStrong, RoundedCornerShape(4.dp))
-            .tapFade(onClick = onClick).padding(horizontal = 14.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text("Siguiente episodio", color = CL.text, style = MaterialTheme.typography.labelLarge)
-        Icon(Icons.Rounded.SkipNext, null, Modifier.padding(start = 6.dp).size(20.dp), tint = CL.text)
+        Icon(icon, null, Modifier.size(24.dp), tint = CL.text)
+        Text(
+            label.uppercase(), color = CL.text, modifier = Modifier.padding(start = 10.dp),
+            style = TextStyle(fontFamily = Display, fontWeight = FontWeight.ExtraBold, fontSize = 14.sp, letterSpacing = 0.4.sp)
+        )
     }
 }
 
@@ -430,32 +405,52 @@ private fun SeekHint(side: Int, secs: Int) {
     }
 }
 
-/** Panel lateral derecho de 320 dp con las pistas; la activa con ✓ violeta */
+/** Audio y subtítulos a pantalla completa: volver arriba y dos columnas; la pista activa con ✓ violeta a la izquierda */
 @Composable
-private fun TrackPanel(title: String, tracks: List<Track>, current: Int, onPick: (Int) -> Unit) {
+private fun TracksScreen(
+    audio: List<Track>, subs: List<Track>, currentAudio: Int, currentSub: Int,
+    onAudio: (Int) -> Unit, onSub: (Int) -> Unit, onClose: () -> Unit
+) {
     Column(
-        Modifier.width(320.dp).fillMaxHeight().background(CL.bg2.copy(alpha = .95f))
+        Modifier.fillMaxSize().background(CL.bg)
             .clickable(remember { MutableInteractionSource() }, indication = null) {}
-            .windowInsetsPadding(WindowInsets.safeDrawing).padding(vertical = 16.dp)
+            .windowInsetsPadding(WindowInsets.safeDrawing).padding(horizontal = 16.dp, vertical = 8.dp)
     ) {
-        Text(title.uppercase(), Modifier.padding(start = 20.dp, bottom = 8.dp), style = MaterialTheme.typography.labelSmall, color = CL.text3)
+        BarIcon(Icons.AutoMirrored.Rounded.ArrowBack, "Volver", onClick = onClose)
+        Row(Modifier.fillMaxSize().padding(top = 4.dp)) {
+            TrackColumn("Audio", audio, currentAudio, Modifier.weight(1f), onAudio)
+            // sin subtítulos LibVLC no da la pista «desactivados»: se añade para poder quitarlos
+            TrackColumn("Subtítulos", if (subs.any { it.id == -1 }) subs else listOf(Track(-1, "")) + subs, currentSub, Modifier.weight(1f), onSub)
+        }
+    }
+}
+
+@Composable
+private fun TrackColumn(title: String, tracks: List<Track>, current: Int, modifier: Modifier, onPick: (Int) -> Unit) {
+    Column(modifier.padding(end = 16.dp)) {
+        Text(
+            title, Modifier.padding(start = 48.dp, top = 8.dp, bottom = 12.dp), color = CL.text,
+            style = TextStyle(fontFamily = Display, fontWeight = FontWeight.ExtraBold, fontSize = 26.sp, lineHeight = 30.sp)
+        )
         if (tracks.isEmpty()) Text(
-            "No hay pistas disponibles.", Modifier.padding(horizontal = 20.dp, vertical = 12.dp),
+            "No hay pistas disponibles.", Modifier.padding(start = 48.dp, top = 8.dp),
             style = MaterialTheme.typography.bodyLarge, color = CL.text2
         )
         else LazyColumn {
             items(tracks) { t ->
                 val sel = t.id == current
                 Row(
-                    Modifier.fillMaxWidth().heightIn(min = 52.dp).tapRow(role = Role.RadioButton) { onPick(t.id) }.padding(horizontal = 20.dp),
+                    Modifier.fillMaxWidth().heightIn(min = 52.dp).tapRow(role = Role.RadioButton) { onPick(t.id) },
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    Box(Modifier.width(48.dp), contentAlignment = Alignment.Center) {
+                        if (sel) Icon(Icons.Rounded.Check, "Activa", Modifier.size(26.dp), tint = CL.accent)
+                    }
                     Text(
                         if (t.id == -1) "Desactivados" else t.name, Modifier.weight(1f),
-                        style = MaterialTheme.typography.bodyLarge, color = if (sel) CL.text else CL.text2,
+                        style = MaterialTheme.typography.titleMedium, color = if (sel) CL.text else CL.text2,
                         maxLines = 2, overflow = TextOverflow.Ellipsis
                     )
-                    if (sel) Icon(Icons.Rounded.Check, "Activa", Modifier.padding(start = 12.dp).size(20.dp), tint = CL.accent)
                 }
             }
         }

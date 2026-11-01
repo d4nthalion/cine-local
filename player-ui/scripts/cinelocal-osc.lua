@@ -25,6 +25,16 @@ local state = {
   thumb = { width = 0, height = 0, disabled = true }, thumb_shown = false,
   -- saltar intro/resumen/créditos: tramos del archivo actual, tramo activo, botón y aviso
   segs = {}, seg = nil, seg_idx = nil, seg_done = {}, auto = {}, pill_fade = 0, pill_last = nil, toast = nil,
+  -- panel de audio y subtítulos (dos columnas): pistas del archivo y desplazamiento de cada columna
+  panel = false, tracks = {}, panel_scroll = { audio = 0, sub = 0 }, panel_cols = nil,
+}
+
+local LANG_NAMES = {
+  spa = 'Español', es = 'Español', esp = 'Español', cas = 'Español', eng = 'Inglés', en = 'Inglés',
+  fre = 'Francés', fra = 'Francés', fr = 'Francés', ger = 'Alemán', deu = 'Alemán', de = 'Alemán',
+  ita = 'Italiano', it = 'Italiano', por = 'Portugués', pt = 'Portugués', jpn = 'Japonés', ja = 'Japonés',
+  kor = 'Coreano', ko = 'Coreano', cat = 'Catalán', ca = 'Catalán', chi = 'Chino', zho = 'Chino', zh = 'Chino',
+  rus = 'Ruso', ru = 'Ruso', lat = 'Español (Latinoamérica)', ['es-419'] = 'Español (Latinoamérica)',
 }
 local controls = {}       -- zonas pulsables de la última pintada: {x1,y1,x2,y2,id,tip}
 local timer = nil
@@ -148,6 +158,24 @@ end
 -- longitud aproximada del texto (en caracteres UTF-8)
 local function ulen(s) return select(2, s:gsub('[^\128-\191]', '')) end
 
+-- nombre de una pista: el idioma y, si lo tiene, su título («Español · Castellano», «Inglés · Comentarios»)
+local function track_label(t)
+  local title = t.title and t.title ~= '' and t.title or nil
+  local code = t.lang
+  -- pista externa sin idioma ni título propio: mpv pone el nombre del archivo («Peli.es.srt»)
+  if title and title:match('%.%w%w%w?%w?$') then
+    code = code or title:match('%.(%a%a%a?)%.%w+$') or title:match('^(%a%a%a?)%.%w+$')
+    title = nil
+  end
+  local lang = code and (LANG_NAMES[code:lower()] or code:upper()) or nil
+  if title and lang and title:lower():find(lang:lower(), 1, true) then title = nil end
+  local label = lang or title or ('Pista ' .. t.id)
+  if lang and title then label = label .. ' · ' .. title end
+  if t.forced then label = label .. ' (forzados)' end
+  if ulen(label) > 30 then label = label:sub(1, 30):gsub('[\128-\255]*$', '') .. '…' end
+  return label
+end
+
 -- ---------------------------------------------------------------- pintado
 
 local function render()
@@ -179,10 +207,14 @@ local function render()
     local top_y = 58 * s
     local back_r = 26 * s
     local back_ctl = add_control(pad - 14 * s, top_y - back_r - 8 * s, pad + 2 * back_r + 8 * s, top_y + back_r + 8 * s, 'back', 'Volver a CineLocal')
-    local main_title, sub_title = state.title:match('^(.-) · (.+)$')
+    -- «Serie · T1:E2 · Nombre»: la serie y, a su lado y más tenue, «T1:E2 Nombre»
+    local main_title, sub_title = state.title:match('^(.-) · (T%d+:E%d+.*)$')
     main_title = main_title or state.title
-    text(pad + 2 * back_r + 22 * s, top_y - (sub_title and 13 * s or 0), 4, main_title, 34 * s, WHITE, alpha(0, f), true)
-    if sub_title then text(pad + 2 * back_r + 22 * s, top_y + 22 * s, 4, sub_title, 23 * s, 'DDDDDD', alpha(0x10, f), false) end
+    local tx0 = pad + 2 * back_r + 22 * s
+    text(tx0, top_y, 4, main_title, 36 * s, WHITE, alpha(0, f), true)
+    if sub_title then
+      text(tx0 + ulen(main_title) * 36 * s * 0.47 + 18 * s, top_y, 4, sub_title:gsub(' · ', ' '), 36 * s, 'B4B4B4', alpha(0, f), false)
+    end
 
     if not state.fullscreen then
       local bx = w - pad
@@ -193,17 +225,9 @@ local function render()
       end
     end
 
-    -- ---------- centro: −10 s · reproducir/pausa · +10 s
-    local cx, cy = w / 2, h / 2
-    local big = 62 * s
-    local center_play = add_control(cx - big, cy - big, cx + big, cy + big, 'play', nil)
-    local skip_gap = 300 * s   -- distancia del botón central a los de ±10 s
-    local center_back = add_control(cx - skip_gap - 44 * s, cy - 44 * s, cx - skip_gap + 44 * s, cy + 44 * s, 'back10', nil)
-    local center_fwd = add_control(cx + skip_gap - 44 * s, cy - 44 * s, cx + skip_gap + 44 * s, cy + 44 * s, 'fwd10', nil)
-
-    -- ---------- barra de tiempo
+    -- ---------- barra de tiempo, de lado a lado (el tiempo va en la fila de abajo)
     local bar_y = h - 112 * s
-    local bar_x1, bar_x2 = pad + 128 * s, w - pad - 128 * s   -- a los lados: tiempo transcurrido y restante
+    local bar_x1, bar_x2 = pad, w - pad
     state.bar = { bar_x1, bar_x2 }   -- timeline_time() usa estos mismos extremos
     add_control(bar_x1 - 6 * s, bar_y - 20 * s, bar_x2 + 6 * s, bar_y + 20 * s, 'timeline', nil)
 
@@ -226,11 +250,13 @@ local function render()
     local vol_x1, vol_x2 = x - 30 * s, x + 120 * s
     -- la zona empieza justo donde acaba el altavoz (sin hueco que la cierre) y es igual de alta
     if state.vol_open then add_control(x - 40 * s, row_y - 30 * s, vol_x2 + 16 * s, row_y + 30 * s, 'volume', nil) end
+    -- tiempo «11:19 / 1:00:37» tras el volumen (se aparta al desplegarlo)
+    local time_x = (state.vol_open and vol_x2 + 30 * s or x - 6 * s)
 
+    -- derecha, de derecha a izquierda: pantalla completa · audio y subtítulos · episodios · siguiente
     local right = {}
     right[#right + 1] = { state.fullscreen and 'fullscreen_exit' or 'fullscreen', 'fullscreen', state.fullscreen and 'Salir de pantalla completa' or 'Pantalla completa' }
-    right[#right + 1] = { 'subtitles', 'subs', 'Subtítulos' }
-    if state.audio_tracks > 1 then right[#right + 1] = { 'audiotrack', 'audio', 'Audio' } end
+    right[#right + 1] = { 'subtitles', 'tracks', 'Audio y subtítulos' }
     if state.pl_count > 1 then right[#right + 1] = { 'video_library', 'episodes', 'Episodios' } end
     if state.pl_pos < state.pl_count - 1 then right[#right + 1] = { 'skip_next', 'next', 'Siguiente episodio' } end
     local rx = w - pad - 20 * s
@@ -243,14 +269,6 @@ local function render()
     -- con las zonas ya conocidas, decidir qué está bajo el ratón
     local hov = state.hover and control_at(mx, my) or nil
     local hid = hov and hov.id
-
-    -- botón central
-    local play_hover = hov == center_play
-    icon_soft(cx, cy, state.pause and 'play_arrow' or 'pause', (play_hover and 104 or 96) * s, alpha(0, f), alpha(0x80, f))
-    for _, b in ipairs({ { cx - skip_gap, 'replay_10', center_back }, { cx + skip_gap, 'forward_10', center_fwd } }) do
-      local hv = hov == b[3]
-      icon_soft(b[1], cy, b[2], (hv and 64 or 58) * s, alpha(0, f), alpha(0x80, f))
-    end
 
     -- volver
     local back_hover = hov == back_ctl
@@ -288,8 +306,7 @@ local function render()
         end
       end
       circle(px, bar_y, (tl_hover and 13 or 9) * s, ACCENT, alpha(0, f))
-      text(pad, bar_y, 4, fmt_time(pos), 25 * s, WHITE, alpha(0, f), false)
-      text(w - pad, bar_y, 6, '-' .. fmt_time(dur - pos), 25 * s, WHITE, alpha(0, f), false)
+      text(time_x, row_y, 4, fmt_time(pos) .. ' / ' .. fmt_time(dur), 26 * s, WHITE, alpha(0, f), true)
 
       -- tiempo y miniatura bajo el ratón
       if tl_hover and mx >= bar_x1 - 6 * s and mx <= bar_x2 + 6 * s then
@@ -317,6 +334,47 @@ local function render()
       local hv = hov == it[3]
       icon(it[1], row_y, it[2], (hv and 44 or 40) * s, hv and ACCENT or WHITE, alpha(0, f))
     end
+    -- panel de audio y subtítulos: dos columnas sobre la fila de botones, a la derecha
+    state.panel_cols = nil
+    if state.panel then
+      local audio, subs = {}, { { id = 'no', label = 'Desactivados', on = true } }
+      for _, t in ipairs(state.tracks) do
+        if t.type == 'audio' then audio[#audio + 1] = { id = t.id, label = track_label(t), on = t.selected }
+        elseif t.type == 'sub' then
+          subs[#subs + 1] = { id = t.id, label = track_label(t), on = t.selected }
+          if t.selected then subs[1].on = false end
+        end
+      end
+      local col_w, row_h, head_h, px = 330 * s, 62 * s, 92 * s, 40 * s
+      local px2, py2 = w - pad, bar_y - 34 * s   -- encima de la barra de tiempo
+      local fit = math.max(2, math.floor((py2 - 150 * s - head_h - 24 * s) / row_h))
+      local rows = math.min(fit, math.max(#audio, #subs))
+      local px1, py1 = px2 - 2 * col_w - 2 * px, py2 - head_h - rows * row_h - 24 * s
+      add_control(px1, py1, px2, py2, 'panel', nil)   -- dentro del panel, un clic en el hueco no lo cierra
+      rrect(px1, py1, px2, py2, 6 * s, '2E2222', alpha(0x08, f), '4A3C3C', alpha(0x20, f), 1.5 * s)
+      state.panel_cols = {}
+      for ci, col in ipairs({ { 'audio', 'Audio', audio }, { 'sub', 'Subtítulos', subs } }) do
+        local cx1 = px1 + px + (ci - 1) * col_w
+        state.panel_cols[col[1]] = { cx1, py1 + head_h, cx1 + col_w, py2, #col[3], rows }
+        text(cx1 + 22 * s, py1 + head_h / 2 + 6 * s, 4, col[2], 32 * s, WHITE, alpha(0, f), true)
+        local off = math.max(0, math.min(state.panel_scroll[col[1]], #col[3] - rows))
+        state.panel_scroll[col[1]] = off
+        for i = 1, rows do
+          local it = col[3][i + off]
+          if not it then break end
+          local ry = py1 + head_h + (i - 0.5) * row_h
+          local c = add_control(cx1, ry - row_h / 2, cx1 + col_w - 10 * s, ry + row_h / 2, 'pick', nil)
+          c.pick = { col[1], it.id }
+          local hv = hov == c or (state.hover and inside(c, mx, my))
+          if it.on then icon(cx1 - 2 * s, ry, 'check', 30 * s, ACCENT, alpha(0, f)) end
+          text(cx1 + 22 * s, ry, 4, it.label, 26 * s, (it.on or hv) and WHITE or 'AAAAAA', alpha(0, f), it.on)
+        end
+        if #col[3] > rows then
+          text(cx1 + col_w - 20 * s, py1 + head_h / 2 + 6 * s, 6, (off + 1) .. '–' .. math.min(#col[3], off + rows) .. ' de ' .. #col[3], 18 * s, '888888', alpha(0, f), false)
+        end
+      end
+    end
+
     -- volumen desplegado
     if state.vol_open then
       local vol = state.mute and 0 or math.min(100, state.volume)
@@ -329,7 +387,7 @@ local function render()
     end
 
     -- texto de ayuda del botón bajo el ratón
-    if hov and hov.tip and state.pressed == nil and hid ~= 'timeline' then
+    if hov and hov.tip and state.pressed == nil and hid ~= 'timeline' and not state.panel then
       local ty = hov[2] - 22 * s
       if ty < 40 * s then ty = hov[4] + 24 * s end
       local tx = math.max(80 * s, math.min(w - 80 * s, (hov[1] + hov[3]) / 2))
@@ -391,7 +449,7 @@ end
 local function tick()
   local now = mp.get_time()
   -- ocultar tras unos segundos sin mover el ratón (no en pausa, ni arrastrando, ni sobre un botón)
-  if state.visible and not state.pause and not state.dragging and not state.menu_open and now - state.last_move > HIDE_AFTER then
+  if state.visible and not state.pause and not state.dragging and not state.menu_open and not state.panel and now - state.last_move > HIDE_AFTER then
     -- sólo se mantiene si el ratón está sobre las barras de arriba o de abajo (no en el centro)
     local s = math.max(0.55, math.min(state.w / 1920, state.h / 1080))
     local on_bars = state.hover and control_at(state.mx, state.my) and (state.my > state.h - 170 * s or state.my < 110 * s)
@@ -482,17 +540,28 @@ local actions = {
   maximize = function() mp.commandv('cycle', 'window-maximized') end,
   fullscreen = function() mp.commandv('cycle', 'fullscreen') end,
   next = function() mp.commandv('playlist-next') end,
-  subs = function() mp.commandv('script-binding', 'uosc/subtitles') end,
-  audio = function() mp.commandv('script-binding', 'uosc/audio') end,
-  episodes = function() mp.commandv('script-binding', 'uosc/playlist') end,
+  tracks = function() state.panel = not state.panel; state.panel_scroll = { audio = 0, sub = 0 } end,
+  episodes = function() state.panel = false; mp.commandv('script-binding', 'uosc/playlist') end,
   skip = function() do_skip(state.seg) end,
 }
+
+-- elegir una pista del panel: { 'audio' | 'sub', id | 'no' }
+local function pick_track(p)
+  mp.set_property(p[1] == 'audio' and 'aid' or 'sid', tostring(p[2]))
+end
 
 local function on_left(e)
   local x, y = state.mx, state.my
   if e.event == 'down' then
     show()
     local c = control_at(x, y)
+    -- con el panel abierto, un clic fuera de él (y de su botón) sólo lo cierra
+    if state.panel and not (c and (c.id == 'panel' or c.id == 'pick' or c.id == 'tracks')) then
+      state.panel = false
+      state.down_at, state.ignore_up = { x, y, 'panel' }, true
+      wake()
+      return
+    end
     state.down_at = { x, y, c and c.id }
     if c and c.id == 'timeline' and state.dur > 0 then
       state.dragging = 'timeline'
@@ -502,14 +571,19 @@ local function on_left(e)
       state.dragging = 'volume'
       set_volume_at(x)
     elseif c then
-      state.pressed = c.id
+      state.pressed, state.pressed_pick = c.id, c.pick
     end
   elseif e.event == 'up' then
     if state.dragging == 'timeline' then
       mp.commandv('seek', tostring(timeline_time(x)), 'absolute', 'exact')
     elseif state.pressed then
       local c = control_at(x, y)
-      if c and c.id == state.pressed and actions[c.id] then actions[c.id]() end
+      if c and c.id == state.pressed then
+        if c.pick then
+          local p = state.pressed_pick
+          if p and p[1] == c.pick[1] and p[2] == c.pick[2] then pick_track(c.pick) end
+        elseif actions[c.id] then actions[c.id]() end
+      end
     elseif state.down_at and not state.down_at[3] and not state.ignore_up then
       -- clic en el vídeo: pausa (esperando por si es un doble clic, que pone pantalla completa)
       if state.pending_click then state.pending_click:kill() end
@@ -530,6 +604,14 @@ end
 
 local function on_wheel(dir)
   return function()
+    -- en una columna del panel con más pistas de las que caben: desplazarla
+    for kind, col in pairs(state.panel and state.panel_cols or {}) do
+      if inside(col, state.mx, state.my) then
+        if col[5] > col[6] then state.panel_scroll[kind] = math.max(0, math.min(col[5] - col[6], state.panel_scroll[kind] - dir)) end
+        show()
+        return
+      end
+    end
     local c = control_at(state.mx, state.my)
     if c and (c.id == 'mute' or c.id == 'volume') then
       mp.commandv('add', 'volume', tostring(dir * 5))
@@ -572,6 +654,7 @@ mp.register_script_message('cinelocal-segments', function(json)
 end)
 
 mp.register_event('start-file', function()
+  state.panel = false
   state.segs, state.seg, state.seg_idx, state.seg_done, state.pill_last = {}, nil, nil, {}, nil
 end)
 
@@ -635,6 +718,8 @@ mp.observe_property('track-list', 'native', function(_, list)
   local n = 0
   for _, t in ipairs(list or {}) do if t.type == 'audio' then n = n + 1 end end
   state.audio_tracks = n
+  state.tracks = list or {}
+  wake()
 end)
 mp.observe_property('user-data/uosc/menu/type', 'native', function(_, v)
   state.menu_open = v ~= nil
