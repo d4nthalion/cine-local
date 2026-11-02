@@ -68,6 +68,10 @@ const S = {
   requests: { items: [], pending: 0 },                             // peticiones (las mías; un administrador, todas)
   reqSearch: { q: '', type: 'movie', busy: false, results: [], error: null },
   access: { days: 7, user: '', type: '', q: '', items: null, total: 0, users: [], busy: false, error: null },   // registro de actividad (administradores)
+  users: { users: null, groups: null, error: null },               // usuarios y lo que puede ver cada uno (administradores)
+  userEdit: null,                                                  // el usuario que se está cambiando
+  ann: { items: null, error: null },                               // avisos enviados (administradores)
+  annEdit: null,                                                   // el aviso que se está escribiendo
   titles: {},                                                      // fichas de TMDB de lo que no está en la biblioteca
   emule: {
     snap: { ok: false, code: 'disabled', downloads: [] },
@@ -280,7 +284,9 @@ function metaLine(it, extra = '') {
 /** Carátula de un título: la elegida a mano (también sin ficha de TMDB) o la de la ficha */
 const posterOf = it => it.poster || it.meta?.poster || null;
 
-function card(it) {
+/** Carátula de un título; note (texto) sustituye a la línea de debajo: el motivo de una recomendación */
+function card(it, note) {
+  if (typeof note !== 'string') note = '';   // con .map(card) llega el índice
   const poster = posterOf(it);
   const isNew = isNewItem(it);
   let watched = false, bar = '';
@@ -301,7 +307,7 @@ function card(it) {
       ${lbBadge(lbOf(it))}
       ${bar}
     </div>
-    <div class="cap"><div class="t">${esc(T(it))}</div><div class="s">${esc(sub)}</div></div>
+    <div class="cap"><div class="t">${esc(T(it))}</div><div class="s" ${note ? `title="${esc(note)}"` : ''}>${esc(note || sub)}</div></div>
   </div>`;
 }
 function lbBadge(lb) {
@@ -594,7 +600,11 @@ function viewHome() {
     const sorted = [...wl.filter(e => e.it), ...wl.filter(e => !e.it)].slice(0, 30);
     rows += row('Tu watchlist de Letterboxd', sorted.map(watchlistCard).join(''), 'lbwl', 'watchlist');
   }
-  for (const b of becauseYouWatched().slice(0, 2)) rows += row(`Porque viste «${T(b.from)}»`, b.items.map(card).join(''), 'because-' + b.from.id);
+  // lo recomendado con todo lo que has visto y tus notas de Letterboxd; luego, el director y el actor que más te gustan
+  const rec = recommendations();
+  if (rec.list.length >= 4) rows += row('Recomendado para ti', rec.list.slice(0, 24).map(r => card(r.it, r.why)).join(''), 'for-you');
+  for (const r of rec.rows) rows += row(r.title, r.list.map(x => card(x.it, x.why)).join(''), r.key);
+  for (const b of becauseYouWatched().slice(0, 1)) rows += row(`Porque viste «${T(b.from)}»`, b.items.map(card).join(''), 'because-' + b.from.id);
   // sólo si encaja con lo que ves (si no, no sale)
   const forYou = recommendedCollections();
   if (forYou.length) rows += row('Colecciones para ti', forYou.map(r => sagaCard(r.c, r.note)).join(''), 'coll-for-you');
@@ -614,6 +624,169 @@ function viewHome() {
   }
 
   return `${hero}<div class="rows ${hero ? '' : 'no-hero'}">${banners()}${rows}</div>`;
+}
+
+/**
+ * Recomendaciones: un perfil de tus gustos hecho con todo lo que has visto (y, con Letterboxd, con tus notas: lo que
+ * puntúas alto suma y lo que puntúas bajo resta), y una puntuación para cada título sin ver de la biblioteca:
+ * - lo que tiene en común con lo que te gusta: director o creador, reparto, géneros, saga y época. Lo que comparten
+ *   muchos títulos (el género «Drama») cuenta menos que lo raro (un director concreto);
+ * - las recomendaciones de TMDB en las dos direcciones: lo que recomiendan los títulos que te gustaron y los títulos que
+ *   recomiendan algo que te gustó, también de las películas puntuadas en Letterboxd que no están en la biblioteca;
+ * - un poco de la nota de TMDB, para desempatar.
+ * Cada recomendación lleva su motivo principal («Porque te gusta Christopher Nolan»).
+ */
+const REC_WEIGHT = { dir: 2.2, crea: 2.2, cast: 0.8, genre: 1.2, coll: 2, decade: 0.4 };
+let recsCache = null;
+
+/** Lo que dice de un título: sus rasgos («dir:Christopher Nolan», «genre:Ciencia ficción»…) */
+function recFeatures(it) {
+  const m = it.meta;
+  if (!m) return [];
+  const f = [];
+  for (const d of m.directors?.length ? m.directors.map(x => x.name) : (m.director || '').split(',').map(s => s.trim()).filter(Boolean)) f.push('dir:' + d);
+  // los creadores de una serie vienen en un texto («Vince Gilligan, Peter Gould»)
+  for (const c of (Array.isArray(m.creators) ? m.creators.map(x => x.name || x) : String(m.creators || '').split(','))) if (c.trim()) f.push('crea:' + c.trim());
+  for (const p of (m.people || []).slice(0, 6)) f.push('cast:' + p);
+  for (const g of m.genres || []) f.push('genre:' + g);
+  if (m.collection?.id) f.push('coll:' + m.collection.id);
+  if (m.year) f.push('decade:' + Math.floor(m.year / 10) * 10);
+  return f;
+}
+
+/**
+ * Cuánto te gustó un título (de -1,5 a 2): tu nota de Letterboxd si la hay (5★ ≈ 1,8; 3★ ≈ 0,2; 1★ ≈ -1,4; con «me
+ * gusta», algo más) y si no, haberlo visto (entero, o buena parte de una serie). null: no lo has visto.
+ */
+function recLiking(it) {
+  const lb = lbOf(it);
+  if (lb?.rating) return Math.max(-1.5, Math.min(2, (lb.rating - 2.75) / 1.25 + (lb.liked ? 0.4 : 0)));
+  if (lb?.liked) return 1.2;
+  if (it.type === 'movie') {
+    const p = prog(it.path);
+    return p?.watched || lb?.watched ? 0.7 : p?.pos > 1200 ? 0.3 : null;
+  }
+  const seen = it.episodes.filter(e => epSeen(it, e)).length;
+  return seen >= Math.min(3, it.episodes.length) ? 0.4 + 0.4 * seen / it.episodes.length : null;
+}
+
+/** Cuándo lo viste (para que pese algo más lo reciente) */
+function recWhen(it) {
+  const paths = it.type === 'movie' ? [it.path] : it.episodes.map(e => e.path);
+  const at = Math.max(0, ...paths.map(p => prog(p)?.at || 0));
+  const lb = lbOf(it);
+  return at || (lb?.date ? Date.parse(lb.date) || 0 : 0);
+}
+
+function recommendations() {
+  // cambia si cambia la biblioteca, lo visto o Letterboxd
+  const pr = Object.values(S.lib.progress || {});
+  const key = [S.lib.items.length, S.lib.scannedAt, pr.length, pr.filter(p => p.watched).length, pr.reduce((m, p) => Math.max(m, p.at || 0), 0), S.lb.syncedAt || 0, S.lb.films.length].join('|');
+  if (recsCache?.key === key) return recsCache;
+  const items = S.lib.items.filter(i => i.meta);
+  const now = Date.now();
+  // cuántos títulos de la biblioteca tienen cada rasgo: lo común cuenta menos
+  const df = new Map();
+  for (const it of items) for (const f of new Set(recFeatures(it))) df.set(f, (df.get(f) || 0) + 1);
+  const idf = f => Math.log(1 + items.length / (df.get(f) || 1));
+  // el perfil: para cada rasgo, cuánto te gusta lo que lo tiene (la media, con más confianza cuantos más títulos)
+  const sum = new Map(), cnt = new Map();
+  const liked = [];                               // títulos vistos, con cuánto te gustaron
+  for (const it of items) {
+    const w0 = recLiking(it);
+    if (w0 == null) continue;
+    const when = recWhen(it);
+    const w = w0 * (1 + (when ? 0.4 * Math.exp(-(now - when) / (180 * 864e5)) : 0));
+    liked.push({ it, w, f: new Set(recFeatures(it)) });
+    for (const f of liked[liked.length - 1].f) { sum.set(f, (sum.get(f) || 0) + w); cnt.set(f, (cnt.get(f) || 0) + 1); }
+  }
+  if (!liked.length && !S.lb.films.some(f => f.rating || f.liked)) return (recsCache = { key, list: [], rows: [] });
+  const affinity = f => { const n = cnt.get(f); return n ? sum.get(f) / (n + 1) * Math.log(1 + n) : 0; };
+  // recomendaciones de TMDB: lo que recomiendan los títulos que te gustaron…
+  const byTmdb = new Map(items.filter(i => i.meta.tmdbId).map(i => [i.type + ':' + i.meta.tmdbId, i]));
+  const tmdbVotes = new Map();   // id del candidato → [{ w, name }]
+  const vote = (id, w, name) => (tmdbVotes.get(id) || tmdbVotes.set(id, []).get(id)).push({ w, name });
+  for (const { it, w } of liked) for (const r of it.meta.recs || []) { const c = byTmdb.get(it.type + ':' + r); if (c) vote(c.id, w, T(it)); }
+  // …y los títulos que recomiendan algo que te gustó (también lo puntuado en Letterboxd que no está en la biblioteca)
+  const seenTmdb = new Set(liked.filter(l => l.it.type === 'movie').map(l => l.it.meta.tmdbId));
+  const lbScore = new Map();
+  for (const f of S.lb.films) {
+    if (!f.tmdbId || seenTmdb.has(f.tmdbId) || !(f.rating || f.liked || f.watched)) continue;
+    lbScore.set(f.tmdbId, { w: f.rating ? (f.rating - 2.75) / 1.25 + (f.liked ? 0.4 : 0) : f.liked ? 1.2 : 0.5, name: f.localTitle || f.title });
+  }
+  for (const c of items) {
+    if (c.type !== 'movie') continue;
+    for (const r of c.meta.recs || []) { const s = lbScore.get(r); if (s) vote(c.id, s.w * 0.8, s.name); }
+  }
+  const kindOf = f => f.slice(0, f.indexOf(':'));
+  const name = f => f.slice(f.indexOf(':') + 1);
+  const scored = [];
+  const dupes = new Set();
+  for (const it of items) {
+    if (isSeen(it) || lbOf(it)?.watched || recLiking(it) != null) continue;
+    const k = it.type + ':' + (it.meta.tmdbId || it.id);
+    if (dupes.has(k)) continue;   // el mismo título dos veces en la biblioteca (dos copias)
+    dupes.add(k);
+    const feats = new Set(recFeatures(it));
+    let feat = 0, best = null;
+    for (const f of feats) {
+      const a = affinity(f);
+      if (!a) continue;
+      const s = REC_WEIGHT[kindOf(f)] * a * idf(f);
+      feat += s;
+      if (s > 0 && ['dir', 'crea', 'cast', 'coll'].includes(kindOf(f)) && (!best || s > best.s)) best = { s, f };
+    }
+    const votes = tmdbVotes.get(it.id) || [];
+    const tm = votes.reduce((a, v) => a + v.w, 0);
+    const score = feat + 2 * tm + 0.4 * ((it.meta.rating || 6.5) - 6.5);
+    if (score > 1) scored.push({ it, score, feats, votes, tm, best });
+  }
+  scored.sort((a, b) => b.score - a.score);
+
+  /**
+   * El motivo de una recomendación: un director o creador que te gusta si es lo que más pesa; si no, los títulos que te
+   * gustaron que más se le parecen (o que TMDB relaciona con él)
+   */
+  const why = s => {
+    if (s.why !== undefined) return s.why;
+    const kind = s.best && kindOf(s.best.f);
+    if ((kind === 'dir' || kind === 'crea') && s.best.s >= 2 * s.tm) return (s.why = `Porque te gusta ${name(s.best.f)}`);
+    if (kind === 'coll' && s.best.s >= 2 * s.tm) return (s.why = 'Sigue una saga que te gusta');
+    // los que más se le parecen: rasgos en común (los raros, más) y si TMDB los relaciona
+    const voted = new Map(s.votes.filter(v => v.w > 0).map(v => [v.name, v.w]));
+    const near = liked.filter(l => l.w > 0.5).map(l => {
+      let sim = 0;
+      for (const f of l.f) if (s.feats.has(f) && kindOf(f) !== 'decade') sim += REC_WEIGHT[kindOf(f)] * idf(f);
+      return { name: T(l.it), sim: sim * l.w + (voted.get(T(l.it)) || 0) * 6 };
+    });
+    for (const [n, w] of voted) if (!near.some(x => x.name === n)) near.push({ name: n, sim: w * 6 });
+    near.sort((a, b) => b.sim - a.sim);
+    if (kind === 'cast' && s.best.s > (near[0]?.sim || 0) / 4) return (s.why = `Con ${name(s.best.f)}`);
+    const [a, b] = near;
+    return (s.why = !a ? '' : b && b.sim > a.sim * 0.6 ? `Por «${a.name}» y «${b.name}»` : `Porque te gustó «${a.name}»`);
+  };
+  // variedad: el mismo director, saga o actor no copa la lista (cada vez que se repite, pesa menos)
+  const used = new Map(), mixed = [], pool = scored.slice(0, 300);
+  while (pool.length) {
+    let bi = 0, bv = -Infinity;
+    for (let i = 0; i < Math.min(pool.length, 60); i++) {
+      const v = pool[i].score * Math.pow(0.6, used.get(pool[i].best?.f) || 0);
+      if (v > bv) { bv = v; bi = i; }
+    }
+    const [s] = pool.splice(bi, 1);
+    if (s.best) used.set(s.best.f, (used.get(s.best.f) || 0) + 1);
+    mixed.push(s);
+  }
+  const list = [...mixed, ...scored.slice(300)].map(s => ({ it: s.it, score: s.score, get why() { return why(s); } }));
+  // filas: el director (o creador) y el actor que más te gustan, con lo que te queda por ver de ellos
+  const rows = [];
+  const top = kind => [...cnt.keys()].filter(f => kindOf(f) === kind && cnt.get(f) >= 2 && affinity(f) > 0.5).sort((a, b) => affinity(b) - affinity(a));
+  const inRow = f => list.filter(x => recFeatures(x.it).includes(f));
+  const dir = [...top('dir'), ...top('crea')].sort((a, b) => affinity(b) - affinity(a)).find(f => inRow(f).length >= 2);
+  if (dir) rows.push({ key: 'rec-' + dir, title: `Más de ${name(dir)}`, list: inRow(dir).slice(0, 20).map(x => ({ it: x.it, why: `Te gusta ${name(dir)}` })) });
+  const actor = top('cast').find(f => inRow(f).length >= 3);
+  if (actor) rows.push({ key: 'rec-' + actor, title: `Con ${name(actor)}`, list: inRow(actor).slice(0, 20) });
+  return (recsCache = { key, list, rows });
 }
 
 /**
@@ -791,7 +964,7 @@ function viewCollectionEdit() {
     ${e.items.length ? `<div class="coll-picks">${e.items.map(byId).filter(Boolean).map((it, i) => mini(it, i)).join('')}</div>` : '<p class="req-intro">Busca abajo y añade al menos dos títulos. Saldrán en este orden.</p>'}
     <h2 class="coll-sec">Añadir títulos</h2>
     <input class="input coll-search" id="collSearch" placeholder="Busca películas o series de la biblioteca" value="${esc(e.q || '')}">
-    ${found.length ? `<div class="coll-picks">${found.map(it => mini(it)).join('')}</div>` : q.length >= 2 ? '<p class="req-intro">Nada en la biblioteca con ese nombre.</p>' : ''}
+    ${found.length ? `<div class="coll-picks">${found.map(it => mini(it)).join('')}</div>` : q.length >= 2 ? '<p class="coll-hint">Nada en la biblioteca con ese nombre.</p>' : ''}
     <div class="coll-save"><button class="btn btn-ghost" data-action="back">Cancelar</button>
       <button class="btn btn-accent" data-action="coll-save" ${e.items.length < 2 || !e.name.trim() ? 'disabled' : ''}>${e.id ? 'Guardar cambios' : 'Crear colección'}</button></div>
   </div>`;
@@ -929,46 +1102,81 @@ function paintCollectionEdit() {
   if (el) { el.focus(); if (pos != null) el.setSelectionRange(pos, pos); }
 }
 
-// ---------- aviso de colecciones nuevas, al estilo de las novedades de Steam
-let collNewsShown = false;
-function maybeCollectionNews() {
-  if (collNewsShown || !S.lib.collectionsSeenAt || $('#modalRoot').innerHTML || S.route.name === 'collection-edit') return;
-  const me = (S.me?.user || '').toLowerCase();
-  const fresh = customCollections().filter(c => c.createdAt > S.lib.collectionsSeenAt && (c.createdBy || '').toLowerCase() !== me);
-  if (!fresh.length) return;
-  collNewsShown = true;
+// ---------- aviso emergente al estilo de las novedades de Steam: colecciones nuevas y avisos de los administradores
+const newsShown = new Set();
+/** Una colección nueva o un aviso de un administrador (de la campana o de S.lib.news), listo para el aviso emergente */
+function newsEntry(n) {
+  if (n.kind !== 'admin') {
+    const c = n;
+    return { key: 'collection:' + c.id, at: c.createdAt, tag: 'Nueva colección', title: c.name, bg: collBackdrop(c),
+      meta: filmsLabel2(c) + (c.createdBy ? ` · creada por ${c.createdBy}` : ''), desc: c.description, films: c.films,
+      openLabel: 'Ver colección', open: () => go('collection', { id: c.id }) };
+  }
+  const base = { key: 'admin:' + n.id, at: n.at, desc: n.text, bg: imgSrc(n.backdrop) };
+  const by = n.by ? ` · de ${n.by}` : '';
+  if (n.sub === 'title') {
+    const it = byId(n.target);
+    if (!it) return null;
+    return { ...base, tag: 'Recomendación', title: T(it), meta: [Y(it), it.type === 'series' ? 'Serie' : 'Película'].filter(Boolean).join(' · ') + by,
+      desc: n.text || it.meta?.overview || '', bg: base.bg || it.meta?.backdrop?.replace('/original/', '/w1280/') || null, films: [it],
+      openLabel: 'Ver ficha', open: () => go('detail', { id: it.id }) };
+  }
+  if (n.sub === 'collection') {
+    const c = collById(n.target);
+    const films = c ? c.films : (n.items || []).map(byId).filter(Boolean);
+    return { ...base, tag: 'Colección recomendada', title: n.title, meta: filmsLabel2({ films }) + by, desc: n.text || c?.description || '',
+      bg: base.bg || (c && collBackdrop(c)), films, openLabel: c ? 'Ver colección' : null, open: c ? () => go('collection', { id: c.id }) : null };
+  }
+  return { ...base, tag: 'Aviso', title: n.title, meta: n.by ? `De ${n.by}` : '', films: [], openLabel: null, open: null };
+}
+
+/** Enseña uno o varios avisos (con «anterior / siguiente»); onSeen, al cerrarlo de cualquier forma */
+function showNews(list, onSeen = () => {}) {
+  if (!list.length) return;
   let i = 0;
-  const seen = () => window.api.collections?.seen().then(r => { if (r?.seenAt) S.lib.collectionsSeenAt = r.seenAt; }).catch(() => {});
   const paint = () => {
-    const c = fresh[i];
-    const bg = collBackdrop(c);
+    const c = list[i];
     const m = modal(`<div class="news">
-      <div class="news-art" ${bg ? `style="background-image:url('${esc(bg)}')"` : ''}><span class="news-tag">Nueva colección</span>
-        ${fresh.length > 1 ? `<span class="news-count">${i + 1} de ${fresh.length}</span>` : ''}</div>
+      <div class="news-art" ${c.bg ? `style="background-image:url('${esc(c.bg)}')"` : ''}><span class="news-tag">${esc(c.tag)}</span>
+        ${list.length > 1 ? `<span class="news-count">${i + 1} de ${list.length}</span>` : ''}</div>
       <div class="news-body">
-        <h2>${esc(c.name)}</h2>
-        <p class="news-meta">${esc(filmsLabel2(c))}${c.createdBy ? ` · creada por ${esc(c.createdBy)}` : ''}</p>
-        ${c.description ? `<p class="news-desc">${esc(c.description)}</p>` : ''}
-        <div class="news-posters">${c.films.slice(0, 6).map(f => `<div class="art">${posterOf(f) ? `<img src="${esc(posterOf(f))}" alt="">` : placeholder(f)}</div>`).join('')}</div>
+        <h2>${esc(c.title)}</h2>
+        ${c.meta ? `<p class="news-meta">${esc(c.meta)}</p>` : ''}
+        ${c.desc ? `<p class="news-desc">${esc(c.desc)}</p>` : ''}
+        ${c.films?.length ? `<div class="news-posters">${c.films.slice(0, 6).map(f => `<div class="art">${posterOf(f) ? `<img src="${esc(posterOf(f))}" alt="">` : placeholder(f)}</div>`).join('')}</div>` : ''}
       </div>
       <div class="modal-foot news-foot">
-        ${fresh.length > 1 ? `<button class="btn btn-ghost btn-sm" data-news="prev" ${i === 0 ? 'disabled' : ''}>${I.left}</button><button class="btn btn-ghost btn-sm" data-news="next" ${i === fresh.length - 1 ? 'disabled' : ''}>${I.right}</button><span style="flex:1"></span>` : ''}
-        <button class="btn btn-ghost btn-sm" data-news="close">Ahora no</button>
-        <button class="btn btn-accent btn-sm" data-news="open">Ver colección</button>
+        ${list.length > 1 ? `<button class="btn btn-ghost btn-sm" data-news="prev" ${i === 0 ? 'disabled' : ''}>${I.left}</button><button class="btn btn-ghost btn-sm" data-news="next" ${i === list.length - 1 ? 'disabled' : ''}>${I.right}</button><span style="flex:1"></span>` : ''}
+        ${c.open ? `<button class="btn btn-ghost btn-sm" data-news="close">Ahora no</button>
+        <button class="btn btn-accent btn-sm" data-news="open">${esc(c.openLabel)}</button>` : '<button class="btn btn-accent btn-sm" data-news="close">Entendido</button>'}
       </div></div>`);
     m.classList.add('news-modal');
     // también si se cierra pinchando fuera: ya está visto
-    $('#modalRoot .modal-back').addEventListener('mousedown', e => { if (e.target.classList.contains('modal-back')) seen(); });
+    $('#modalRoot .modal-back').addEventListener('mousedown', e => { if (e.target.classList.contains('modal-back')) onSeen(); });
     m.addEventListener('click', e => {
       const b = e.target.closest('[data-news]');
       if (!b) return;
       const a = b.dataset.news;
       if (a === 'prev' || a === 'next') { i += a === 'next' ? 1 : -1; paint(); return; }
-      closeModal(); seen();
-      if (a === 'open') go('collection', { id: c.id });
+      closeModal(); onSeen();
+      if (a === 'open') c.open();
     });
   };
   paint();
+}
+
+/** Lo nuevo desde la última vez: colecciones de otros y avisos emergentes de los administradores, una sola vez */
+function maybeCollectionNews() {
+  if (!S.lib.collectionsSeenAt || $('#modalRoot').innerHTML || ['collection-edit', 'announce'].includes(S.route.name)) return;
+  const me = (S.me?.user || '').toLowerCase();
+  const since = S.lib.collectionsSeenAt;
+  const fresh = [
+    ...customCollections().filter(c => c.createdAt > since && (c.createdBy || '').toLowerCase() !== me),
+    ...(S.lib.news || []).filter(n => n.at > since && (n.by || '').toLowerCase() !== me)
+  ].map(newsEntry).filter(n => n && !newsShown.has(n.key)).sort((a, b) => b.at - a.at);
+  if (!fresh.length) return;
+  fresh.forEach(n => newsShown.add(n.key));
+  showNews(fresh, () => window.api.collections?.seen().then(r => { if (r?.seenAt) S.lib.collectionsSeenAt = r.seenAt; }).catch(() => {}));
 }
 
 function heroHTML() {
@@ -1271,15 +1479,22 @@ const isAdmin = () => !!S.me?.admin;
 const LOCAL = () => !WEB && !!S.me?.local;
 /** Corregir fichas, escanear, carpetas y TMDB: en el servidor, sólo un administrador */
 const canManage = () => isAdmin();
+/** Corregir la coincidencia de un título: los administradores y los moderadores del NAS en el que está */
+const canFix = it => {
+  if (canManage()) return true;
+  const p = (it?.type === 'movie' ? it.path : it?.episodes?.[0]?.path) || '';
+  return (S.me?.mod || []).some(r => p.startsWith(r.replace(/\/+$/, '') + '/'));
+};
 /** eMule: sólo en el escritorio y sólo para administradores */
 const emuleOn = () => !WEB && !!S.settings.emuleEnabled && isAdmin();
 
 /** Quién soy en CineLocal Server (web, o escritorio conectado al servidor): rol, peticiones y botones de administrador */
 async function refreshMe() {
   S.me = WEB ? await window.api.me() : await window.api.remote.me().catch(() => null);
-  $('#navRequests').classList.toggle('hidden', !hasRequests());
+  // los administradores tienen Peticiones (y Usuarios, Registro y Descargas) dentro de Administración
+  $('#navRequests').classList.toggle('hidden', !hasRequests() || isAdmin());
+  $('#navAdmin').classList.toggle('hidden', !adminOn());
   loadNotifs();
-  $('#navAccess').classList.toggle('hidden', !(hasRequests() && isAdmin() && window.api.accessLog));
   if (hasRequests()) await loadRequests(); else setRequests(null);
 }
 const REQ_STATUS = { pending: 'Pendiente', done: 'Conseguida', rejected: 'Rechazada' };
@@ -1294,6 +1509,8 @@ function setRequests(v) {
   S.requests = v || { items: [], pending: 0 };
   const b = $('#reqBadge');
   if (b) { b.textContent = S.requests.pending || ''; b.classList.toggle('hidden', !S.requests.pending); }
+  const ab = $('#adminBadge');
+  if (ab) { ab.textContent = S.requests.pending || ''; ab.classList.toggle('hidden', !S.requests.pending || !isAdmin()); }
 }
 
 async function requestOp(q) {
@@ -1321,7 +1538,7 @@ function viewRequests() {
   const list = tab === 'pending' ? pending : all.filter(r => r.status !== 'pending');
   const admin = isAdmin();
   const t = S.reqSearch;
-  return `<div class="page requests"><h1 class="page-title">Peticiones${pending.length ? `<span class="count">${pending.length}</span>` : ''}</h1>
+  return `<div class="page requests">${admin ? adminHead('requests') : `<h1 class="page-title">Peticiones${pending.length ? `<span class="count">${pending.length}</span>` : ''}</h1>`}
     <p class="req-intro">${admin ? 'Lo que piden los usuarios y no está en la biblioteca. Al añadirlo a la biblioteca se marca solo como conseguido.' : 'Pide películas y series que no estén en la biblioteca; te avisaremos cuando estén.'}</p>
     <div class="req-search">
       <div class="chips">
@@ -1413,7 +1630,7 @@ const ACCESS_KIND = {
   'collection-create': 'Colección creada', 'collection-update': 'Colección cambiada', 'collection-delete': 'Colección borrada',
   'request-create': 'Petición', 'request-cancel': 'Petición cancelada', 'request-resolve': 'Petición resuelta', 'request-remove': 'Petición borrada',
   settings: 'Ajustes', scan: 'Escaneo', 'meta-refresh': 'Buscar fichas', identify: 'Ficha corregida', poster: 'Carátula cambiada',
-  error: 'Error', 'client-error': 'Error en la app'
+  'user-access': 'Acceso de usuario', 'folder-access': 'Carpeta privada', 'announce-create': 'Aviso enviado', 'announce-delete': 'Aviso borrado', 'announce-clear': 'Avisos borrados', error: 'Error', 'client-error': 'Error en la app'
 };
 const ACCESS_TYPES = [['', 'Todo'], ['video', 'Vídeo'], ['action', 'Acciones'], ['session', 'Sesiones'], ['error', 'Errores']];
 
@@ -1427,12 +1644,15 @@ async function loadAccess() {
   a.busy = false;
   paintAccess();
 }
-function paintAccess() { const box = $('#accessList'); if (box) box.innerHTML = accessListHTML(); }
+function paintAccess() {
+  const box = $('#accessList'); if (box) box.innerHTML = accessListHTML();
+  const b = $('[data-action="access-refresh"]'); if (b) b.disabled = S.access.busy;
+}
 
 function viewAccess() {
   const a = S.access;
   const users = [...new Set([...a.users, a.user].filter(Boolean))];
-  return `<div class="page access"><h1 class="page-title">Registro de actividad</h1>
+  return `<div class="page access">${adminHead('access', `<button class="btn btn-ghost btn-sm" data-action="access-refresh" ${a.busy ? 'disabled' : ''}>${I.restart}Refrescar</button>`)}
     <p class="req-intro">Qué ha visto o descargado cada usuario, desde dónde y cuánto, lo que ha hecho en la app y los errores que ha tenido. Una reproducción con varios saltos cuenta como un solo acceso.</p>
     <div class="access-filters">
       <div class="list-tabs">${ACCESS_TYPES.map(([k, l]) => `<button class="gchip ${a.type === k ? 'on' : ''}" data-access-type="${k}">${l}</button>`).join('')}</div>
@@ -1477,6 +1697,286 @@ function accessListHTML() {
     </div>`;
   }).join('');
   return `${a.total > a.items.length ? `<p class="filmo-note" style="padding-left:0">Se muestran los ${a.items.length} más recientes de ${a.total}.</p>` : ''}${rows}`;
+}
+
+// ---------------------------------------------------------------- administración
+/**
+ * Administración (sólo administradores): Peticiones, Usuarios, Registro y Descargas son pestañas de una sola sección,
+ * para no llenar la barra de arriba
+ */
+const ADMIN_ROUTES = ['requests', 'users', 'user', 'announce', 'access', 'downloads'];
+function adminTabList() {
+  return [
+    hasRequests() && ['requests', 'Peticiones', S.requests.pending],
+    hasRequests() && window.api.users && ['users', 'Usuarios'],
+    hasRequests() && window.api.announcements && ['announce', 'Avisos'],
+    hasRequests() && window.api.accessLog && ['access', 'Registro'],
+    emuleOn() && ['downloads', 'Descargas', activeDownloads().length]
+  ].filter(Boolean);
+}
+const adminOn = () => isAdmin() && adminTabList().length > 0;
+function adminHead(on, extra = '') {
+  return `<div class="coll-head"><h1 class="page-title">Administración</h1>${extra}</div>
+    <div class="list-tabs page-tabs">${adminTabList().map(([k, l, n]) => `<button class="gchip ${on === k ? 'on' : ''}" data-nav="${k}">${l}${n ? ` <span class="n">${n}</span>` : ''}</button>`).join('')}</div>`;
+}
+
+// ---------- usuarios: quién entra y qué puede ver cada uno
+const ROLE_NAME = { admin: 'Administrador', user: 'Usuario' };
+const titlesLabel = n => `${n} ${n === 1 ? 'título' : 'títulos'}`;
+function accessSummary(x) {
+  if (x.role === 'admin') return 'Ve todo';
+  if (x.blocked) return 'Sin acceso';
+  if (x.mode === 'except') return `Todo menos ${titlesLabel(x.count)}`;
+  if (x.mode === 'only') return `Sólo ${titlesLabel(x.count)}`;
+  return 'Ve todo';
+}
+const seenText = x => x.online ? 'Conectado ahora' : x.seenAt ? 'Visto ' + ago(x.seenAt) : 'Sin actividad reciente';
+
+async function loadUsers() {
+  try { Object.assign(S.users, await window.api.users.list(), { error: null }); }
+  catch (e) { S.users.error = errText(e); }
+  if (S.route.name === 'users') render(true);
+}
+
+function viewUsers() {
+  const u = S.users, g = u.groups;
+  const row = x => {
+    const admin = x.role === 'admin';
+    const pill = x.blocked && !admin ? 'bad' : !admin && x.mode !== 'all' ? 'warn' : 'ok';
+    return `<button class="user-row" ${admin ? 'disabled title="A los administradores no se les puede limitar"' : `data-user-open="${esc(x.name)}"`}>
+      <span class="user-av">${esc(x.name[0].toUpperCase())}</span>
+      <span class="user-main"><span class="user-name">${esc(x.name)}</span><span class="user-sub ${x.online ? 'on' : ''}">${seenText(x)}</span></span>
+      ${x.mod?.length && !admin ? `<span class="status-pill" title="Puede corregir coincidencias">Moderador · ${esc(x.mod.map(k => (u.sources || []).find(s => s.key === k)?.label || k).join(', '))}</span>` : ''}
+      <span class="status-pill">${x.role ? ROLE_NAME[x.role] : 'Fuera de los grupos'}</span>
+      <span class="status-pill ${pill}">${accessSummary(x)}</span>
+      <span class="user-go">${admin ? '' : I.right}</span>
+    </button>`;
+  };
+  const body = u.error ? `<p class="filmo-note" style="padding-left:0;color:#f87171">${esc(u.error)}</p>`
+    : !u.users ? '<p class="filmo-note" style="padding-left:0">Cargando…</p>'
+    : `<div class="user-list">${u.users.map(row).join('')}</div>`;
+  const people = (u.users || []).filter(x => x.role !== 'admin').map(x => x.name);
+  const priv = u.folders || [];
+  const folders = !u.users ? '' : `<h2 class="coll-sec">Carpetas privadas <span class="count">${priv.length || ''}</span></h2>
+    <p class="coll-hint" style="margin:0 0 12px">Lo que hay dentro (también lo que se añada después) sólo lo ven los usuarios que marques y los administradores.</p>
+    ${priv.length ? `<div class="ann-list">${priv.map(f => `<div class="ann-row">
+      <span class="np">${I.folder}</span>
+      <div class="ann-row-main"><b>${esc(f.label)}</b>
+        <div class="ann-to"><span>La ven</span>${people.length ? people.map(n => `<button class="gchip ${f.users.includes(n) ? 'on' : ''}" data-folder-user="${esc(n)}" data-folder="${esc(f.path)}">${esc(n)}</button>`).join('') : '<small>sólo los administradores</small>'}</div></div>
+      <button class="icon-btn sm" title="Que deje de ser privada" data-folder-del="${esc(f.path)}">${I.close}</button></div>`).join('')}</div>` : ''}
+    <div class="uacc-add" style="margin-top:12px">
+      <input class="input" id="folderNew" list="folderChoices" placeholder="Carpeta que hacer privada (por ejemplo /media/Peticiones)" spellcheck="false" style="min-width:min(420px,100%)">
+      <datalist id="folderChoices">${(u.folderChoices || []).filter(c => !priv.some(f => f.path === c.path)).map(c => `<option value="${esc(c.path)}">${esc(c.label)}</option>`).join('')}</datalist>
+      <button class="btn btn-ghost btn-sm" data-action="folder-add">Hacer privada</button>
+    </div>`;
+  return `<div class="page users">${adminHead('users')}
+    <p class="req-intro">Quién puede entrar y qué puede ver cada uno. Por defecto, todos ven toda la biblioteca; a los administradores no se les puede limitar.${g ? ` Para dar de alta a alguien o hacerlo administrador, añádelo en DSM al grupo «${esc(g.user)}» o «${esc(g.admin)}».` : ''}</p>
+    ${body}${folders}</div>`;
+}
+
+async function setFolder(q, ok) {
+  try {
+    S.users.folders = (await window.api.users.folders(q)).folders;
+    if (ok) toast(ok, 'ok');
+    render(true);
+  } catch (e) { toast(errText(e), 'error'); }
+}
+
+async function loadUser(name) {
+  try {
+    const r = await window.api.users.get(name);
+    if (r.sources) S.users.sources = r.sources;
+    if (r.privateFolders) S.users.privateFolders = r.privateFolders;
+    S.userEdit = { ...r, items: [...r.items], mod: [...(r.mod || [])], folders: [...(r.folders || [])], q: '' };
+    S.userEdit.saved = userSnap(S.userEdit);
+  } catch (e) { S.userEdit = { name, error: errText(e) }; }
+  if (S.route.name === 'user') render(true);
+}
+const userSnap = e => JSON.stringify([e.mode, e.items, e.blocked, e.mod, [...(e.folders || [])].sort()]);
+const userDirty = e => userSnap(e) !== e.saved;
+
+const ACCESS_MODES = [
+  ['all', 'Todo', 'Toda la biblioteca, también lo que se añada.'],
+  ['except', 'Todo menos…', 'Toda la biblioteca salvo lo que elijas. Lo que se añada, lo verá.'],
+  ['only', 'Sólo…', 'Únicamente lo que elijas. Lo que se añada no lo verá hasta que se lo añadas.']
+];
+function viewUser(name) {
+  const e = S.userEdit?.name === name ? S.userEdit : null;
+  const backBtn = `<button class="btn btn-ghost btn-sm saga-back" data-action="back">${I.left}Volver</button>`;
+  if (!e) return `<div class="page">${backBtn}<p class="filmo-note" style="padding-left:0">Cargando…</p></div>`;
+  if (e.error) return `<div class="page">${backBtn}<p class="filmo-note" style="padding-left:0;color:#f87171">${esc(e.error)}</p></div>`;
+  const chosen = new Set(e.items);
+  const q = normName(e.q || '');
+  const found = q.length >= 2 ? S.lib.items.filter(i => !chosen.has(i.id) && (normName(T(i)).includes(q) || normName(i.title).includes(q))).slice(0, 40) : [];
+  const mini = (it, on) => `<div class="coll-pick">
+      <div class="art">${posterOf(it) ? `<img loading="lazy" src="${esc(posterOf(it))}" alt="">` : placeholder(it)}</div>
+      <div class="t">${esc(T(it))}${Y(it) ? ` <span>${Y(it)}</span>` : ''}</div>
+      ${on ? `<button class="btn btn-ghost btn-sm" data-uacc-remove="${esc(it.id)}">${I.close}Quitar</button>`
+        : `<button class="btn btn-ghost btn-sm" data-uacc-add="${esc(it.id)}">${I.plus}Añadir</button>`}
+    </div>`;
+  const picks = e.items.map(byId).filter(Boolean);
+  const except = e.mode === 'except';
+  const opts = list => list.map(c => `<option value="${esc(c.id)}">${esc(sagaName(c))} (${c.films.length})</option>`).join('');
+  const choose = e.mode === 'all' ? '' : `
+    <h2 class="coll-sec">${except ? 'No puede ver' : 'Puede ver'} <span class="count">${picks.length}</span>
+      ${picks.length ? '<button class="btn btn-ghost btn-sm uacc-clear" data-action="uacc-clear">Quitar todos</button>' : ''}</h2>
+    ${picks.length ? `<div class="coll-picks">${picks.map(it => mini(it, true)).join('')}</div>`
+      : `<p class="coll-hint">${except ? 'Todavía no hay nada oculto: añade abajo lo que no deba ver.' : 'Así no verá nada: añade abajo lo que sí pueda ver.'}</p>`}
+    <h2 class="coll-sec">Añadir</h2>
+    <div class="uacc-add">
+      <input class="input coll-search" id="uaccSearch" placeholder="Busca películas o series de la biblioteca" value="${esc(e.q || '')}">
+      <select class="input" id="uaccGroup"><option value="">Añadir varios de golpe…</option>
+        <option value="type:movie">Todas las películas</option><option value="type:series">Todas las series</option>
+        ${customCollections().length ? `<optgroup label="Colecciones">${opts(customCollections())}</optgroup>` : ''}
+        ${allSagas().length ? `<optgroup label="Sagas">${opts(allSagas())}</optgroup>` : ''}
+      </select>
+    </div>
+    ${found.length ? `<div class="coll-picks">${found.map(it => mini(it, false)).join('')}</div>` : q.length >= 2 ? '<p class="coll-hint">Nada más en la biblioteca con ese nombre.</p>' : ''}`;
+  return `<div class="page user-edit">${backBtn}
+    <div class="user-head"><span class="user-av big">${esc(name[0].toUpperCase())}</span>
+      <div><h1 class="page-title">${esc(name)}</h1><div class="user-sub">${e.role ? ROLE_NAME[e.role] : 'Fuera de los grupos de CineLocal en DSM'} · ${seenText(e)}</div></div></div>
+    <div class="set-row"><div class="lbl"><div class="t">Puede entrar en CineLocal</div>
+      <div class="d">Si se lo quitas, se le cierra la sesión en todas sus apps y no podrá volver a entrar hasta que se lo devuelvas.</div></div>
+      <div class="ctl"><label class="switch"><input type="checkbox" id="uaccEnter" ${e.blocked ? '' : 'checked'}><span></span></label></div></div>
+    ${(S.users.sources || []).length ? `<h2 class="coll-sec">Permisos</h2>
+    ${S.users.sources.map(s => `<div class="set-row"><div class="lbl"><div class="t">Moderador de ${esc(s.label)}</div>
+      <div class="d">Puede corregir las coincidencias con TMDB de las películas y series de ese NAS.</div></div>
+      <div class="ctl"><label class="switch"><input type="checkbox" data-uacc-mod="${esc(s.key)}" ${e.mod?.includes(s.key) ? 'checked' : ''}><span></span></label></div></div>`).join('')}` : ''}
+    ${(S.users.privateFolders || []).length ? `<h2 class="coll-sec">Carpetas privadas</h2>
+    ${S.users.privateFolders.map(f => `<div class="set-row"><div class="lbl"><div class="t">Puede ver ${esc(f.label)}</div>
+      <div class="d">Lo que hay en esa carpeta sólo lo ven los usuarios que la tengan marcada.</div></div>
+      <div class="ctl"><label class="switch"><input type="checkbox" data-uacc-folder="${esc(f.path)}" ${e.folders?.includes(f.path) ? 'checked' : ''}><span></span></label></div></div>`).join('')}` : ''}
+    <h2 class="coll-sec">Qué puede ver</h2>
+    <div class="uacc-modes">${ACCESS_MODES.map(([k, l, d]) => `<button class="uacc-mode ${e.mode === k ? 'on' : ''}" data-uacc-mode="${k}"><b>${l}</b><span>${d}</span></button>`).join('')}</div>
+    ${choose}
+    <div class="coll-save"><button class="btn btn-ghost" data-action="back">Cancelar</button>
+      <button class="btn btn-accent" data-action="uacc-save" ${userDirty(e) ? '' : 'disabled'}>Guardar cambios</button></div>
+  </div>`;
+}
+
+/** Añade de golpe todas las películas, todas las series o los títulos de una colección o saga */
+function addUserAccessGroup(v) {
+  const e = S.userEdit;
+  if (!e || !v) return;
+  const ids = v === 'type:movie' || v === 'type:series' ? S.lib.items.filter(i => i.type === v.slice(5)).map(i => i.id)
+    : (collById(v)?.films || []).map(f => f.id);
+  const before = e.items.length;
+  e.items = [...new Set([...e.items, ...ids])];
+  const n = e.items.length - before;
+  toast(n ? `${titlesLabel(n)} ${n === 1 ? 'añadido' : 'añadidos'}` : 'Ya estaban todos', n ? 'ok' : 'info');
+  render(true);
+}
+
+async function saveUserAccess() {
+  const e = S.userEdit;
+  if (!e) return;
+  try {
+    // con «Todo» la selección se queda guardada en el servidor, por si se vuelve a limitar
+    const r = await window.api.users.set({ name: e.name, mode: e.mode, items: e.items, blocked: e.blocked, mod: e.mod, folders: e.folders });
+    S.userEdit = { ...e, ...r, items: [...r.items], mod: [...(r.mod || [])], folders: [...(r.folders || [])] };
+    S.userEdit.saved = userSnap(S.userEdit);
+    toast(`${e.name}: ${r.blocked ? 'sin acceso' : accessSummary({ ...r, count: r.items.length }).toLowerCase()}`, 'ok');
+    render(true);
+  } catch (err) { toast(errText(err), 'error'); }
+}
+
+// ---------- avisos: recomendar una película o serie, una colección o mandar un mensaje
+const ANN_KINDS = [['title', 'Recomendar un título'], ['collection', 'Recomendar una colección'], ['message', 'Mensaje']];
+const annBlank = () => ({ kind: 'title', target: null, q: '', coll: '', title: '', text: '', popup: true, to: [] });
+
+async function loadAnnouncements() {
+  try { S.ann.items = (await window.api.announcements.list()).items; S.ann.error = null; }
+  catch (e) { S.ann.error = errText(e); }
+  if (!S.users.users) await window.api.users.list().then(r => Object.assign(S.users, r)).catch(() => {});
+  if (S.route.name === 'announce') paintCollectionEdit();
+}
+
+/** El aviso tal y como se mandará (para la vista previa y para enviarlo) */
+function annPayload() {
+  const e = S.annEdit;
+  const q = { op: 'create', kind: e.kind, text: e.text.trim(), popup: e.popup, to: e.to };
+  if (e.kind === 'title') q.target = e.target;
+  if (e.kind === 'collection') {
+    const c = collById(e.coll);
+    if (c) Object.assign(q, { target: String(c.id), name: sagaName(c), items: c.films.map(f => f.id) });
+  }
+  if (e.kind === 'message') q.title = e.title.trim();
+  return q;
+}
+const annReady = () => { const q = annPayload(); return q.kind === 'title' ? !!q.target : q.kind === 'collection' ? !!q.items?.length : !!q.title; };
+
+function viewAnnounce() {
+  const e = S.annEdit || (S.annEdit = annBlank());
+  const a = S.ann;
+  const users = (S.users.users || []).map(u => u.name);
+  let pick = '';
+  if (e.kind === 'title') {
+    const it = e.target && byId(e.target);
+    const q = normName(e.q || '');
+    const found = !it && q.length >= 2 ? S.lib.items.filter(i => normName(T(i)).includes(q) || normName(i.title).includes(q)).slice(0, 12) : [];
+    pick = it
+      ? `<div class="ann-chosen"><div class="art">${posterOf(it) ? `<img src="${esc(posterOf(it))}" alt="">` : placeholder(it)}</div>
+          <div><b>${esc(T(it))}</b><span>${[Y(it), it.type === 'series' ? 'Serie' : 'Película'].filter(Boolean).join(' · ')}</span></div>
+          <button class="btn btn-ghost btn-sm" data-ann-pick="">Cambiar</button></div>`
+      : `<input class="input coll-search" id="annSearch" placeholder="Busca la película o serie que quieres recomendar" value="${esc(e.q || '')}">
+        ${found.length ? `<div class="ann-found">${found.map(i => `<button class="ann-hit" data-ann-pick="${esc(i.id)}">
+          <span class="art">${posterOf(i) ? `<img loading="lazy" src="${esc(posterOf(i))}" alt="">` : ''}</span><b>${esc(T(i))}</b><span>${Y(i) || ''}</span></button>`).join('')}</div>`
+          : q.length >= 2 ? '<p class="coll-hint">Nada en la biblioteca con ese nombre.</p>' : ''}`;
+  } else if (e.kind === 'collection') {
+    const opts = list => list.map(c => `<option value="${esc(c.id)}" ${String(c.id) === e.coll ? 'selected' : ''}>${esc(sagaName(c))} (${c.films.length})</option>`).join('');
+    pick = `<select class="input" id="annColl"><option value="">Elige una colección o saga…</option>
+      ${customCollections().length ? `<optgroup label="Colecciones">${opts(customCollections())}</optgroup>` : ''}
+      ${allSagas().length ? `<optgroup label="Sagas">${opts(allSagas())}</optgroup>` : ''}</select>`;
+  } else pick = `<input class="input" id="annTitle" maxlength="100" placeholder="Título del aviso (por ejemplo: El servidor se reinicia esta noche)" value="${esc(e.title)}">`;
+  const sent = a.items || [];
+  const kindName = { title: 'Recomendación', collection: 'Colección', message: 'Mensaje' };
+  const sentRow = x => `<div class="ann-row">
+      <span class="np">${x.poster ? `<img src="${esc(imgSrc(x.poster))}" alt="" loading="lazy">` : x.kind === 'message' ? I.info : I.film}</span>
+      <div class="ann-row-main"><b>${esc(x.title || (x.kind === 'title' ? 'Título que ya no está' : 'Aviso'))}</b>
+        ${x.text ? `<span class="ann-row-text">${esc(x.text)}</span>` : ''}
+        <small>${kindName[x.kind]} · ${x.to?.length ? 'para ' + esc(x.to.join(', ')) : 'para todos'}${x.popup ? ' · emergente' : ''} · ${ago(x.createdAt)}${x.createdBy ? ' · ' + esc(x.createdBy) : ''}</small></div>
+      <button class="icon-btn sm" title="Borrar el aviso (desaparece de la campana de todos)" data-ann-del="${esc(x.id)}">${I.close}</button></div>`;
+  return `<div class="page announce">${adminHead('announce')}
+    <p class="req-intro">Recomienda una película, una serie o una colección, o manda un mensaje. Llega a la campana de quien elijas y, si lo marcas, sale como aviso emergente al abrir la app (una sola vez). Quien no pueda ver ese título no lo recibe.</p>
+    <div class="ann-form">
+      <div class="list-tabs">${ANN_KINDS.map(([k, l]) => `<button class="gchip ${e.kind === k ? 'on' : ''}" data-ann-kind="${k}">${l}</button>`).join('')}</div>
+      ${pick}
+      <textarea class="input" id="annText" maxlength="600" rows="3" placeholder="${e.kind === 'message' ? 'El mensaje' : 'Por qué la recomiendas (opcional)'}">${esc(e.text)}</textarea>
+      <div class="ann-to"><span>Para</span>
+        <button class="gchip ${e.to.length ? '' : 'on'}" data-ann-to="">Todos</button>
+        ${users.map(u => `<button class="gchip ${e.to.includes(u) ? 'on' : ''}" data-ann-to="${esc(u)}">${esc(u)}</button>`).join('')}</div>
+      <label class="ann-popup"><label class="switch"><input type="checkbox" id="annPopup" ${e.popup ? 'checked' : ''}><span></span></label>
+        <span><b>Aviso emergente</b><small>Además de en la campana, le sale en grande al abrir la app.</small></span></label>
+      <div class="ann-btns"><button class="btn btn-ghost btn-sm" data-action="ann-preview" ${annReady() ? '' : 'disabled'}>Vista previa</button>
+        <button class="btn btn-accent btn-sm" data-action="ann-send" ${annReady() ? '' : 'disabled'}>Enviar</button></div>
+    </div>
+    <h2 class="coll-sec">Enviados <span class="count">${sent.length}</span>
+      ${sent.length ? '<button class="btn btn-ghost btn-sm uacc-clear" data-action="ann-clear">Borrar todos</button>' : ''}</h2>
+    ${a.error ? `<p class="coll-hint" style="color:#f87171">${esc(a.error)}</p>` : !a.items ? '<p class="coll-hint">Cargando…</p>'
+      : sent.length ? `<div class="ann-list">${sent.map(sentRow).join('')}</div>` : '<p class="coll-hint">Todavía no has mandado ningún aviso.</p>'}
+  </div>`;
+}
+
+/** Vista previa: el aviso emergente tal y como lo verán */
+function previewAnnouncement() {
+  const q = annPayload();
+  const n = { kind: 'admin', sub: q.kind, id: 'preview', target: q.target, at: Date.now(), text: q.text, by: S.me?.user || null,
+    title: q.kind === 'collection' ? q.name : q.title, items: q.items };
+  const entry = newsEntry(n);
+  if (entry) showNews([{ ...entry, open: null, openLabel: null }]);
+}
+
+async function sendAnnouncement() {
+  if (!annReady()) return;
+  const q = annPayload();
+  const who = q.to.length ? q.to.join(', ') : 'todos';
+  if (!await confirmModal('Enviar aviso', `Les llegará a ${who}${q.popup ? ', también como aviso emergente' : ''}.`, 'Enviar')) return;
+  try {
+    await window.api.announcements.op(q);
+    toast('Aviso enviado', 'ok');
+    S.annEdit = annBlank();
+    loadAnnouncements();
+  } catch (err) { toast(errText(err), 'error'); }
 }
 
 /** Pedir un título: con una nota opcional («la versión extendida», «en español»…) */
@@ -1610,8 +2110,8 @@ function viewDetail(id) {
     ${m.originalTitle && m.originalTitle !== m.title ? `<b>Título original</b><span>${esc(m.originalTitle)}</span>` : ''}
     ${it.type === 'movie' ? `<b>Archivo</b><span>${esc(it.path)}</span><b>Tamaño</b><span>${fmtSize(it.size)}</span>`
       : `<b>Carpeta</b><span>${esc(it.path)}</span><b>Tamaño</b><span>${fmtSize(it.episodes.reduce((a, e) => a + e.size, 0))}</span>`}
-    <b>Metadatos</b><span>${it.meta ? `TMDB #${m.tmdbId}${canManage() ? ` · <button class="link-btn" data-action="identify" data-id="${it.id}">Corregir coincidencia</button>` : ''}`
-      : `${it.metaFailed ? 'No se encontró en TMDB' : 'Sin metadatos'}${canManage() ? ` · <button class="link-btn" data-action="identify" data-id="${it.id}">Identificar manualmente</button>` : ''}`}</span>
+    <b>Metadatos</b><span>${it.meta ? `TMDB #${m.tmdbId}${canFix(it) ? ` · <button class="link-btn" data-action="identify" data-id="${it.id}">Corregir coincidencia</button>` : ''}`
+      : `${it.metaFailed ? 'No se encontró en TMDB' : 'Sin metadatos'}${canFix(it) ? ` · <button class="link-btn" data-action="identify" data-id="${it.id}">Identificar manualmente</button>` : ''}`}</span>
     ${canManage() || it.poster ? `<b>Carátula</b><span>${it.poster ? 'Elegida a mano' : posterOf(it) ? 'La de TMDB' : 'Sin carátula'}${canManage() ? ` · <button class="link-btn" data-action="poster" data-id="${it.id}">Cambiar</button>` : ''}</span>` : ''}
   </div>`;
 
@@ -1638,8 +2138,8 @@ function viewDetail(id) {
             <button class="round-btn" title="Más opciones" data-action="menu">${I.more}</button>
             <div class="menu hidden" id="detailMenu">
               <button data-action="mark-all" data-id="${it.id}" data-watched="${watchedAll ? 0 : 1}">${watchedAll ? I.restart : I.eye}${watchedAll ? 'Marcar como no visto' : 'Marcar como visto'}</button>
-              ${canManage() ? `<button data-action="identify" data-id="${it.id}">${I.tag}Corregir coincidencia</button>
-              <button data-action="poster" data-id="${it.id}">${I.image}Cambiar carátula</button>` : ''}
+              ${canFix(it) ? `<button data-action="identify" data-id="${it.id}">${I.tag}Corregir coincidencia</button>` : ''}
+              ${canManage() ? `<button data-action="poster" data-id="${it.id}">${I.image}Cambiar carátula</button>` : ''}
               ${emuleOn() ? `<button data-action="emule-find" data-q="${esc(T(it))}">${I.download}Buscar en eMule</button>` : ''}
               ${WEB ? '' : `<button data-action="reveal" data-path="${esc(it.type === 'movie' ? it.path : it.episodes[0].path)}">${I.folder}Abrir ubicación</button>`}
             </div>
@@ -2132,7 +2632,7 @@ function viewDownloads() {
   const s = S.emule.search;
   const method = S.settings.emuleSearchMethod || 'global';
   return `<div class="page downloads">
-    <h1 class="page-title">Descargas<span class="count" id="dlCount"></span></h1>
+    ${adminHead('downloads')}
     <div id="dlStatus">${emuleStatusHTML()}</div>
     ${serversPanelHTML()}
     <form class="dl-search" id="dlSearch">
@@ -2156,14 +2656,12 @@ function viewDownloads() {
 /** Actualiza sólo las partes vivas, sin tocar el buscador (foco, texto) */
 function paintEmule() {
   const n = activeDownloads().length;
-  const badge = $('#dlBadge');
-  badge.textContent = n;
-  badge.classList.toggle('hidden', !n);
-  $('#navDownloads').classList.toggle('hidden', !emuleOn());
+  $('#navAdmin').classList.toggle('hidden', !adminOn());
+  const tab = $('[data-nav="downloads"] .n') || null;
+  if (tab) tab.textContent = n || '';
   if (S.route.name === 'downloads') {
     $('#dlStatus').innerHTML = emuleStatusHTML();
     $('#dlList').innerHTML = downloadsListHTML();
-    $('#dlCount').textContent = S.emule.snap.downloads?.length || '';
     if (!S.emule.snap.ok) S.emule.srv.list = S.emule.srv.kad = null;   // eMule cerrado: no enseñar datos viejos
     paintServers();
     loadServers();
@@ -2442,6 +2940,9 @@ function render(keepScroll = false) {
     case 'downloads': html = viewDownloads(); break;
     case 'requests': html = viewRequests(); break;
     case 'access': html = viewAccess(); break;
+    case 'users': html = viewUsers(); break;
+    case 'announce': html = viewAnnounce(); break;
+    case 'user': html = viewUser(r.id); break;
     case 'title': html = viewTitle(r.type, r.id); break;
     case 'collections': html = viewCollections(); break;
     case 'sagas': html = viewSagas(); break;
@@ -2451,12 +2952,18 @@ function render(keepScroll = false) {
   }
   view.innerHTML = html;
   // Directores es una pestaña de Películas, y Sagas y cada colección, de Colecciones
-  const section = { directors: 'movies', director: 'movies', sagas: 'collections', collection: 'collections', 'collection-edit': 'collections' }[r.name] || r.name;
+  // y Peticiones, Usuarios, Registro y Descargas, de Administración
+  const section = ADMIN_ROUTES.includes(r.name) && adminOn() ? 'admin'
+    : { directors: 'movies', director: 'movies', sagas: 'collections', collection: 'collections', 'collection-edit': 'collections' }[r.name] || r.name;
+  if (section === 'admin' && r.name !== 'user') S.adminTab = r.name;
   $$('#nav a').forEach(a => a.classList.toggle('active', a.dataset.nav === section));
   if (r.name === 'director') loadPerson(r.id);
   if (r.name === 'detail') ensureFull(r.id);
   if (r.name === 'downloads') loadServers(true);
   if (r.name === 'access' && !keepScroll) loadAccess();
+  if (r.name === 'users' && !keepScroll) loadUsers();
+  if (r.name === 'announce' && !keepScroll) loadAnnouncements();
+  if (r.name === 'user' && S.userEdit?.name !== r.id) loadUser(r.id);
   if (r.name !== 'director') S.filters.filmo = 'all';
 
   view.style.scrollBehavior = 'auto';
@@ -2858,6 +3365,8 @@ document.addEventListener('click', async (e) => {
     // «Ver todo» de la fila de una lista: la página de Listas con esa pestaña
     const [route, listId] = nav.dataset.nav.split(':');
     if (route === 'list' && listId) S.listTab = listId;
+    // Administración: la última pestaña que se abrió
+    if (route === 'admin') { const tabs = adminTabList().map(x => x[0]); go(tabs.includes(S.adminTab) ? S.adminTab : tabs[0]); return; }
     go(route);
     return;
   }
@@ -2885,6 +3394,21 @@ document.addEventListener('click', async (e) => {
     else if (a === 'coll-new') openCollectionEditor(null);
     else if (a === 'coll-edit') openCollectionEditor(action.dataset.id);
     else if (a === 'coll-save') saveCollection();
+    else if (a === 'access-refresh') loadAccess();
+    else if (a === 'folder-add') {
+      const p = $('#folderNew')?.value.trim();
+      if (p) setFolder({ path: p, users: [] }, 'Carpeta privada: de momento sólo la ven los administradores');
+    }
+    else if (a === 'ann-preview') previewAnnouncement();
+    else if (a === 'ann-send') sendAnnouncement();
+    else if (a === 'ann-clear') {
+      if (await confirmModal('Borrar todos los avisos', 'Desaparecen de la campana de todos. No se puede deshacer.', 'Borrar todos')) {
+        await window.api.announcements.op({ op: 'clear' }).catch(err => toast(errText(err), 'error'));
+        loadAnnouncements();
+      }
+    }
+    else if (a === 'uacc-save') saveUserAccess();
+    else if (a === 'uacc-clear' && S.userEdit) { S.userEdit.items = []; render(true); }
     else if (a === 'coll-delete') {
       const c = customCollections().find(x => x.id === action.dataset.id);
       if (c && await confirmModal('Borrar colección', `Se borrará «${c.name}» para todos. Las películas y series siguen en la biblioteca.`, 'Borrar')) {
@@ -3093,6 +3617,48 @@ document.addEventListener('click', async (e) => {
   if (cu && S.collEdit) { pickCollectionImage(cu.dataset.collUpload); return; }
   const ci = t.closest('[data-coll-img]');
   if (ci && S.collEdit) { S.collEdit[ci.dataset.collImg] = ci.dataset.img; paintCollectionEdit(); return; }
+  // avisos: tipo, título, destinatarios y borrar uno enviado
+  const ak = t.closest('[data-ann-kind]');
+  if (ak && S.annEdit) { S.annEdit.kind = ak.dataset.annKind; render(true); return; }
+  const ap = t.closest('[data-ann-pick]');
+  if (ap && S.annEdit) { S.annEdit.target = ap.dataset.annPick || null; S.annEdit.q = ''; render(true); return; }
+  const at2 = t.closest('[data-ann-to]');
+  if (at2 && S.annEdit) {
+    const u = at2.dataset.annTo, e = S.annEdit;
+    e.to = !u ? [] : e.to.includes(u) ? e.to.filter(x => x !== u) : [...e.to, u];
+    render(true);
+    return;
+  }
+  const ad = t.closest('[data-ann-del]');
+  if (ad) {
+    window.api.announcements.op({ op: 'delete', id: ad.dataset.annDel }).then(() => { toast('Aviso borrado', 'ok'); loadAnnouncements(); }).catch(err => toast(errText(err), 'error'));
+    return;
+  }
+  const fu = t.closest('[data-folder-user]');
+  if (fu) {
+    const f = (S.users.folders || []).find(x => x.path === fu.dataset.folder), n = fu.dataset.folderUser;
+    if (f) setFolder({ path: f.path, users: f.users.includes(n) ? f.users.filter(x => x !== n) : [...f.users, n] });
+    return;
+  }
+  const fd = t.closest('[data-folder-del]');
+  if (fd) {
+    const f = (S.users.folders || []).find(x => x.path === fd.dataset.folderDel);
+    if (f && await confirmModal('Dejar de ser privada', `Todos podrán ver lo que hay en ${f.label}.`, 'Hacerla pública')) setFolder({ path: f.path, remove: true }, 'La carpeta ya es pública');
+    return;
+  }
+  // usuarios: abrir uno, qué puede ver y la lista de títulos
+  const uo = t.closest('[data-user-open]');
+  if (uo) { S.userEdit = null; go('user', { id: uo.dataset.userOpen }); return; }
+  const um = t.closest('[data-uacc-mode]');
+  if (um && S.userEdit) { S.userEdit.mode = um.dataset.uaccMode; render(true); return; }
+  const ua = t.closest('[data-uacc-add], [data-uacc-remove]');
+  if (ua && S.userEdit) {
+    const e = S.userEdit;
+    if (ua.dataset.uaccAdd) e.items.push(ua.dataset.uaccAdd);
+    else e.items = e.items.filter(id => id !== ua.dataset.uaccRemove);
+    paintCollectionEdit();
+    return;
+  }
   const ca = t.closest('[data-coll-add], [data-coll-remove], [data-coll-move]');
   if (ca && S.collEdit) {
     const e = S.collEdit;
@@ -3170,6 +3736,22 @@ window.addEventListener('unhandledrejection', e => reportError(e.reason?.message
 let accessTimer = null;
 document.addEventListener('change', (e) => {
   if (e.target.id === 'accessUser') { S.access.user = e.target.value; loadAccess(); }
+  if (e.target.id === 'uaccGroup') { addUserAccessGroup(e.target.value); return; }
+  if (e.target.id === 'annColl' && S.annEdit) { S.annEdit.coll = e.target.value; render(true); return; }
+  if (e.target.id === 'annPopup' && S.annEdit) { S.annEdit.popup = e.target.checked; return; }
+  if (e.target.dataset.uaccFolder && S.userEdit) {
+    const k = e.target.dataset.uaccFolder, f = S.userEdit.folders || [];
+    S.userEdit.folders = e.target.checked ? [...new Set([...f, k])] : f.filter(x => x !== k);
+    const b = $('[data-action="uacc-save"]'); if (b) b.disabled = !userDirty(S.userEdit);
+    return;
+  }
+  if (e.target.dataset.uaccMod && S.userEdit) {
+    const k = e.target.dataset.uaccMod, m = S.userEdit.mod || [];
+    S.userEdit.mod = e.target.checked ? [...new Set([...m, k])] : m.filter(x => x !== k);
+    const b = $('[data-action="uacc-save"]'); if (b) b.disabled = !userDirty(S.userEdit);
+    return;
+  }
+  if (e.target.id === 'uaccEnter' && S.userEdit) { S.userEdit.blocked = !e.target.checked; const b = $('[data-action="uacc-save"]'); if (b) b.disabled = !userDirty(S.userEdit); return; }
   if (e.target.id === 'accessDays') { S.access.days = +e.target.value; loadAccess(); }
 });
 let collTimer = null;
@@ -3182,6 +3764,13 @@ document.addEventListener('input', (e) => {
     else { const b = $('[data-action="coll-save"]'); if (b) b.disabled = S.collEdit.items.length < 2 || !S.collEdit.name.trim(); }
     return;
   }
+  if (e.target.id === 'annSearch' && S.annEdit) { S.annEdit.q = e.target.value; clearTimeout(collTimer); collTimer = setTimeout(paintCollectionEdit, 150); return; }
+  if ((e.target.id === 'annTitle' || e.target.id === 'annText') && S.annEdit) {
+    S.annEdit[e.target.id === 'annTitle' ? 'title' : 'text'] = e.target.value;
+    $$('[data-action="ann-preview"], [data-action="ann-send"]').forEach(b => { b.disabled = !annReady(); });
+    return;
+  }
+  if (e.target.id === 'uaccSearch' && S.userEdit) { S.userEdit.q = e.target.value; clearTimeout(collTimer); collTimer = setTimeout(paintCollectionEdit, 150); return; }
   if (e.target.id === 'reqQuery') { searchRequests(e.target.value); return; }
   if (e.target.id === 'accessQuery') { S.access.q = e.target.value; clearTimeout(accessTimer); accessTimer = setTimeout(loadAccess, 350); return; }
   if (e.target.id !== 'dirFilter') return;
@@ -3249,6 +3838,12 @@ function notifText(n) {
   const name = `«${n.title}»${n.year ? ` (${n.year})` : ''}`;
   if (n.kind === 'request') return n.status === 'done' ? `Ya puedes ver ${name}, que pediste` : `Tu petición de ${name} se ha rechazado${n.reply ? ': ' + n.reply : ''}`;
   if (n.kind === 'collection') return `Nueva colección: «${n.title}»`;
+  if (n.kind === 'admin') {
+    const by = n.by ? `${n.by} ` : '';
+    if (n.sub === 'title') return `${by ? by + 'te recomienda' : 'Recomendación:'} ${name}${n.text ? ': ' + n.text : ''}`;
+    if (n.sub === 'collection') return `${by ? by + 'te recomienda la colección' : 'Colección recomendada:'} «${n.title}»${n.text ? ': ' + n.text : ''}`;
+    return `${n.title}${n.text ? ': ' + n.text : ''}`;
+  }
   if (n.kind === 'watchlist') return `De tu watchlist: ${name} ya está en la biblioteca`;
   return `${n.type === 'series' ? 'Novedades en la biblioteca' : 'Nueva en la biblioteca'}: ${name}`;
 }
@@ -3259,10 +3854,11 @@ function paintNotifs() {
   const p = $('#notifPanel');
   p.classList.toggle('hidden', !NOTIF.open);
   if (!NOTIF.open) return;
-  p.innerHTML = '<div class="notif-h">Notificaciones</div>' + (NOTIF.items.length
-    ? '<div class="notif-list">' + NOTIF.items.map((n, i) => `<button class="notif-it ${n.at > NOTIF.shownSeen ? 'new' : ''}" data-notif="${i}">
-        <span class="np">${n.poster ? `<img src="${esc(imgSrc(n.poster))}" alt="" loading="lazy">` : n.kind === 'request' ? I.check : I.film}</span>
-        <span class="nt"><span>${esc(notifText(n))}</span><small>${ago(n.at)}</small></span></button>`).join('') + '</div>'
+  p.innerHTML = `<div class="notif-h">Notificaciones${NOTIF.items.length ? '<button class="notif-clear" data-notif-clear>Borrar todas</button>' : ''}</div>` + (NOTIF.items.length
+    ? '<div class="notif-list">' + NOTIF.items.map((n, i) => `<div class="notif-it ${n.at > NOTIF.shownSeen ? 'new' : ''}" data-notif="${i}" role="button" tabindex="0">
+        <span class="np">${n.poster ? `<img src="${esc(imgSrc(n.poster))}" alt="" loading="lazy">` : n.kind === 'request' ? I.check : n.kind === 'admin' && n.sub === 'message' ? I.info : I.film}</span>
+        <span class="nt"><span>${esc(notifText(n))}</span><small>${ago(n.at)}</small></span>
+        <button class="notif-del" title="Borrar" data-notif-del="${i}">${I.close}</button></div>`).join('') + '</div>'
     : '<div class="notif-empty">No hay novedades en los últimos 30 días.</div>');
 }
 async function toggleNotifs(open = !NOTIF.open) {
@@ -3278,11 +3874,31 @@ async function toggleNotifs(open = !NOTIF.open) {
 $('#btnNotif').addEventListener('click', e => { e.stopPropagation(); toggleNotifs(); });
 $('#notifPanel').addEventListener('click', e => {
   e.stopPropagation();
+  // borrar una o todas: sólo de mi campana
+  if (e.target.closest('[data-notif-clear]')) {
+    NOTIF.items = [];
+    paintNotifs();
+    window.api.notifications.dismiss?.({ all: true }).catch(() => {});
+    return;
+  }
+  const del = e.target.closest('[data-notif-del]');
+  if (del) {
+    const d = NOTIF.items[del.dataset.notifDel];
+    NOTIF.items = NOTIF.items.filter(x => x !== d);
+    paintNotifs();
+    if (d) window.api.notifications.dismiss?.({ key: d.kind + ':' + d.id }).catch(() => {});
+    return;
+  }
   const n = NOTIF.items[e.target.closest('[data-notif]')?.dataset.notif];
   if (!n) return;
   toggleNotifs(false);
   if (n.kind === 'request') go('requests');
   else if (n.kind === 'collection') go('collection', { id: n.id });
+  else if (n.kind === 'admin') {
+    if (n.sub === 'title' && byId(n.target)) go('detail', { id: n.target });
+    else if (n.sub === 'collection' && collById(n.target)) go('collection', { id: n.target });
+    else { const entry = newsEntry(n); if (entry) showNews([entry]); }
+  }
   else go('detail', { id: n.id });
 });
 document.addEventListener('click', () => { if (NOTIF.open) toggleNotifs(false); });
@@ -3293,7 +3909,7 @@ window.api.onLibrary((lib) => {
   setLib(lib);
   loadNotifs();
   // no re-renderizar ajustes ni descargas mientras el usuario escribe
-  if (['settings', 'downloads'].includes(S.route.name) && /INPUT|SELECT/.test(document.activeElement?.tagName)) return;
+  if (['settings', 'downloads', 'announce', 'user', 'collection-edit'].includes(S.route.name) && /INPUT|SELECT|TEXTAREA/.test(document.activeElement?.tagName)) return;
   render(true);
   setTimeout(maybeCollectionNews, 1200);
 });

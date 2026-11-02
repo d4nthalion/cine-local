@@ -825,10 +825,19 @@ ipcMain.handle('progress:mark', async (_e, { paths, watched }) => {
   return p;
 });
 ipcMain.handle('requests:get', () => api().get('/api/requests'));
-ipcMain.handle('notifications:get', () => api().get('/api/notifications'));
+ipcMain.handle('notifications:get', () => api().get('/api/notifications?v=2'));
+ipcMain.handle('notifications:dismiss', (_e, q) => api().post('/api/notifications/dismiss', q));
+// avisos de los administradores (recomendaciones, colecciones y mensajes)
+ipcMain.handle('announcements:list', () => api().get('/api/announcements'));
+ipcMain.handle('announcements:op', (_e, q) => api().post('/api/announcements', q));
 ipcMain.handle('notifications:seen', () => api().post('/api/notifications/seen', {}));
 ipcMain.handle('requests:op', (_e, q) => api().post('/api/requests', q));
 ipcMain.handle('access:list', (_e, q) => api().get('/api/access?' + new URLSearchParams(q)));
+// usuarios (administradores): quién entra y qué puede ver cada uno
+ipcMain.handle('users:list', () => api().get('/api/users'));
+ipcMain.handle('users:get', (_e, name) => api().get('/api/users/' + encodeURIComponent(name)));
+ipcMain.handle('users:set', (_e, q) => api().post('/api/users', q));
+ipcMain.handle('users:folders', (_e, q) => api().post('/api/users/folders', q));
 ipcMain.handle('log:error', (_e, e) => api().post('/api/log', e).catch(() => null));
 // Listas propias (además de Mi lista): crear, renombrar, borrar y añadir o quitar títulos
 ipcMain.handle('collections:image', (_e, q) => api().post('/api/collections/image', q));

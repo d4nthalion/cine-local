@@ -266,6 +266,7 @@ class Repository(private val context: Context) {
         val r = server().library()
         collections.value = r.collections
         collectionsSeenAt.value = r.collectionsSeenAt
+        news.value = r.news
         val now = System.currentTimeMillis()
         val lang = settings.value.metaLang
         library.set(LibraryData(r.items, now, r.error, r.links))
@@ -549,6 +550,8 @@ class Repository(private val context: Context) {
     /** Colecciones de los administradores y hasta cuándo se ha visto el aviso de las nuevas */
     val collections = MutableStateFlow<List<CineServer.Coll>>(emptyList())
     val collectionsSeenAt = MutableStateFlow(0L)
+    /** Avisos de los administradores que salen al abrir la app */
+    val news = MutableStateFlow<List<CineServer.Notif>>(emptyList())
 
     suspend fun collectionsSeen() = withContext(Dispatchers.IO) {
         runCatching { server().collectionsSeen() }
@@ -576,6 +579,12 @@ class Repository(private val context: Context) {
     }
 
     /** La campana abierta: lo de hasta ahora queda visto (también en el escritorio y la web) */
+    /** Borrar de la campana una notificación, o todas (null) */
+    suspend fun notifsDismiss(n: CineServer.Notif?) = withContext(Dispatchers.IO) {
+        notifs.value = notifs.value?.let { v -> v.copy(items = if (n == null) emptyList() else v.items.filter { it !== n }) }
+        runCatching { server().notificationsDismiss(n?.let { it.kind + ":" + it.id }) }
+    }
+
     suspend fun notifsSeen() = withContext(Dispatchers.IO) {
         runCatching { server().notificationsSeen() }
         notifs.value = notifs.value?.copy(seenAt = System.currentTimeMillis())

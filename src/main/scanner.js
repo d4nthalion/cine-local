@@ -1,5 +1,6 @@
 // Escáner de la biblioteca: archivo suelto = película, carpeta = serie.
 // Excepción: en la raíz, una carpeta «Películas» / «Movies» contiene películas y una «Series» / «TV» contiene series.
+// Una carpeta de la raíz que tenga dentro sus propias «Películas» / «Series» (por ejemplo «Peticiones») se lee igual.
 // Cada carpeta de biblioteca puede organizarse «por categorías» (options.layouts[raíz]): ver scanCategories.
 const fs = require('fs');
 const path = require('path');
@@ -198,13 +199,18 @@ function scanLibrary(root, options = {}) {
   return { ok: true, items, scannedAt: Date.now() };
 }
 
-/** Vídeo suelto = película, carpeta = serie; en la raíz (top) se respetan las carpetas de categoría */
-function scanEntries(dir, entries, options, items, top) {
+/**
+ * Vídeo suelto = película, carpeta = serie; en la raíz (top) se respetan las carpetas de categoría, también dentro de
+ * una carpeta que las agrupe (group: ya se está dentro de una, no se mira más hondo)
+ */
+function scanEntries(dir, entries, options, items, top, group = false) {
   for (const e of entries) {
     const full = path.join(dir, e.name);
     if (e.isDirectory()) {
       if (SKIP_DIRS.test(e.name)) continue;
+      let inner;
       if (top && MOVIES_DIR.test(e.name)) scanMovies(full, items);
+      else if (top && !group && (inner = categoryGroup(full))) scanEntries(full, inner, options, items, true, true);
       else if (top && SERIES_DIR.test(e.name)) {
         try { scanEntries(full, fs.readdirSync(full, { withFileTypes: true }), options, items, false); } catch {}
       } else {
@@ -269,6 +275,18 @@ function scanMovies(dir, items, folderMovie = true) {
       items.push(movieItem(full));
     }
   }
+}
+
+/**
+ * Carpeta que agrupa sus propias «Películas» / «Series» (y ningún vídeo suelto): devuelve lo que tiene dentro, o null.
+ * Una serie con una carpeta «Series» dentro no pasa por esto: sus vídeos están en carpetas de temporada, no en «Series».
+ */
+function categoryGroup(dir) {
+  let entries;
+  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return null; }
+  const cats = entries.some(e => e.isDirectory() && (MOVIES_DIR.test(e.name) || SERIES_DIR.test(e.name)));
+  const loose = entries.some(e => e.isFile() && isVideo(e.name));
+  return cats && !loose ? entries : null;
 }
 
 /** Carpeta de categoría («Películas» o «Series») que haya en la raíz de la biblioteca, o null */

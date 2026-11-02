@@ -26,6 +26,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -171,8 +172,15 @@ fun NotificationsScreen(nav: Nav) {
         shownSeen.longValue = minOf(shownSeen.longValue, repo.notifs.value?.seenAt ?: shownSeen.longValue)
         repo.notifsSeen()
     }
+    val titles by repo.titles.collectAsStateWithLifecycle()
+    val rawColls by repo.collections.collectAsStateWithLifecycle()
+    val scope = rememberCoroutineScope()
+    // un mensaje de un administrador (o un aviso cuyo título ya no está) se abre en el cuadro de novedades
+    var showing by remember { mutableStateOf<NewsCard?>(null) }
+    showing?.let { c -> NewsDialog(listOf(c), nav) { showing = null } }
     Column(Modifier.fillMaxSize()) {
         BackTopBar("Notificaciones", onBack = { nav.back() }, divider = true, actions = {
+            if (!notifs?.items.isNullOrEmpty()) TextAction("Borrar todas", CL.text2) { scope.launch { repo.notifsDismiss(null) } }
             TextAction("Peticiones", CL.accentText, Modifier.padding(end = 8.dp)) { nav.requests() }
         })
         val items = notifs?.items.orEmpty()
@@ -184,7 +192,21 @@ fun NotificationsScreen(nav: Nav) {
             items(items, key = { it.kind + it.id + it.at }) { n ->
                 val new = n.at > shownSeen.longValue
                 Row(
-                    Modifier.fillMaxWidth().tapRow { when (n.kind) { "request" -> nav.requests(); "collection" -> nav.collection(n.id); else -> nav.detail(n.id) } }.padding(horizontal = 16.dp, vertical = 8.dp),
+                    Modifier.fillMaxWidth().tapRow {
+                        when (n.kind) {
+                            "request" -> nav.requests()
+                            "collection" -> nav.collection(n.id)
+                            "admin" -> {
+                                val colls = allCollectionsOf(rawColls, titles)
+                                when {
+                                    n.sub == "title" && titles.any { it.id == n.target } -> nav.detail(n.target!!)
+                                    n.sub == "collection" && colls.any { it.id == n.target } -> nav.collection(n.target!!)
+                                    else -> showing = newsCardOf(n, titles, colls)
+                                }
+                            }
+                            else -> nav.detail(n.id)
+                        }
+                    }.padding(start = 16.dp, top = 8.dp, bottom = 8.dp, end = 4.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Box(Modifier.width(44.dp).aspectRatio(2f / 3f).clip(RoundedCornerShape(4.dp))) { Artwork(n.poster, n.title, null, Modifier.fillMaxSize(), placeholderSize = 9) }
@@ -194,6 +216,9 @@ fun NotificationsScreen(nav: Nav) {
                             if (new) Box(Modifier.padding(end = 6.dp).size(7.dp).background(CL.accent, CircleShape))
                             Text(ago(n.at), style = MaterialTheme.typography.labelMedium, color = CL.text3)
                         }
+                    }
+                    Box(Modifier.size(44.dp).clip(CircleShape).tapRow { scope.launch { repo.notifsDismiss(n) } }, contentAlignment = Alignment.Center) {
+                        Icon(Icons.Rounded.Close, "Borrar", Modifier.size(18.dp), tint = CL.text3)
                     }
                 }
             }
@@ -207,6 +232,11 @@ private fun notifText(n: CineServer.Notif): String {
         "request" -> if (n.status == "done") "Ya puedes ver $name, que pediste" else "Tu petición de $name se ha rechazado" + (n.reply?.let { ": $it" } ?: "")
         "watchlist" -> "De tu watchlist: $name ya está en la biblioteca"
         "collection" -> "Nueva colección: «${n.title}»"
+        "admin" -> when (n.sub) {
+            "title" -> (n.by?.let { "$it te recomienda" } ?: "Recomendación:") + " $name" + n.text.takeIf { it.isNotBlank() }?.let { ": $it" }.orEmpty()
+            "collection" -> (n.by?.let { "$it te recomienda la colección" } ?: "Colección recomendada:") + " «${n.title}»" + n.text.takeIf { it.isNotBlank() }?.let { ": $it" }.orEmpty()
+            else -> n.title + n.text.takeIf { it.isNotBlank() }?.let { ": $it" }.orEmpty()
+        }
         else -> (if (n.type == "series") "Novedades en la biblioteca: " else "Nueva en la biblioteca: ") + name
     }
 }

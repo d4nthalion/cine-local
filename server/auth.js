@@ -35,14 +35,16 @@ class Auth {
    * groupFile: /etc/group del NAS (montado de sólo lectura). Con los grupos de DSM [adminGroup] y [userGroup] creados,
    *   el grupo decide quién entra y qué puede hacer; sin ellos, se usan allowed / admins como antes
    * allowed: lista de usuarios permitidos (vacía = todos los de DSM) · admins: administradores
+   * blocked(user): un administrador le ha quitado el acceso desde CineLocal (a los administradores no se les puede quitar)
    */
-  constructor({ dsmUrl, store, allowed = [], admins = [], devUser = null, devRole = 'admin', groupFile = null, adminGroup = 'cinelocal-admin', userGroup = 'cinelocal-user' }) {
+  constructor({ dsmUrl, store, allowed = [], admins = [], devUser = null, devRole = 'admin', groupFile = null, adminGroup = 'cinelocal-admin', userGroup = 'cinelocal-user', blocked = () => false }) {
     this.dsmUrl = dsmUrl.replace(/\/+$/, '');
     this.store = store;
     this.allowed = allowed.map(u => u.toLowerCase());
     this.admins = admins.map(u => u.toLowerCase());
     this.devUser = devUser;
     this.devRole = devRole;
+    this.blocked = blocked;
     this.groupFile = groupFile;
     this.adminGroup = adminGroup.toLowerCase();
     this.userGroup = userGroup.toLowerCase();
@@ -80,6 +82,7 @@ class Auth {
     this.dsmLogout(r.data.sid).catch(() => {});
     // la contraseña es buena, pero sin grupo de CineLocal no se entra (se dice después de comprobarla: así no se
     // puede averiguar quién está en los grupos sin saber su contraseña)
+    if (this.baseRole(user) === 'user' && this.blocked(user)) return { ok: false, error: 'Un administrador te ha quitado el acceso a CineLocal' };
     if (!this.role(user)) return { ok: false, error: `Tu usuario no tiene acceso a CineLocal: pide que te añadan al grupo «${this.userGroup}» del NAS` };
     return { ok: true, ...this.open(user) };
   }
@@ -138,6 +141,12 @@ class Auth {
 
   /** 'admin', 'user' o null (no puede entrar) */
   role(user) {
+    const r = this.baseRole(user);
+    return r === 'user' && this.blocked(user) ? null : r;
+  }
+
+  /** El rol que le dan DSM (sus grupos) o la configuración, sin contar si se le ha quitado el acceso desde CineLocal */
+  baseRole(user) {
     if (!user) return null;
     if (this.devUser) return user === this.devUser ? this.devRole : null;
     const name = user.toLowerCase();
@@ -149,6 +158,19 @@ class Auth {
     // todavía no se han creado los grupos en DSM: como antes
     if (this.admins.includes(name)) return 'admin';
     return !this.allowed.length || this.allowed.includes(name) ? 'user' : null;
+  }
+
+  /** Usuarios que dan los grupos de DSM o la configuración (sin grupos ni lista, no se sabe: sólo los que ya han entrado) */
+  members() {
+    if (this.devUser) return [this.devUser.toLowerCase()];
+    const g = this.groups();
+    if (this.groupsActive()) return [...new Set([...(g.get(this.adminGroup) || []), ...(g.get(this.userGroup) || [])])];
+    return [...new Set([...this.admins, ...this.allowed])];
+  }
+
+  /** Nombres con una sesión abierta */
+  sessionUsers() {
+    return [...new Set(Object.values(this.store.data.sessions).map(s => String(s.user).toLowerCase()))];
   }
 
   groupsActive() {

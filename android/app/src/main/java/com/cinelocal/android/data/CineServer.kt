@@ -57,7 +57,9 @@ class CineServer(url: String, private val token: String = "", private val http: 
         val items: List<Item> = emptyList(), val error: String? = null,
         val progress: Map<String, Progress> = emptyMap(), val favorites: List<String> = emptyList(),
         val lists: List<UserList> = emptyList(),
-        val collections: List<Coll> = emptyList(), val collectionsSeenAt: Long = 0
+        val collections: List<Coll> = emptyList(), val collectionsSeenAt: Long = 0,
+        /** avisos de los administradores que salen al abrir la app (con el mismo «visto» que las colecciones) */
+        val news: List<Notif> = emptyList()
     )
 
     /** Colección hecha por un administrador: títulos de la biblioteca (ids) en el orden que eligió */
@@ -72,7 +74,8 @@ class CineServer(url: String, private val token: String = "", private val http: 
     data class Library(
         val items: List<LibraryItem>, val meta: Map<String, Meta>, val links: Map<String, String>,
         val progress: Map<String, Progress>, val favorites: List<String>, val lists: List<UserList>, val error: String?,
-        val collections: List<Coll> = emptyList(), val collectionsSeenAt: Long = 0
+        val collections: List<Coll> = emptyList(), val collectionsSeenAt: Long = 0,
+        val news: List<Notif> = emptyList()
     )
 
     // ---------------------------------------------------------------- peticiones
@@ -112,7 +115,7 @@ class CineServer(url: String, private val token: String = "", private val http: 
         val meta = v.items.mapNotNull { i -> i.meta?.let { m -> runCatching { json.decodeFromJsonElement(Meta.serializer(), m) }.getOrNull()?.let { i.id to it } } }.toMap()
         // las imágenes subidas a una colección vienen como /api/collection-image/…: con el dominio del servidor
         val colls = v.collections.map { c -> c.copy(poster = c.poster?.let(::abs), backdrop = c.backdrop?.let(::abs)) }
-        return Library(items, meta, links, v.progress, v.favorites, v.lists, v.error, colls, v.collectionsSeenAt)
+        return Library(items, meta, links, v.progress, v.favorites, v.lists, v.error, colls, v.collectionsSeenAt, v.news.map(::absNotif))
     }
 
     fun reportProgress(id: String, pos: Double, dur: Double) {
@@ -181,7 +184,8 @@ class CineServer(url: String, private val token: String = "", private val http: 
 
     // ---------------------------------------------------------------- sesión, ajustes, campana y registro
 
-    @Serializable data class Me(val user: String = "", val admin: Boolean = false)
+    /** mod: carpetas de los NAS en los que, sin ser administrador, puede corregir coincidencias (moderador) */
+    @Serializable data class Me(val user: String = "", val admin: Boolean = false, val mod: List<String> = emptyList())
     fun me(): Me = json.decodeFromString(get("/api/me"))
 
     /** Sus ajustes (los del servidor con sus preferencias encima): de aquí sólo se usa el idioma de las fichas */
@@ -192,11 +196,20 @@ class CineServer(url: String, private val token: String = "", private val http: 
     /** Campana: peticiones propias resueltas, novedades y lo que llega de tu watchlist (server/library.js notifications) */
     @Serializable data class Notif(
         val kind: String, val id: String, val at: Long, val title: String, val year: Int? = null, val type: String? = null,
-        val status: String? = null, val reply: String? = null, val poster: String? = null
+        val status: String? = null, val reply: String? = null, val poster: String? = null,
+        /** avisos de los administradores (kind «admin»): sub «title» (target: el título), «collection» (target, items) o «message» */
+        val sub: String? = null, val target: String? = null, val text: String = "", val by: String? = null,
+        val popup: Boolean = false, val items: List<String> = emptyList(), val backdrop: String? = null
     )
     @Serializable data class Notifs(val items: List<Notif> = emptyList(), val seenAt: Long = 0)
-    fun notifications(): Notifs = json.decodeFromString<Notifs>(get("/api/notifications")).let { n -> n.copy(items = n.items.map { it.copy(poster = it.poster?.let(::abs)) }) }
+    private fun absNotif(n: Notif) = n.copy(poster = n.poster?.let(::abs), backdrop = n.backdrop?.let(::abs))
+    // v=2: con los avisos de los administradores (las versiones de antes no los piden: los tomarían por títulos)
+    fun notifications(): Notifs = json.decodeFromString<Notifs>(get("/api/notifications?v=2")).let { n -> n.copy(items = n.items.map(::absNotif)) }
     fun notificationsSeen() { request(post("/api/notifications/seen", "{}")) }
+    /** Borra de su campana una notificación («kind:id») o, con key null, todas */
+    fun notificationsDismiss(key: String?) {
+        request(post("/api/notifications/dismiss", if (key == null) "{\"all\":true}" else "{\"key\":${json.encodeToString(key)}}"))
+    }
     /** El aviso de colecciones nuevas, cerrado: las de hasta ahora quedan vistas */
     fun collectionsSeen() { request(post("/api/collections/seen", "{}")) }
 

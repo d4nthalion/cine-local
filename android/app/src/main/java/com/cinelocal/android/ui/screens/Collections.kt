@@ -271,38 +271,87 @@ fun CollectionScreen(id: String, nav: Nav) {
  * Aviso de colecciones nuevas (de otros) desde la última vez, al estilo de las novedades de Steam: la imagen, el nombre,
  * la descripción y sus carátulas, con «Ver colección» o «Ahora no». Una vez cerrado no vuelve a salir.
  */
+/** Una novedad del cuadro emergente: una colección nueva o un aviso de un administrador */
+data class NewsCard(
+    val key: String, val at: Long, val tag: String, val title: String, val meta: String, val desc: String,
+    val backdrop: String?, val films: List<Title>, val openLabel: String? = null, val open: ((Nav) -> Unit)? = null
+)
+
+/** Todas las colecciones (las de los administradores y las sagas), para abrir la de un aviso */
+fun allCollectionsOf(raw: List<CineServer.Coll>, titles: List<Title>) = customCollectionsOf(raw, titles) + sagasOf(titles).map { it.asColl() }
+
+/** El aviso de un administrador (de la campana o de los emergentes) listo para el cuadro; null si ya no hay qué enseñar */
+fun newsCardOf(n: CineServer.Notif, titles: List<Title>, colls: List<Coll>): NewsCard? {
+    val by = n.by?.let { " · de $it" } ?: ""
+    return when (n.sub) {
+        "title" -> {
+            val t = titles.firstOrNull { it.id == n.target } ?: return null
+            NewsCard(
+                "admin:${n.id}", n.at, "RECOMENDACIÓN", t.name, listOfNotNull(t.year?.toString(), if (t.isMovie) "Película" else "Serie").joinToString(" · ") + by,
+                n.text.ifBlank { t.meta?.overview.orEmpty() }, n.backdrop ?: t.meta?.backdrop, listOf(t), "Ver ficha"
+            ) { it.detail(t.id) }
+        }
+        "collection" -> {
+            val c = colls.firstOrNull { it.id == n.target }
+            val byId = titles.associateBy { it.id }
+            val films = c?.films ?: n.items.mapNotNull { byId[it] }
+            NewsCard(
+                "admin:${n.id}", n.at, "COLECCIÓN RECOMENDADA", n.title, filmsLabel(films) + by, n.text.ifBlank { c?.description.orEmpty() },
+                n.backdrop ?: c?.backdrop, films, c?.let { "Ver colección" }, c?.let { cc -> { nav: Nav -> nav.collection(cc.id) } }
+            )
+        }
+        else -> NewsCard("admin:${n.id}", n.at, "AVISO", n.title, n.by?.let { "De $it" } ?: "", n.text, null, emptyList())
+    }
+}
+
+/** Colecciones nuevas de otros y avisos emergentes de los administradores desde la última vez, una sola vez */
 @Composable
 fun CollectionNews(nav: Nav) {
     val repo = LocalContext.current.repo
     val titles by repo.titles.collectAsStateWithLifecycle()
     val raw by repo.collections.collectAsStateWithLifecycle()
+    val news by repo.news.collectAsStateWithLifecycle()
     val seenAt by repo.collectionsSeenAt.collectAsStateWithLifecycle()
     val me by repo.me.collectAsStateWithLifecycle()
     val settings by repo.settings.flow.collectAsStateWithLifecycle()
     var closed by rememberSaveable { mutableStateOf(false) }
     if (closed || !settings.server || seenAt == 0L || me == null) return
-    val fresh = remember(raw, titles, seenAt, me) {
-        customCollectionsOf(raw, titles).filter { it.createdAt > seenAt && !it.createdBy.equals(me?.user, ignoreCase = true) }
+    val fresh = remember(raw, news, titles, seenAt, me) {
+        val custom = customCollectionsOf(raw, titles)
+        val all = custom + sagasOf(titles).map { it.asColl() }
+        val colls = custom.filter { it.createdAt > seenAt && !it.createdBy.equals(me?.user, ignoreCase = true) }.map { c ->
+            NewsCard(
+                "collection:${c.id}", c.createdAt, "NUEVA COLECCIÓN", c.name, filmsLabel(c.films) + (c.createdBy?.let { " · creada por $it" } ?: ""),
+                c.description, c.backdrop, c.films, "Ver colección"
+            ) { it.collection(c.id) }
+        }
+        (colls + news.filter { it.at > seenAt && !it.by.equals(me?.user, ignoreCase = true) }.mapNotNull { newsCardOf(it, titles, all) })
+            .sortedByDescending { it.at }
     }
     if (fresh.isEmpty()) return
     val scope = rememberCoroutineScope()
+    NewsDialog(fresh, nav) { closed = true; scope.launch { repo.collectionsSeen() } }
+}
+
+/** El cuadro de novedades, al estilo de las de Steam: una o varias, con «Anterior / Siguiente» */
+@Composable
+fun NewsDialog(fresh: List<NewsCard>, nav: Nav, onClose: () -> Unit) {
     var i by remember { mutableIntStateOf(0) }
     val c = fresh[i.coerceIn(0, fresh.size - 1)]
     fun close(open: Boolean) {
-        closed = true
-        scope.launch { repo.collectionsSeen() }
-        if (open) nav.collection(c.id)
+        onClose()
+        if (open) c.open?.invoke(nav)
     }
     Dialog(onDismissRequest = { close(false) }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Column(
             Modifier.padding(20.dp).fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(CL.bg2)
         ) {
             Box(Modifier.fillMaxWidth().height(170.dp)) {
-                if (c.backdrop != null) Artwork(c.backdrop, c.name, null, Modifier.fillMaxSize())
+                if (c.backdrop != null) Artwork(c.backdrop, c.title, null, Modifier.fillMaxSize())
                 else Box(Modifier.fillMaxSize().background(Brush.linearGradient(listOf(CL.gradStart.copy(alpha = .55f), CL.gradEnd.copy(alpha = .35f)))))
                 Box(Modifier.fillMaxSize().background(Brush.verticalGradient(0.35f to Color.Transparent, 1f to CL.bg2)))
                 Text(
-                    "NUEVA COLECCIÓN", Modifier.padding(14.dp).background(BrandGradientH, RoundedCornerShape(50)).padding(horizontal = 10.dp, vertical = 4.dp),
+                    c.tag, Modifier.padding(14.dp).background(BrandGradientH, RoundedCornerShape(50)).padding(horizontal = 10.dp, vertical = 4.dp),
                     color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.ExtraBold, letterSpacing = 0.8.sp
                 )
                 if (fresh.size > 1) Text(
@@ -311,13 +360,11 @@ fun CollectionNews(nav: Nav) {
                 )
             }
             Column(Modifier.padding(horizontal = 20.dp).verticalScroll(rememberScrollState()).weight(1f, fill = false)) {
-                Text(c.name, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.ExtraBold, color = CL.text)
-                Text(
-                    filmsLabel(c.films) + (c.createdBy?.let { " · creada por $it" } ?: ""),
-                    Modifier.padding(top = 2.dp), style = MaterialTheme.typography.labelMedium, color = CL.text3
-                )
-                if (c.description.isNotBlank()) Text(c.description, Modifier.padding(top = 10.dp), style = MaterialTheme.typography.bodyMedium, color = CL.text2)
-                Row(Modifier.padding(vertical = 14.dp).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(c.title, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.ExtraBold, color = CL.text)
+                if (c.meta.isNotBlank()) Text(c.meta, Modifier.padding(top = 2.dp), style = MaterialTheme.typography.labelMedium, color = CL.text3)
+                if (c.desc.isNotBlank()) Text(c.desc, Modifier.padding(top = 10.dp), style = MaterialTheme.typography.bodyMedium, color = CL.text2)
+                if (c.films.isEmpty()) Spacer(Modifier.height(16.dp))
+                else Row(Modifier.padding(vertical = 14.dp).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     for (f in c.films.take(8)) Box(Modifier.width(56.dp).aspectRatio(2f / 3f).clip(RoundedCornerShape(3.dp))) {
                         Artwork(f.meta?.poster, f.name, null, Modifier.fillMaxSize(), placeholderSize = 9)
                     }
@@ -329,8 +376,10 @@ fun CollectionNews(nav: Nav) {
                     TextAction("Siguiente", if (i < fresh.size - 1) CL.text2 else CL.text3) { if (i < fresh.size - 1) i++ }
                 }
                 Spacer(Modifier.weight(1f))
-                TextAction("Ahora no") { close(false) }
-                TextAction("Ver colección", CL.accentText) { close(true) }
+                if (c.open != null) {
+                    TextAction("Ahora no") { close(false) }
+                    TextAction(c.openLabel ?: "Ver", CL.accentText) { close(true) }
+                } else TextAction("Entendido", CL.accentText) { close(false) }
             }
         }
     }

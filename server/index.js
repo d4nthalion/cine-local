@@ -36,8 +36,10 @@ const auth = new Auth({
   userGroup: env.CINELOCAL_USER_GROUP || 'cinelocal-user',
   // sólo para desarrollo: sin DSM, todo el mundo entra como este usuario
   devUser: env.CINELOCAL_AUTH === 'none' ? (env.CINELOCAL_DEV_USER || 'dev') : null,
-  devRole: env.CINELOCAL_DEV_ROLE === 'user' ? 'user' : 'admin'
+  devRole: env.CINELOCAL_DEV_ROLE === 'user' ? 'user' : 'admin',
+  blocked: u => library.isBlocked(u)
 });
+library.isAdmin = u => auth.isAdmin(u);
 if (auth.devUser) console.warn(`¡Atención! CINELOCAL_AUTH=none: no se pide contraseña (usuario «${auth.devUser}»). Sólo para desarrollo.`);
 const requests = new Requests(DATA);
 const lbUsers = new LetterboxdUsers(DATA, library);
@@ -159,6 +161,21 @@ requests.on('resolved', r => {
 library.on('meta:progress', p => broadcast('meta:progress', p));
 library.on('toast', t => broadcast('toast', t));
 library.on('new', l => broadcast('library:new', l));
+// aviso nuevo de un administrador: a quien le toca, la campana y (si es emergente) la biblioteca, que lo lleva
+library.on('announce', a => {
+  for (const c of clients) {
+    if (a?.to?.length && !a.to.includes(c.user.toLowerCase())) continue;
+    c.res.write('event: library:changed\ndata: {}\n\n');
+  }
+});
+// le cambian lo que puede ver: vuelve a pedir la biblioteca; si le quitan el acceso, se le cierra la conexión
+library.on('rules', name => {
+  for (const c of [...clients]) {
+    if (name && c.user.toLowerCase() !== name) continue;
+    if (!auth.role(c.user)) { c.res.end(); clients.delete(c); }
+    else c.res.write('event: library:changed\ndata: {}\n\n');
+  }
+});
 setInterval(() => { for (const c of clients) c.res.write(': ping\n\n'); }, 25000).unref();
 
 // ---------- rutas ----------
@@ -186,6 +203,8 @@ route('POST', '/api/logout', (req, res, { user }) => {
 
 route('GET', '/api/me', (req, res, { user }) => json(res, 200, {
   user, role: auth.role(user), admin: auth.isAdmin(user), version: VERSION, hwaccel: media.HWACCEL,
+  // moderador: las carpetas de los NAS en los que puede corregir coincidencias
+  mod: library.modRoots(user),
   groups: auth.groupsActive() ? { admin: auth.adminGroup, user: auth.userGroup } : null
 }));
 
@@ -271,12 +290,14 @@ route('GET', '/api/title/:type/:id', async (req, res, { p, user }) => {
   catch (e) { throw e.status ? e : httpError(/404|not be found/i.test(e.message) ? 404 : 502, e.message); }
 });
 route('POST', '/api/meta/search', async (req, res, { user }) => json(res, 200, await library.search(await readBody(req), user)));
+// corregir la coincidencia: los administradores y los moderadores de ese NAS
 route('POST', '/api/meta/identify', async (req, res, { user }) => {
   const b = await readBody(req);
+  if (!library.canModerate(user, b.itemId)) throw httpError(403, 'No puedes corregir los títulos de este NAS');
   const it = library.library.data.items.find(i => i.id === b.itemId);
   act(req, user, 'identify', it && titleOf({ item: it }), `Ficha de TMDB ${b.tmdbId}`);
   json(res, 200, await library.identify(b, user));
-}, { admin: true });
+});
 
 route('POST', '/api/play', async (req, res, { user }) => {
   const q = await readBody(req);
@@ -366,8 +387,32 @@ route('POST', '/api/lists', async (req, res, { user }) => {
 });
 route('GET', '/api/requests', (req, res, { user }) => json(res, 200, requestsView(user)));
 // campana: peticiones propias resueltas y novedades de la biblioteca
-route('GET', '/api/notifications', (req, res, { user }) => json(res, 200, library.notifications(user, requests.list(user, false),
-  lbUsers.snapshot(user).films.filter(f => f.watchlist && f.tmdbId).map(f => 'movie:' + f.tmdbId))));
+route('GET', '/api/notifications', (req, res, { user, q }) => json(res, 200, library.notifications(user, requests.list(user, false),
+  lbUsers.snapshot(user).films.filter(f => f.watchlist && f.tmdbId).map(f => 'movie:' + f.tmdbId), { announcements: +q.get('v') >= 2 })));
+route('POST', '/api/notifications/dismiss', async (req, res, { user }) => json(res, 200, library.notificationsDismiss(user, await readBody(req))));
+// avisos de los administradores: una película o serie recomendada, una colección o un mensaje, con aviso emergente o sin él
+route('GET', '/api/announcements', (req, res, { user }) => {
+  const lang = library.langOf(user);
+  const small = p => p ? p.replace(/\/w\d+\//, '/w185/') : null;
+  json(res, 200, { items: library.announcements.data.items.map(a => {
+    // el título y la carátula, aunque el aviso no fuera para quien lo mira
+    const ids = a.kind === 'title' ? [a.target] : a.items || [];
+    const m = ids.map(id => library.metaOf(id, lang)).find(x => x?.poster);
+    const it = a.kind === 'title' && library.library.data.items.find(i => i.id === a.target);
+    const title = a.kind === 'title' ? (it ? library.metaOf(it.id, lang)?.title || it.title : null) : a.name || a.title;
+    return { ...a, title, poster: small(m?.poster) };
+  }) });
+}, { admin: true });
+route('POST', '/api/announcements', async (req, res, { user }) => {
+  const b = await readBody(req, 1024 * 1024);
+  let a;
+  try { a = library.announcementOp(user, b); }
+  catch (e) { throw httpError(400, e.message); }
+  if (b.op === 'create') act(req, user, 'announce-create', a.kind === 'title' ? titleOf({ item: library.library.data.items.find(i => i.id === a.target) }) : a.name || a.title,
+    `${a.to.length ? 'Para ' + a.to.join(', ') : 'Para todos'}${a.popup ? ' · emergente' : ''}`);
+  else act(req, user, 'announce-' + b.op);
+  json(res, 200, { ok: true, item: a });
+}, { admin: true });
 route('POST', '/api/notifications/seen', (req, res, { user }) => json(res, 200, { seenAt: library.notificationsSeen(user) }));
 // ---------- Letterboxd de cada usuario (server/letterboxd.js) ----------
 const sameUser = name => u => u.toLowerCase() === name;
@@ -419,27 +464,68 @@ route('GET', '/api/segments', async (req, res, { q }) => {
   json(res, 200, segs ? flatten(segs, dur) : []);
 });
 
-route('GET', '/api/media/:id/info', async (req, res, { p }) => {
-  const f = mediaFile(p.id);
+route('GET', '/api/media/:id/info', async (req, res, { p, user }) => {
+  const f = mediaFile(p.id, user);
   json(res, 200, await media.info(f, rootOf(f.path)));
 });
 route('GET', '/api/media/:id/file', (req, res, { p, q, user }) => {
-  const f = mediaFile(p.id);
+  const f = mediaFile(p.id, user);
   logAccess(req, res, user, p.id, f, q.get('dl') === '1' ? 'download' : 'play');
   media.sendFile(req, res, f.path);
 }, { signed: true });
 route('GET', '/api/media/:id/stream', (req, res, { p, q, user }) => {
-  const f = mediaFile(p.id);
+  const f = mediaFile(p.id, user);
   logAccess(req, res, user, p.id, f, q.get('mode') === 'transcode' ? 'transcode' : 'remux');
   return media.sendStream(req, res, f, q);
 });
-route('GET', '/api/media/:id/subs/:key', (req, res, { p }) => {
-  const f = mediaFile(p.id);
+route('GET', '/api/media/:id/subs/:key', (req, res, { p, user }) => {
+  const f = mediaFile(p.id, user);
   if (!/^[ix]\d{1,3}$/.test(p.key)) throw httpError(400, 'Subtítulo no válido');
   return media.sendSubs(res, f, p.key, rootOf(f.path), path.join(DATA, 'cache', 'subs'));
 }, { signed: true });
 
 route('GET', '/api/access', (req, res, { q }) => json(res, 200, access.list({ days: +q.get('days') || 7, user: q.get('user') || '', q: q.get('q') || '', type: q.get('type') || '' })), { admin: true });
+// ---------- usuarios (administradores): quién entra y qué puede ver cada uno ----------
+function userRow(name) {
+  const r = library.ruleView(name);
+  return { ...r, items: undefined, count: r.items.length, role: auth.baseRole(name), online: [...clients].some(c => c.user.toLowerCase() === name) };
+}
+route('GET', '/api/users', (req, res) => {
+  const names = [...new Set([...auth.members(), ...auth.sessionUsers(), ...library.knownUsers()])].sort((a, b) => a.localeCompare(b, 'es'));
+  json(res, 200, { users: names.map(userRow), groups: auth.groupsActive() ? { admin: auth.adminGroup, user: auth.userGroup } : null,
+    sources: library.sources().map(({ key, label }) => ({ key, label })),
+    folders: library.privateFolders().map(f => ({ ...f, label: library.folderLabel(f.path) })),
+    folderChoices: library.folderChoices().map(p => ({ path: p, label: library.folderLabel(p) })) });
+}, { admin: true });
+// carpetas privadas: { path, users } la hace privada (o cambia quién la ve) · { path, remove: true } deja de serlo
+route('POST', '/api/users/folders', async (req, res, { user }) => {
+  const b = await readBody(req, 64 * 1024);
+  try { library.setFolder(b); }
+  catch (e) { throw httpError(400, e.message); }
+  act(req, user, 'folder-access', library.folderLabel(String(b.path || '')), b.remove ? 'Ya no es privada' : `La ven: ${(b.users || []).join(', ') || 'sólo los administradores'}`);
+  json(res, 200, { folders: library.privateFolders().map(f => ({ ...f, label: library.folderLabel(f.path) })) });
+}, { admin: true });
+route('GET', '/api/users/:name', (req, res, { p }) => json(res, 200, { ...library.ruleView(p.name), ...userRow(p.name), items: library.ruleView(p.name).items,
+  sources: library.sources().map(({ key, label }) => ({ key, label })),
+  privateFolders: library.privateFolders().map(f => ({ path: f.path, label: library.folderLabel(f.path) })) }), { admin: true });
+route('POST', '/api/users', async (req, res, { user }) => {
+  const b = await readBody(req, 1024 * 1024);
+  const name = String(b.name || '').toLowerCase().trim();
+  if (!name) throw httpError(400, 'Falta el usuario');
+  if (auth.baseRole(name) === 'admin') throw httpError(400, 'A los administradores no se les puede limitar');
+  const before = library.ruleView(name);
+  try { library.setRule(name, { mode: b.mode, items: b.items, blocked: b.blocked, mod: b.mod, folders: b.folders }); }
+  catch (e) { throw httpError(400, e.message); }
+  const after = library.ruleView(name);
+  const MODES = { all: 'Ve todo', except: 'Todo menos lo elegido', only: 'Sólo lo elegido' };
+  const label = k => library.sources().find(s => s.key === k)?.label || k;
+  const detail = before.blocked !== after.blocked ? (after.blocked ? 'Acceso quitado' : 'Acceso devuelto')
+    : before.mod.join() !== after.mod.join() ? (after.mod.length ? 'Moderador de ' + after.mod.map(label).join(', ') : 'Ya no es moderador')
+    : `${MODES[after.mode]}${after.mode === 'all' ? '' : ` (${after.items.length} ${after.items.length === 1 ? 'título' : 'títulos'})`}`;
+  act(req, user, 'user-access', name, detail);
+  json(res, 200, { ...after, ...userRow(name), items: after.items });
+}, { admin: true });
+
 // errores de la interfaz (web, escritorio): se apuntan para poder ver qué le pasó a cada uno
 const clientErrors = new Map();   // usuario → { n, from }
 route('POST', '/api/log', async (req, res, { user }) => {
@@ -464,9 +550,9 @@ function broadcastProgress(user, prog) {
   for (const c of clients) if (c.user === user) c.res.write(`event: progress:updated\ndata: ${JSON.stringify(prog)}\n\n`);
 }
 
-function mediaFile(id) {
+function mediaFile(id, user) {
   const f = library.file(id);
-  if (!f || !fs.existsSync(f.path)) throw httpError(404, 'No se encuentra el archivo de vídeo');
+  if (!f || !library.canSee(user, id) || !fs.existsSync(f.path)) throw httpError(404, 'No se encuentra el archivo de vídeo');
   return f;
 }
 /** Título legible de una película, serie o episodio ({ item, episode? }) */
@@ -507,6 +593,7 @@ const server = http.createServer(async (req, res) => {
         if (!m) continue;
         if (!user && r.signed && m.groups?.id) user = auth.checkSigned(m.groups.id, url.searchParams);
         if (!r.public && !user) throw httpError(401, 'Inicia sesión');
+        if (user) library.seen(user);
         if (r.admin && !auth.isAdmin(user)) throw httpError(403, 'Sólo un administrador puede hacer esto');
         return await r.handler(req, res, { user, p: m.groups || {}, q: url.searchParams });
       }
@@ -542,7 +629,7 @@ server.listen(PORT, HOST, () => {
 
 for (const sig of ['SIGTERM', 'SIGINT']) process.on(sig, () => {
   access.closeIdle(true);
-  for (const s of [library.settings, library.library, library.metadata, library.people, library.custom, auth.store, requests.store]) s.flushSync();
+  for (const s of [library.settings, library.library, library.metadata, library.people, library.custom, library.collections, library.rules, library.announcements, auth.store, requests.store]) s.flushSync();
   for (const u of library.users.values()) u.flushSync();
   process.exit(0);
 });

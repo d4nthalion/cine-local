@@ -170,6 +170,11 @@ fun DetailScreen(id: String, nav: Nav) {
     var showLists by remember { mutableStateOf(false) }
     val watched = isWatched(t, progress)
     var identifying by remember { mutableStateOf(false) }
+    // con CineLocal Server, corregir es de los administradores y de los moderadores del NAS en el que está
+    val me by repo.me.collectAsStateWithLifecycle()
+    val server = repo.settings.flow.collectAsStateWithLifecycle().value.server
+    val firstPath = if (t.isMovie) t.item.path else t.item.episodes.firstOrNull()?.path.orEmpty()
+    val canFix = !server || me?.admin == true || me?.mod.orEmpty().any { firstPath.startsWith(it.trimEnd('/') + "/") }
 
     val dlIndex by rememberDlIndex()
     val offline by repo.offline.collectAsStateWithLifecycle()
@@ -294,7 +299,7 @@ fun DetailScreen(id: String, nav: Nav) {
             Box {
                 FloatingIcon(Icons.Rounded.MoreVert, "Más", bar) { menu = true }
                 AppMenu(menu, { menu = false }) {
-                    AppMenuItem("Corregir coincidencia") { menu = false; identifying = true }
+                    if (canFix) AppMenuItem("Corregir coincidencia") { menu = false; identifying = true }
                     if (canPlayFromStart) AppMenuItem("Reproducir desde el principio") { menu = false; playFromStart() }
                 }
             }

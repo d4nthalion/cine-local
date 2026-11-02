@@ -14,6 +14,8 @@ const { store } = require('./store');
 
 const DEFAULT_SETTINGS = {
   libraryPath: process.env.CINELOCAL_LIBRARY || '/media',
+  // nombre de cada NAS (las carpetas de la biblioteca agrupadas por su primera carpeta: /media, /nas2…)
+  sourceLabels: {},
   extraLibraryPaths: [],
   tmdbKey: '',
   metaLang: 'es-ES',          // idioma principal de las fichas: el de quien no elige otro (y con el que se empareja)
@@ -74,6 +76,13 @@ function slimMeta(m) {
   return out;
 }
 
+/** ¿Está p dentro de la carpeta dir (no la propia carpeta)? */
+function isInside(dir, p) {
+  if (!dir || !p) return false;
+  const rel = path.relative(dir, p);
+  return !!rel && !rel.startsWith('..') && !path.isAbsolute(rel);
+}
+
 class Library extends EventEmitter {
   /**
    * La usan CineLocal Server y, en modo local, la app de escritorio (src/main/local.js).
@@ -97,6 +106,18 @@ class Library extends EventEmitter {
     // colecciones hechas a mano por los administradores (las de TMDB salen solas de las fichas):
     // { items: [{ id, name, description, items: [ids de títulos], createdAt, createdBy, updatedAt }] }
     this.collections = store(dataDir, 'collections.json', { items: [] });
+    // qué puede ver cada usuario y si puede entrar; por defecto, todo. Lo cambian los administradores:
+    // { users: { [nombre en minúsculas]: { mode: 'except' | 'only', items: [ids de títulos], blocked, mod } }, seen: { [nombre]: ms },
+    //   folders: [{ path, users: [nombres] }] (carpetas privadas: sólo las ven esos usuarios y los administradores) }
+    this.rules = store(dataDir, 'access.json', { users: {}, seen: {}, folders: [] });
+    this.rulesVer = 0;
+    // avisos que mandan los administradores (una película o serie recomendada, una colección o un mensaje):
+    // { items: [{ id, kind: 'title' | 'collection' | 'message', target, name, items, title, text, popup, to: [nombres], createdAt, createdBy }] }
+    this.announcements = store(dataDir, 'announcements.json', { items: [] });
+    this.annVer = 0;
+    this.visCache = new Map();
+    // lo pone el servidor: a los administradores no se les limita nada
+    this.isAdmin = () => false;
     this.users = new Map();
     this.fetching = false;
     this.fetchAgain = false;
@@ -139,6 +160,188 @@ class Library extends EventEmitter {
       }
     }
     return this.users.get(key);
+  }
+
+  // ---------- qué puede ver cada usuario ----------
+  /** Su regla ({ mode, items, blocked }), o null si no tiene (o es administrador): lo ve todo */
+  ruleOf(userName) {
+    if (!userName || this.isAdmin(userName)) return null;
+    return this.rules.data.users[String(userName).toLowerCase()] || null;
+  }
+
+  /** Ids de los títulos que puede ver, o null si puede verlo todo */
+  visibleIds(userName) {
+    if (!userName || this.isAdmin(userName)) return null;
+    const key = String(userName).toLowerCase();
+    const r = this.ruleOf(userName);
+    // las carpetas privadas en las que no está
+    const hidden = this.privateFolders().filter(f => !f.users.includes(key)).map(f => f.path);
+    if (!r?.mode && !hidden.length) return null;
+    const ver = this.gen + '|' + this.rulesVer;
+    const c = this.visCache.get(key);
+    if (c?.ver === ver) return c.ids;
+    const picked = new Set(r?.items || []);
+    const ids = new Set(this.library.data.items.filter(i => {
+      if (r?.mode && picked.has(i.id) !== (r.mode === 'only')) return false;
+      // lo que se le ha elegido uno a uno («Sólo…») lo ve aunque esté en una carpeta privada
+      return !hidden.some(f => isInside(f, i.path)) || (r?.mode === 'only' && picked.has(i.id));
+    }).map(i => i.id));
+    this.visCache.set(key, { ver, ids });
+    return ids;
+  }
+
+  /** ¿Puede ver este título (o el episodio o la película de este archivo)? */
+  canSee(userName, id) {
+    const ids = this.visibleIds(userName);
+    return !ids || ids.has(this.index.get(id)?.item.id || id);
+  }
+
+  // ---------- carpetas privadas: sólo las ven los usuarios elegidos (y los administradores) ----------
+  privateFolders() {
+    return this.rules.data.folders || [];
+  }
+
+  /** Hace privada una carpeta (de una de las de la biblioteca) con quién puede verla, o deja de serlo (remove) */
+  setFolder({ path: dir, users, remove } = {}) {
+    dir = String(dir || '').trim().replace(/[\\/]+$/, '');
+    if (!this.roots().some(r => isInside(r, dir))) throw new Error('La carpeta tiene que estar dentro de la biblioteca');
+    const all = this.rules.data.folders || (this.rules.data.folders = []);
+    const i = all.findIndex(f => f.path === dir);
+    if (remove) { if (i >= 0) all.splice(i, 1); }
+    else {
+      const list = Array.isArray(users) ? [...new Set(users.filter(u => typeof u === 'string').map(u => u.toLowerCase().trim()).filter(Boolean))] : (all[i]?.users || []);
+      if (i >= 0) all[i] = { path: dir, users: list }; else all.push({ path: dir, users: list });
+    }
+    this.rulesVer++;
+    this.rules.save();
+    this.emit('rules', null);
+  }
+
+  /** Las carpetas de la biblioteca (uno o dos niveles por debajo de cada raíz) que tienen títulos, para elegir cuál hacer privada */
+  folderChoices() {
+    const out = new Set();
+    for (const it of this.library.data.items) {
+      const r = this.roots().find(x => isInside(x, it.path));
+      if (!r) continue;
+      const parts = path.relative(r, it.path).split(/[\\/]/).slice(0, -1).slice(0, 2);
+      for (let n = 1; n <= parts.length; n++) out.add(path.join(r, ...parts.slice(0, n)).replace(/\\/g, '/'));
+    }
+    return [...out].sort((a, b) => a.localeCompare(b, 'es'));
+  }
+
+  /** «danthalion-nas › Peticiones»: el nombre del NAS y la carpeta dentro de él */
+  folderLabel(dir) {
+    const s = this.sources().find(x => x.roots.some(r => r === dir || isInside(r, dir)));
+    const r = s?.roots.find(x => x === dir || isInside(x, dir));
+    const rel = r ? path.relative(s.key, dir).replace(/\\/g, '/') : dir;
+    return s ? `${s.label} › ${rel || '/'}` : dir;
+  }
+
+  /** Un administrador le ha quitado el acceso (a los administradores no se les puede quitar: lo comprueba auth.role()) */
+  isBlocked(userName) {
+    return !!userName && !!this.rules.data.users[String(userName).toLowerCase()]?.blocked;
+  }
+
+  /**
+   * Cambia lo que puede ver: mode 'all' (todo), 'except' (todo menos items) u 'only' (sólo items), y si puede entrar.
+   * Lo que no se envía se queda como estaba.
+   */
+  setRule(userName, { mode, items, blocked, mod, folders } = {}) {
+    const key = String(userName || '').toLowerCase().trim();
+    if (!key) throw new Error('Falta el usuario');
+    const r = { ...(this.rules.data.users[key] || {}) };
+    if (mode !== undefined) {
+      if (!['all', 'except', 'only'].includes(mode)) throw new Error('Modo no válido');
+      if (mode === 'all') delete r.mode; else r.mode = mode;
+    }
+    if (items !== undefined) {
+      if (!Array.isArray(items)) throw new Error('Lista de títulos no válida');
+      const known = new Set(this.library.data.items.map(i => i.id));
+      r.items = [...new Set(items.filter(id => typeof id === 'string' && known.has(id)))].slice(0, 20000);
+    }
+    if (blocked !== undefined) { if (blocked) r.blocked = true; else delete r.blocked; }
+    if (mod !== undefined) {
+      if (!Array.isArray(mod)) throw new Error('Permisos no válidos');
+      const keys = new Set(this.sources().map(s => s.key));
+      r.mod = [...new Set(mod.filter(k => keys.has(k)))];
+      if (!r.mod.length) delete r.mod;
+    }
+    // las carpetas privadas que puede ver (las demás, no)
+    if (Array.isArray(folders)) {
+      for (const f of this.privateFolders()) {
+        const has = f.users.includes(key), want = folders.includes(f.path);
+        if (want && !has) f.users.push(key);
+        if (!want && has) f.users = f.users.filter(u => u !== key);
+      }
+    }
+    if (!r.mode) r.items = r.items || [];
+    if (!r.mode && !r.blocked && !r.items.length && !r.mod) delete this.rules.data.users[key];
+    else this.rules.data.users[key] = r;
+    this.rulesVer++;
+    this.rules.save();
+    this.emit('rules', key);
+    return this.ruleView(key);
+  }
+
+  /** Lo que ve un administrador de la regla de un usuario */
+  ruleView(userName) {
+    const key = String(userName).toLowerCase();
+    const r = this.rules.data.users[key] || {};
+    return {
+      name: key, mode: r.mode || 'all', items: r.items || [], blocked: !!r.blocked, mod: r.mod || [],
+      folders: this.privateFolders().filter(f => f.users.includes(key)).map(f => f.path), seenAt: this.rules.data.seen?.[key] || null
+    };
+  }
+
+  /** Apunta cuándo se le vio por última vez (como mucho una vez cada 10 minutos) */
+  seen(userName) {
+    const key = String(userName).toLowerCase();
+    const seen = this.rules.data.seen || (this.rules.data.seen = {});
+    if (Date.now() - (seen[key] || 0) < 10 * 60e3) return;
+    seen[key] = Date.now();
+    this.rules.save();
+  }
+
+  // ---------- permisos de moderador: corregir las coincidencias de los títulos de un NAS ----------
+  /** Los NAS de la biblioteca: sus carpetas agrupadas por la primera (/media, /nas2…), con el nombre que se les dé */
+  sources() {
+    const labels = this.settings.data.sourceLabels || {};
+    const groups = new Map();
+    for (const r of this.roots()) {
+      const key = '/' + (r.replace(/\\/g, '/').split('/').filter(Boolean)[0] || '');
+      if (!groups.has(key)) groups.set(key, { key, label: labels[key] || key.slice(1) || key, roots: [] });
+      groups.get(key).roots.push(r);
+    }
+    return [...groups.values()];
+  }
+
+  /** El NAS de un título (por la carpeta de la película o de su primer episodio) */
+  sourceOf(id) {
+    const it = this.library.data.items.find(i => i.id === id);
+    const p = it && (it.type === 'movie' ? it.path : it.episodes?.[0]?.path);
+    if (!p) return null;
+    const inside = r => { const rel = path.relative(r, p); return rel && !rel.startsWith('..') && !path.isAbsolute(rel); };
+    return this.sources().find(s => s.roots.some(inside))?.key || null;
+  }
+
+  /** ¿Puede corregir la coincidencia de este título? Los administradores, siempre; un moderador, en sus NAS */
+  canModerate(userName, id) {
+    if (this.isAdmin(userName)) return true;
+    const mod = this.rules.data.users[String(userName).toLowerCase()]?.mod || [];
+    return mod.length > 0 && mod.includes(this.sourceOf(id));
+  }
+
+  /** Las carpetas de los NAS que modera (la app enseña «Corregir coincidencia» en sus títulos) */
+  modRoots(userName) {
+    const mod = this.isAdmin(userName) ? [] : this.rules.data.users[String(userName).toLowerCase()]?.mod || [];
+    return this.sources().filter(s => mod.includes(s.key)).flatMap(s => s.roots);
+  }
+
+  /** Nombres de los usuarios con datos guardados (progreso, listas…) o con regla */
+  knownUsers() {
+    let files = [];
+    try { files = fs.readdirSync(path.join(this.dir, 'users')).filter(f => f.endsWith('.json')).map(f => f.slice(0, -5)); } catch {}
+    return [...new Set([...files, ...Object.keys(this.rules.data.users), ...Object.keys(this.rules.data.seen || {})])];
   }
 
   /** Entrada de lista de un título de la biblioteca (por su ficha de TMDB; sin ficha, por su id). Como entryOf() de app.js */
@@ -200,10 +403,11 @@ class Library extends EventEmitter {
    * requests: las suyas (server/requests.js list()), o [] sin servidor · watch: claves «movie:id» de su watchlist de
    * Letterboxd: lo nuevo que estaba en una de sus watchlists se avisa aparte («De tu watchlist»)
    */
-  notifications(userName, requests = [], watch = []) {
+  notifications(userName, requests = [], watch = [], { announcements = false } = {}) {
     const u = this.user(userName);
     const prefs = u.data.prefs || (u.data.prefs = {});
     if (!prefs.notifSeenAt) { prefs.notifSeenAt = Date.now(); u.save(); }
+    const cleared = new Set(prefs.notifCleared || []), clearedAt = prefs.notifClearedAt || 0;
     const since = Date.now() - 30 * 864e5;
     const lang = this.langOf(userName);
     const small = p => p ? p.replace(/\/w\d+\//, '/w185/') : null;
@@ -215,26 +419,116 @@ class Library extends EventEmitter {
     const wl = (u.data.lists || []).find(l => l.id === WATCHLIST);
     const wanted = new Set([...(wl?.items || []).map(e => e.key), ...watch]);
     for (const it of this.library.data.items) {
-      if (!(it.added > since)) continue;
+      if (!(it.added > since) || !this.canSee(userName, it.id)) continue;
       const m = this.metaOf(it.id, lang);
       const tmdb = this.metadata.data[it.id]?.tmdbId;
       out.push({ kind: tmdb && wanted.has(`${it.type}:${tmdb}`) ? 'watchlist' : 'new', id: it.id, at: Math.round(it.added), type: it.type, title: m?.title || it.title, year: m?.year || it.year || null, poster: small(this.custom.data[it.id]?.poster?.startsWith('https:') ? this.custom.data[it.id].poster : m?.poster) });
     }
-    for (const c of this.collectionsView()) {
+    for (const c of this.collectionsView(userName)) {
       if (!(c.createdAt > since) || c.createdBy?.toLowerCase() === String(userName).toLowerCase()) continue;
       const first = c.items.map(id => this.metaOf(id, lang)).find(m => m?.poster);
       out.push({ kind: 'collection', id: c.id, at: c.createdAt, title: c.name, year: null, poster: small(c.poster || first?.poster) });
     }
-    out.sort((a, b) => b.at - a.at);
-    return { items: out.slice(0, 40), seenAt: prefs.notifSeenAt };
+    // los avisos de los administradores, sólo a las apps que saben mostrarlos (las de antes los tomarían por títulos)
+    if (announcements) out.push(...this.announcementsFor(userName));
+    const kept = out.filter(n => n.at > clearedAt && !cleared.has(n.kind + ':' + n.id));
+    kept.sort((a, b) => b.at - a.at);
+    return { items: kept.slice(0, 40), seenAt: prefs.notifSeenAt };
+  }
+
+  /** Borra de la campana una notificación («kind:id») o todas las que hay hasta ahora */
+  notificationsDismiss(userName, { key, all } = {}) {
+    const u = this.user(userName);
+    const prefs = u.data.prefs || (u.data.prefs = {});
+    if (all) { prefs.notifClearedAt = Date.now(); prefs.notifCleared = []; }
+    else if (typeof key === 'string' && key.length < 200) prefs.notifCleared = [...(prefs.notifCleared || []), key].slice(-500);
+    u.save();
+    return { ok: true };
+  }
+
+  // ---------- avisos de los administradores ----------
+  /** Los avisos de los últimos 60 días que le tocan, con lo que puede ver (sin los de títulos que tiene ocultos) */
+  announcementsFor(userName) {
+    const me = String(userName).toLowerCase(), lang = this.langOf(userName);
+    const since = Date.now() - 60 * 864e5;
+    const small = p => p ? p.replace(/\/w\d+\//, '/w185/') : null;
+    const byId = new Map(this.library.data.items.map(i => [i.id, i]));
+    const vis = this.visibleIds(userName);
+    const out = [];
+    for (const a of this.announcements.data.items) {
+      if (!(a.createdAt > since) || (a.to?.length && !a.to.includes(me))) continue;
+      const base = { kind: 'admin', sub: a.kind, id: a.id, target: a.target || null, at: a.createdAt, text: a.text || '', popup: !!a.popup, by: a.createdBy || null };
+      if (a.kind === 'title') {
+        const it = byId.get(a.target);
+        if (!it || (vis && !vis.has(it.id))) continue;
+        const m = this.metaOf(it.id, lang);
+        const custom = this.custom.data[it.id]?.poster;
+        out.push({ ...base, type: it.type, title: m?.title || it.title, year: m?.year || it.year || null,
+          poster: small(custom?.startsWith('https:') ? custom : m?.poster), backdrop: m?.backdrop?.replace('/original/', '/w1280/') || null });
+      } else if (a.kind === 'collection') {
+        const items = (a.items || []).filter(id => byId.has(id) && (!vis || vis.has(id)));
+        if (!items.length) continue;
+        const c = this.collections.data.items.find(x => x.id === a.target);
+        const first = items.map(id => this.metaOf(id, lang)).find(m => m?.poster);
+        out.push({ ...base, title: c?.name || a.name, items, poster: small(c?.poster || first?.poster),
+          backdrop: c?.backdrop || items.map(id => this.metaOf(id, lang)?.backdrop).find(Boolean)?.replace('/original/', '/w1280/') || null });
+      } else out.push({ ...base, title: a.title || 'Aviso' });
+    }
+    return out;
+  }
+
+  /**
+   * create: { kind: 'title' (target: id de un título) | 'collection' (target, name, items) | 'message' (title), text, popup,
+   * to: [nombres] (vacío: todos) } · delete: { id } · clear: todos. Sólo administradores (lo comprueba la ruta)
+   */
+  announcementOp(userName, q = {}) {
+    const all = this.announcements.data.items;
+    const str = (v, n) => typeof v === 'string' ? v.trim().slice(0, n) : '';
+    if (q.op === 'delete') {
+      const i = all.findIndex(a => a.id === q.id);
+      if (i < 0) throw new Error('Aviso no encontrado');
+      all.splice(i, 1);
+    } else if (q.op === 'clear') all.length = 0;
+    else if (q.op === 'create') {
+      const a = { id: 'a' + crypto.randomBytes(6).toString('hex'), kind: q.kind, text: str(q.text, 600), popup: !!q.popup,
+        to: Array.isArray(q.to) ? [...new Set(q.to.filter(n => typeof n === 'string').map(n => n.toLowerCase().trim()).filter(Boolean))].slice(0, 200) : [],
+        createdAt: Date.now(), createdBy: userName };
+      const known = new Set(this.library.data.items.map(i => i.id));
+      if (q.kind === 'title') {
+        if (!known.has(q.target)) throw new Error('Ese título no está en la biblioteca');
+        a.target = q.target;
+      } else if (q.kind === 'collection') {
+        a.target = str(q.target, 80);
+        a.name = str(q.name, 120);
+        a.items = Array.isArray(q.items) ? [...new Set(q.items.filter(id => known.has(id)))] : [];
+        if (!a.name || !a.items.length) throw new Error('Elige una colección con títulos');
+      } else if (q.kind === 'message') {
+        a.title = str(q.title, 100);
+        if (!a.title) throw new Error('Escribe el título del aviso');
+      } else throw new Error('Tipo de aviso no válido');
+      all.unshift(a);
+      all.splice(300);
+      this.announcements.save();
+      this.annVer++;
+      this.emit('announce', a);
+      return a;
+    } else throw new Error('Operación no válida');
+    this.announcements.save();
+    this.annVer++;
+    this.emit('announce', null);
+    return null;
   }
 
   // ---------- colecciones de los administradores ----------
-  /** Las colecciones con los títulos que siguen en la biblioteca, las más nuevas primero */
-  collectionsView() {
-    const ids = new Set(this.library.data.items.map(i => i.id));
+  /**
+   * Las colecciones con los títulos que siguen en la biblioteca, las más nuevas primero. Con userName, sólo con los
+   * títulos que puede ver (y sin las que se quedan vacías)
+   */
+  collectionsView(userName) {
+    const ids = (userName && this.visibleIds(userName)) || new Set(this.library.data.items.map(i => i.id));
     return this.collections.data.items
       .map(c => ({ ...c, items: c.items.filter(id => ids.has(id)) }))
+      .filter(c => !userName || c.items.length)
       .sort((a, b) => b.createdAt - a.createdAt);
   }
 
@@ -242,7 +536,8 @@ class Library extends EventEmitter {
   collectionsSeenAt(userName) {
     const u = this.user(userName);
     const prefs = u.data.prefs || (u.data.prefs = {});
-    if (!prefs.collectionsSeenAt) { prefs.collectionsSeenAt = Date.now(); u.save(); }
+    // la primera vez, las de las dos últimas semanas: quien abre la app de tarde en tarde también se entera
+    if (!prefs.collectionsSeenAt) { prefs.collectionsSeenAt = Date.now() - 14 * 864e5; u.save(); }
     return prefs.collectionsSeenAt;
   }
 
@@ -397,7 +692,9 @@ class Library extends EventEmitter {
    */
   view(userName, { slim = false } = {}) {
     const u = this.user(userName).data;
-    const items = this.items(this.langOf(userName), slim);
+    const all = this.items(this.langOf(userName), slim);
+    const vis = this.visibleIds(userName);
+    const items = vis ? all.filter(i => vis.has(i.id)) : all;
     return {
       items,
       scannedAt: this.library.data.scannedAt,
@@ -406,9 +703,11 @@ class Library extends EventEmitter {
       progress: u.progress,
       favorites: this.favoritesOf(u),
       lists: u.lists || [],
-      collections: this.collectionsView(),
+      collections: this.collectionsView(userName),
       // colecciones nuevas desde la última vez (el aviso al estilo de las novedades de Steam)
       collectionsSeenAt: this.collectionsSeenAt(userName),
+      // avisos de los administradores que salen al abrir la app (con el mismo «visto» que las colecciones)
+      news: this.announcementsFor(userName).filter(a => a.popup),
       mpv: 'web',            // en la web no hace falta mpv: no mostrar el aviso
       hasKey: !!this.settings.data.tmdbKey,
       fetching: this.fetching
@@ -435,12 +734,14 @@ class Library extends EventEmitter {
     const lang = this.langOf(userName);
     this.items(lang, slim);
     const c = this.itemsCache.get(lang + '|' + slim);
+    const vis = this.visibleIds(userName);
+    if (vis) return JSON.stringify(c.list.filter(i => vis.has(i.id)));
     return c.json || (c.json = JSON.stringify(c.list));
   }
 
   /** Cambia si cambia algo de lo que lleva su /api/library: la biblioteca, su idioma o sus datos */
   cacheKey(userName) {
-    return `${this.gen}|${this.langOf(userName)}|${this.user(userName).ver}`;
+    return `${this.gen}|${this.langOf(userName)}|${this.user(userName).ver}|${this.rulesVer}|${this.annVer}`;
   }
 
   /** Títulos de la biblioteca con su ficha (para dar por conseguidas las peticiones) */
@@ -450,6 +751,7 @@ class Library extends EventEmitter {
 
   /** Un título con su ficha completa, en el idioma del usuario */
   item(id, userName) {
+    if (userName && !this.canSee(userName, id)) return null;
     const it = this.library.data.items.find(i => i.id === id);
     if (!it) return null;
     const m = this.metadata.data[it.id];
