@@ -2,6 +2,8 @@
 
 Cliente de escritorio para Windows con estilo de plataforma de streaming (HBO Max / Netflix / Filmin) para la biblioteca de películas y series de **CineLocal Server**, el servicio que corre en el NAS ([`server/`](server/README.md)). Se entra con el usuario de DSM; la biblioteca, los metadatos, el progreso, las listas y las peticiones están en el servidor, y la app reproduce con mpv. También funciona **sin servidor**, leyendo directamente carpetas de este PC o del NAS por SMB (ver [Sin CineLocal Server](#sin-cinelocal-server)).
 
+> **Aviso legal.** CineLocal es únicamente un ejercicio de programación, hecho para aprender y experimentar. No apoya, fomenta ni facilita la descarga, la copia o la distribución de material protegido por derechos de autor. El proyecto no incluye ni enlaza ningún contenido: solo organiza y reproduce los archivos que cada persona ya tiene. Quien lo use es el único responsable de tener los derechos sobre lo que guarda, reproduce o comparte, y de cumplir la legislación de su país. Las funciones relacionadas con descargas, como la integración con eMule, se ofrecen solo como ejemplo técnico y deben usarse exclusivamente con contenido libre o propio. Los datos de películas y series proceden de [TMDB](https://www.themoviedb.org/); CineLocal no está respaldado ni certificado por TMDB.
+
 ## Cómo organiza la biblioteca
 
 La biblioteca la escanea CineLocal Server en la carpeta de vídeo del NAS, con estas reglas:
