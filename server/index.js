@@ -160,7 +160,13 @@ requests.on('resolved', r => {
 });
 library.on('meta:progress', p => broadcast('meta:progress', p));
 library.on('toast', t => broadcast('toast', t));
-library.on('new', l => broadcast('library:new', l));
+// títulos nuevos: a cada uno, sólo lo que puede ver (las carpetas privadas y los límites de cada usuario)
+library.on('new', l => {
+  for (const c of clients) {
+    const mine = l.filter(n => library.canSee(c.user, n.id));
+    if (mine.length) c.res.write(`event: library:new\ndata: ${JSON.stringify(mine)}\n\n`);
+  }
+});
 // aviso nuevo de un administrador: a quien le toca, la campana y (si es emergente) la biblioteca, que lo lleva
 library.on('announce', a => {
   for (const c of clients) {
