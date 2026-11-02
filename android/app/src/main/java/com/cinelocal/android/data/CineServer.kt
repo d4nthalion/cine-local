@@ -56,13 +56,23 @@ class CineServer(url: String, private val token: String = "", private val http: 
     @Serializable data class View(
         val items: List<Item> = emptyList(), val error: String? = null,
         val progress: Map<String, Progress> = emptyMap(), val favorites: List<String> = emptyList(),
-        val lists: List<UserList> = emptyList()
+        val lists: List<UserList> = emptyList(),
+        val collections: List<Coll> = emptyList(), val collectionsSeenAt: Long = 0
+    )
+
+    /** Colección hecha por un administrador: títulos de la biblioteca (ids) en el orden que eligió */
+    @Serializable data class Coll(
+        val id: String, val name: String, val description: String = "", val items: List<String> = emptyList(),
+        val createdAt: Long = 0, val createdBy: String? = null,
+        /** portada y fondo elegidos por el administrador (si no, los del primer título que los tenga) */
+        val poster: String? = null, val backdrop: String? = null
     )
 
     /** Biblioteca convertida al formato de la app, con los enlaces (ruta → dirección completa) */
     data class Library(
         val items: List<LibraryItem>, val meta: Map<String, Meta>, val links: Map<String, String>,
-        val progress: Map<String, Progress>, val favorites: List<String>, val lists: List<UserList>, val error: String?
+        val progress: Map<String, Progress>, val favorites: List<String>, val lists: List<UserList>, val error: String?,
+        val collections: List<Coll> = emptyList(), val collectionsSeenAt: Long = 0
     )
 
     // ---------------------------------------------------------------- peticiones
@@ -100,7 +110,9 @@ class CineServer(url: String, private val token: String = "", private val http: 
         }
         // cada ficha por separado: una que no encaje (un campo nulo raro) no deja sin biblioteca
         val meta = v.items.mapNotNull { i -> i.meta?.let { m -> runCatching { json.decodeFromJsonElement(Meta.serializer(), m) }.getOrNull()?.let { i.id to it } } }.toMap()
-        return Library(items, meta, links, v.progress, v.favorites, v.lists, v.error)
+        // las imágenes subidas a una colección vienen como /api/collection-image/…: con el dominio del servidor
+        val colls = v.collections.map { c -> c.copy(poster = c.poster?.let(::abs), backdrop = c.backdrop?.let(::abs)) }
+        return Library(items, meta, links, v.progress, v.favorites, v.lists, v.error, colls, v.collectionsSeenAt)
     }
 
     fun reportProgress(id: String, pos: Double, dur: Double) {
@@ -183,8 +195,10 @@ class CineServer(url: String, private val token: String = "", private val http: 
         val status: String? = null, val reply: String? = null, val poster: String? = null
     )
     @Serializable data class Notifs(val items: List<Notif> = emptyList(), val seenAt: Long = 0)
-    fun notifications(): Notifs = json.decodeFromString(get("/api/notifications"))
+    fun notifications(): Notifs = json.decodeFromString<Notifs>(get("/api/notifications")).let { n -> n.copy(items = n.items.map { it.copy(poster = it.poster?.let(::abs)) }) }
     fun notificationsSeen() { request(post("/api/notifications/seen", "{}")) }
+    /** El aviso de colecciones nuevas, cerrado: las de hasta ahora quedan vistas */
+    fun collectionsSeen() { request(post("/api/collections/seen", "{}")) }
 
     /** Registro de actividad (sólo administradores) */
     @Serializable data class Access(

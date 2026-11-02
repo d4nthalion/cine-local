@@ -321,6 +321,40 @@ route('POST', '/api/favorites/toggle', async (req, res, { user }) => {
   act(req, user, favs.includes(id) ? 'fav-add' : 'fav-remove', it ? titleOf({ item: it }) : id);
   json(res, 200, favs);
 });
+// colecciones hechas a mano: las crean y cambian los administradores; el aviso de las nuevas, cada usuario
+route('POST', '/api/collections', async (req, res, { user }) => {
+  const b = await readBody(req, 65536);
+  let c;
+  try { c = library.collectionOp(user, b); }
+  catch (e) { throw e.status ? e : httpError(400, e.message); }
+  act(req, user, 'collection-' + b.op, c?.name, b.op === 'delete' ? null : `${c.items.length} títulos`);
+  json(res, 200, c);
+}, { admin: true });
+route('POST', '/api/collections/seen', (req, res, { user }) => json(res, 200, { seenAt: library.collectionsSeen(user) }));
+// imagen subida para una colección: la app la manda ya encuadrada (portada 2:3 o fondo 16:9) como data: en base64
+const IMG_MAGIC = { jpg: [0xff, 0xd8, 0xff], png: [0x89, 0x50, 0x4e, 0x47], webp: [0x52, 0x49, 0x46, 0x46] };
+route('POST', '/api/collections/image', async (req, res, { user }) => {
+  const b = await readBody(req, 8 * 1024 * 1024);
+  const m = /^data:image\/(jpeg|png|webp);base64,([A-Za-z0-9+/=]+)$/.exec(b.data || '');
+  if (!m) throw httpError(400, 'La imagen tiene que ser JPG, PNG o WebP');
+  const ext = m[1] === 'jpeg' ? 'jpg' : m[1];
+  const buf = Buffer.from(m[2], 'base64');
+  if (buf.length > 5 * 1024 * 1024) throw httpError(413, 'La imagen es demasiado grande (máximo 5 MB)');
+  if (!IMG_MAGIC[ext].every((v, i) => buf[i] === v)) throw httpError(400, 'El archivo no es una imagen válida');
+  let c;
+  try { c = library.setCollectionImage(b.id, b.kind, buf, ext); }
+  catch (e) { throw httpError(400, e.message); }
+  act(req, user, 'collection-update', c.name, b.kind === 'poster' ? 'Portada subida' : 'Fondo subido');
+  json(res, 200, c);
+}, { admin: true });
+const IMG_TYPES = { jpg: 'image/jpeg', png: 'image/png', webp: 'image/webp' };
+route('GET', '/api/collection-image/:file', (req, res, { p }) => {
+  const f = library.collectionImagePath(p.file);
+  if (!f || !fs.existsSync(f)) throw httpError(404, 'Imagen no encontrada');
+  // el nombre cambia con cada imagen: se puede guardar para siempre
+  res.writeHead(200, { 'Content-Type': IMG_TYPES[path.extname(f).slice(1)], 'Cache-Control': 'public, max-age=31536000, immutable', 'X-Content-Type-Options': 'nosniff' });
+  fs.createReadStream(f).pipe(res);
+}, { public: true });
 route('POST', '/api/lists', async (req, res, { user }) => {
   const b = await readBody(req);
   const before = library.user(user).data.lists.find(l => l.id === b.id);

@@ -595,12 +595,17 @@ function viewHome() {
     rows += row('Tu watchlist de Letterboxd', sorted.map(watchlistCard).join(''), 'lbwl', 'watchlist');
   }
   for (const b of becauseYouWatched().slice(0, 2)) rows += row(`Porque viste «${T(b.from)}»`, b.items.map(card).join(''), 'because-' + b.from.id);
+  // sólo si encaja con lo que ves (si no, no sale)
+  const forYou = recommendedCollections();
+  if (forYou.length) rows += row('Colecciones para ti', forYou.map(r => sagaCard(r.c, r.note)).join(''), 'coll-for-you');
   const gems = shuffled(items.filter(i => (i.meta?.rating || 0) >= 7.5 && !isSeen(i)), today + 'gems').slice(0, 24);
   if (gems.length >= 4) rows += row('Joyas sin ver', gems.map(card).join(''), 'gems');
   rows += row('Series', series.slice(0, 30).map(card).join(''), 'series', 'series');
   rows += row('Películas', movies.slice(0, 30).map(card).join(''), 'movies', 'movies');
+  const custom = customCollections();
+  if (custom.length) rows += row('Colecciones', custom.slice(0, 24).map(c => sagaCard(c)).join(''), 'collections', 'collections');
   const sagas = allSagas();
-  if (sagas.length) rows += row('Sagas', sagas.slice(0, 24).map(sagaCard).join(''), 'sagas', sagas.length > 24 ? 'sagas' : null);
+  if (sagas.length) rows += row('Sagas', sagas.slice(0, 24).map(c => sagaCard(c)).join(''), 'sagas', 'sagas');
   const dirs = sortDirectors(allDirectors(), 'count');
   if (dirs.length >= 3) rows += row('Directores', dirs.slice(0, 24).map(directorChip).join(''), 'directors', 'directors');
   // tres categorías cada día, con títulos al azar (con miles de títulos, una fila por género sería interminable)
@@ -642,7 +647,11 @@ function becauseYouWatched() {
   return out;
 }
 
-/** Sagas (colecciones de TMDB) con al menos dos películas en la biblioteca, las más completas primero */
+// ---------------------------------------------------------------- colecciones
+// Dos clases: las que hacen los administradores (en el servidor, con películas y series en el orden que eligen)
+// y las sagas de TMDB (salen solas de las fichas, con al menos dos películas en la biblioteca)
+
+/** Sagas de TMDB, las más completas primero */
 function allSagas() {
   const map = new Map();
   for (const it of S.lib.items) {
@@ -652,36 +661,314 @@ function allSagas() {
     map.get(c.id).films.push(it);
   }
   return [...map.values()].filter(s => s.films.length >= 2)
-    .map(s => ({ ...s, films: s.films.sort((a, b) => (Y(a) || 0) - (Y(b) || 0)) }))
+    .map(s => ({ ...s, kind: 'saga', films: s.films.sort((a, b) => (Y(a) || 0) - (Y(b) || 0)) }))
     .sort((a, b) => b.films.length - a.films.length || a.name.localeCompare(b.name, 'es'));
 }
-const sagaName = s => s.name.replace(/\s*[-–:]?\s*(Colecci[oó]n|Collection|Saga)$/i, '').replace(/^(Colecci[oó]n|Saga)\s*:?\s*/i, '') || s.name;
-function sagaCard(s) {
+/** Colecciones de los administradores, las más nuevas primero */
+function customCollections() {
+  return (S.lib.collections || []).map(c => ({ ...c, kind: 'custom', films: c.items.map(byId).filter(Boolean) })).filter(c => c.films.length);
+}
+const allCollections = () => [...customCollections(), ...allSagas()];
+const collById = id => allCollections().find(c => String(c.id) === String(id));
+const sagaName = s => s.kind === 'custom' ? s.name : s.name.replace(/\s*[-–:]?\s*(Colecci[oó]n|Collection|Saga)$/i, '').replace(/^(Colecci[oó]n|Saga)\s*:?\s*/i, '') || s.name;
+const collBackdrop = s => imgSrc(s.backdrop) || s.films.find(f => f.meta?.backdrop)?.meta.backdrop?.replace('/original/', '/w1280/') || null;
+const filmsLabel2 = (s) => {
+  const movies = s.films.filter(f => f.type === 'movie').length, series = s.films.length - movies;
+  return [movies && (movies === 1 ? '1 película' : `${movies} películas`), series && (series === 1 ? '1 serie' : `${series} series`)].filter(Boolean).join(' · ');
+};
+function sagaCard(s, note) {
   const poster = s.poster || posterOf(s.films.find(posterOf) || {});
   const seen = s.films.filter(isSeen).length;
-  return `<div class="card" tabindex="0" data-saga="${s.id}">
-    <div class="art">${poster ? `<img loading="lazy" src="${esc(poster)}" alt="">` : placeholder({ title: sagaName(s), type: 'movie' })}
-      ${seen === s.films.length ? `<span class="watched-mark" title="Todas vistas">${I.check}</span>` : ''}</div>
-    <div class="cap"><div class="t">${esc(sagaName(s))}</div><div class="s">${s.films.length} películas${seen && seen < s.films.length ? ` · ${seen} vistas` : ''}</div></div>
+  return `<div class="card coll-card ${s.kind === 'custom' ? 'custom' : ''}" tabindex="0" data-coll="${esc(String(s.id))}">
+    <div class="art">${poster ? `<img loading="lazy" src="${esc(imgSrc(poster))}" alt="">` : placeholder({ title: sagaName(s), type: 'movie' }, true)}
+      ${s.kind === 'custom' ? '<span class="coll-tag">Colección</span>' : ''}
+      ${seen === s.films.length ? `<span class="watched-mark" title="Todo visto">${I.check}</span>` : ''}</div>
+    <div class="cap"><div class="t">${esc(sagaName(s))}</div><div class="s">${esc(note || filmsLabel2(s) + (seen && seen < s.films.length ? ` · ${seen} ${seen === 1 ? 'vista' : 'vistas'}` : ''))}</div></div>
   </div>`;
+}
+/** Colecciones y Sagas, como pestañas de la sección Colecciones (igual que Películas y Directores) */
+const collTabs = on => `<div class="list-tabs page-tabs">${[['collections', 'Colecciones'], ['sagas', 'Sagas']]
+  .map(([k, l]) => `<button class="gchip ${on === k ? 'on' : ''}" data-nav="${k}">${l}</button>`).join('')}</div>`;
+function viewCollections() {
+  const custom = customCollections();
+  const add = isAdmin() || LOCAL() ? `<button class="btn btn-accent btn-sm" data-action="coll-new">${I.plus}Nueva colección</button>` : '';
+  return `<div class="page"><div class="coll-head"><h1 class="page-title">Colecciones${custom.length ? `<span class="count">${custom.length}</span>` : ''}</h1>${add}</div>
+    ${collTabs('collections')}
+    ${custom.length ? `<div class="grid">${custom.map(c => sagaCard(c)).join('')}</div>`
+      : `<div class="empty"><p>Todavía no hay colecciones. ${add ? 'Crea la primera con las películas y series que quieras: la verán todos.' : 'Las preparan los administradores; mientras tanto, mira las Sagas.'}</p></div>`}</div>`;
 }
 function viewSagas() {
   const sagas = allSagas();
-  return `<div class="page"><h1 class="page-title">Sagas<span class="count">${sagas.length}</span></h1>
-    ${sagas.length ? `<div class="grid">${sagas.map(sagaCard).join('')}</div>` : '<div class="empty"><p>No hay ninguna saga con dos o más películas en la biblioteca.</p></div>'}</div>`;
+  return `<div class="page"><h1 class="page-title">Colecciones</h1>
+    ${collTabs('sagas')}
+    ${sagas.length ? `<div class="grid">${sagas.map(c => sagaCard(c)).join('')}</div>` : '<div class="empty"><p>No hay ninguna saga con dos o más películas en la biblioteca.</p></div>'}</div>`;
 }
-function viewSaga(id) {
-  const s = allSagas().find(x => String(x.id) === String(id));
+function viewCollection(id) {
+  const s = collById(id);
   if (!s) return `<div class="page"><div class="empty"><h2>No encontrada</h2><button class="btn btn-ghost" data-action="back">Volver</button></div></div>`;
-  const bg = s.backdrop || s.films.find(f => f.meta?.backdrop)?.meta.backdrop?.replace('/original/', '/w1280/');
-  const years = [Y(s.films[0]), Y(s.films[s.films.length - 1])].filter(Boolean);
+  const bg = collBackdrop(s);
+  const seen = s.films.filter(isSeen).length;
+  let info;
+  if (s.kind === 'custom') {
+    info = [filmsLabel2(s), `${seen} de ${s.films.length} vistos`, s.createdBy ? `por ${s.createdBy}` : ''].filter(Boolean).join(' · ');
+  } else {
+    const years = [Y(s.films[0]), Y(s.films[s.films.length - 1])].filter(Boolean);
+    info = `${years.length ? (years[0] === years[1] ? years[0] : `${years[0]} – ${years[1]}`) + ' · ' : ''}${seen} de ${s.films.length} vistas · en orden de estreno`;
+  }
+  const admin = s.kind === 'custom' && (isAdmin() || LOCAL()) ? `<div class="coll-admin">
+      <button class="btn btn-ghost btn-sm" data-action="coll-edit" data-id="${esc(s.id)}">Editar</button>
+      <button class="btn btn-ghost btn-sm danger" data-action="coll-delete" data-id="${esc(s.id)}">Borrar</button></div>` : '';
   return `<div class="page saga-page">
     ${bg ? `<div class="saga-bg" style="background-image:url('${esc(bg)}')"></div>` : ''}
     <button class="btn btn-ghost btn-sm saga-back" data-action="back">${I.left}Volver</button>
-    <h1 class="page-title">${esc(sagaName(s))}<span class="count">${s.films.length}</span></h1>
-    <p class="req-intro">${years.length ? (years[0] === years[1] ? years[0] : `${years[0]} – ${years[1]}`) + ' · ' : ''}${s.films.filter(isSeen).length} de ${s.films.length} vistas · en orden de estreno</p>
+    <div class="coll-head"><h1 class="page-title">${esc(sagaName(s))}<span class="count">${s.films.length}</span></h1>${admin}</div>
+    ${s.kind === 'custom' && s.description ? `<p class="coll-desc">${esc(s.description)}</p>` : ''}
+    <p class="req-intro">${esc(info)}</p>
     <div class="grid">${s.films.map(card).join('')}</div>
   </div>`;
+}
+
+/**
+ * «Colecciones para ti» en Inicio: primero las que has empezado y no has terminado; luego, de las que no has
+ * empezado, las que más se parecen (por géneros) a lo último que has visto. Sin nada que encaje, no sale la fila.
+ */
+function recommendedCollections() {
+  const recent = [];
+  const byPath = new Map();
+  for (const it of S.lib.items) { if (it.type === 'movie') byPath.set(it.path, it); else for (const e of it.episodes) byPath.set(e.path, it); }
+  const seenIds = new Set();
+  for (const [p, pr] of Object.entries(S.lib.progress || {}).sort((a, b) => (b[1].at || 0) - (a[1].at || 0))) {
+    const it = byPath.get(p);
+    if (!it || seenIds.has(it.id) || !(pr.watched || pr.pos > 600)) continue;
+    seenIds.add(it.id); recent.push(it);
+    if (recent.length >= 20) break;
+  }
+  if (!recent.length) return [];
+  const taste = new Map();
+  for (const it of recent) for (const g of it.meta?.genres || []) taste.set(g, (taste.get(g) || 0) + 1);
+  const top = Math.max(1, ...taste.values());
+  const out = [];
+  for (const c of allCollections()) {
+    const seen = c.films.filter(isSeen).length;
+    if (seen === c.films.length) continue;
+    if (seen || c.films.some(f => seenIds.has(f.id))) { out.push({ c, score: 2 + seen / c.films.length, note: `Te ${c.films.length - seen === 1 ? 'falta 1' : `faltan ${c.films.length - seen}`}` }); continue; }
+    const genres = c.films.flatMap(f => f.meta?.genres || []);
+    if (!genres.length) continue;
+    const fit = genres.reduce((n, g) => n + (taste.get(g) || 0), 0) / genres.length / top;
+    // las de los administradores, un poco por delante: son las que alguien ha preparado
+    const score = fit + (c.kind === 'custom' ? 0.15 : 0);
+    if (score >= 0.45) out.push({ c, score, note: c.kind === 'custom' ? filmsLabel2(c) : null });
+  }
+  return out.sort((a, b) => b.score - a.score).slice(0, 10);
+}
+
+// ---------- crear y editar (administradores)
+function viewCollectionEdit() {
+  const e = S.collEdit;
+  if (!e) return '';
+  const q = normName(e.q || '');
+  const chosen = new Set(e.items);
+  const found = q.length >= 2
+    ? S.lib.items.filter(i => !chosen.has(i.id) && (normName(T(i)).includes(q) || normName(i.title).includes(q))).slice(0, 40)
+    : [];
+  const mini = (it, i) => `<div class="coll-pick">
+      <div class="art">${posterOf(it) ? `<img loading="lazy" src="${esc(posterOf(it))}" alt="">` : placeholder(it)}</div>
+      <div class="t">${esc(T(it))}${Y(it) ? ` <span>${Y(it)}</span>` : ''}</div>
+      ${i === undefined ? `<button class="btn btn-ghost btn-sm" data-coll-add="${esc(it.id)}">${I.plus}Añadir</button>`
+        : `<div class="coll-pick-btns"><button class="icon-btn sm" title="Antes" data-coll-move="${i}:-1" ${i === 0 ? 'disabled' : ''}>${I.left}</button>
+          <button class="icon-btn sm" title="Después" data-coll-move="${i}:1" ${i === e.items.length - 1 ? 'disabled' : ''}>${I.right}</button>
+          <button class="icon-btn sm" title="Quitar" data-coll-remove="${esc(it.id)}">${I.close}</button></div>`}
+    </div>`;
+  return `<div class="page coll-edit">
+    <button class="btn btn-ghost btn-sm saga-back" data-action="back">${I.left}Volver</button>
+    <h1 class="page-title">${e.id ? 'Editar colección' : 'Nueva colección'}</h1>
+    <div class="coll-form">
+      <label>Nombre<input class="input" id="collName" maxlength="80" value="${esc(e.name)}" placeholder="Por ejemplo: Terror de los 80"></label>
+      <label><div>Descripción <span>(opcional)</span></div><textarea class="input" id="collDesc" maxlength="600" rows="3" placeholder="De qué va, por qué verlas…">${esc(e.description)}</textarea></label>
+    </div>
+    ${collImagePicker(e)}
+    <h2 class="coll-sec">En la colección <span class="count">${e.items.length}</span></h2>
+    ${e.items.length ? `<div class="coll-picks">${e.items.map(byId).filter(Boolean).map((it, i) => mini(it, i)).join('')}</div>` : '<p class="req-intro">Busca abajo y añade al menos dos títulos. Saldrán en este orden.</p>'}
+    <h2 class="coll-sec">Añadir títulos</h2>
+    <input class="input coll-search" id="collSearch" placeholder="Busca películas o series de la biblioteca" value="${esc(e.q || '')}">
+    ${found.length ? `<div class="coll-picks">${found.map(it => mini(it)).join('')}</div>` : q.length >= 2 ? '<p class="req-intro">Nada en la biblioteca con ese nombre.</p>' : ''}
+    <div class="coll-save"><button class="btn btn-ghost" data-action="back">Cancelar</button>
+      <button class="btn btn-accent" data-action="coll-save" ${e.items.length < 2 || !e.name.trim() ? 'disabled' : ''}>${e.id ? 'Guardar cambios' : 'Crear colección'}</button></div>
+  </div>`;
+}
+/** Imagen subida al servidor (/api/collection-image/…): en el escritorio hace falta la dirección del servidor */
+const imgSrc = u => u && u.startsWith('/api/') && !WEB ? (S.settings.remoteUrl || '').replace(/\/+$/, '') + u : u;
+
+/**
+ * Imagen de la colección: la portada (vertical, en la tarjeta) y el fondo (horizontal, en su página y en el aviso),
+ * de entre las carátulas e imágenes de sus títulos, una subida (que se encuadra antes) o «Automática»
+ */
+function collImagePicker(e) {
+  const films = e.items.map(byId).filter(Boolean);
+  const posters = [...new Set(films.map(posterOf).filter(Boolean))];
+  const backs = [...new Set(films.map(f => f.meta?.backdrop?.replace('/original/', '/w1280/')).filter(Boolean))];
+  const opt = (kind, url, wide) => `<button class="coll-img ${wide ? 'wide' : ''} ${(e[kind] || '') === url ? 'on' : ''}" data-coll-img="${kind}" data-img="${esc(url)}" title="${url ? '' : 'La del primer título que la tenga'}">
+      ${url ? `<img loading="lazy" src="${esc(url === 'upload' ? e[kind + 'Data'] : imgSrc(wide ? url.replace('/w1280/', '/w300/') : url))}" alt="">` : '<span>Automática</span>'}</button>`;
+  // la subida (pendiente de guardar, o la que ya tiene la colección) va la primera tras «Automática»
+  const own = kind => [e[kind + 'Data'] ? 'upload' : null, /^\/api\/collection-image\//.test(e[kind + 'Saved'] || '') ? e[kind + 'Saved'] : null].filter(Boolean);
+  const upload = (kind, wide) => `<button class="coll-img coll-upload ${wide ? 'wide' : ''}" data-coll-upload="${kind}">${I.plus}<span>Subir imagen</span></button>`;
+  return `<h2 class="coll-sec">Imagen</h2>
+    <div class="coll-imgs-h">Portada <span>· en la tarjeta</span></div>
+    <div class="coll-imgs">${upload('poster')}${opt('poster', '')}${own('poster').map(u => opt('poster', u)).join('')}${posters.map(u => opt('poster', u)).join('')}</div>
+    <div class="coll-imgs-h">Fondo <span>· en su página y en el aviso de colección nueva</span></div>
+    <div class="coll-imgs">${upload('backdrop', true)}${opt('backdrop', '', true)}${own('backdrop').map(u => opt('backdrop', u, true)).join('')}${backs.map(u => opt('backdrop', u, true)).join('')}</div>`;
+}
+
+/** Elegir una imagen del equipo y encuadrarla; queda pendiente hasta guardar la colección */
+function pickCollectionImage(kind) {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = 'image/jpeg,image/png,image/webp';
+  input.onchange = async () => {
+    const file = input.files[0];
+    if (!file) return;
+    const data = await cropImage(file, kind);
+    if (!data || !S.collEdit) return;
+    S.collEdit[kind + 'Data'] = data;
+    S.collEdit[kind] = 'upload';
+    paintCollectionEdit();
+  };
+  input.click();
+}
+
+/**
+ * Cuadro para encuadrar una imagen en la proporción de portada (2:3) o de fondo (16:9): se arrastra para moverla y se
+ * acerca con la rueda o la barra. Devuelve el recorte en JPEG (data:) o null si se cancela.
+ */
+function cropImage(file, kind) {
+  const wide = kind === 'backdrop';
+  const OUT = wide ? [1600, 900] : [600, 900];
+  return new Promise(resolve => {
+    const reader = new FileReader();
+    reader.onerror = () => { toast('No se ha podido leer la imagen', 'error'); resolve(null); };
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => { toast('Ese archivo no es una imagen que se pueda abrir', 'error'); resolve(null); };
+      img.onload = () => {
+        const m = modal(`<div class="modal-head"><h2>Encuadra ${wide ? 'el fondo' : 'la portada'}</h2>
+            <p>Arrastra la imagen para moverla y usa la rueda o la barra para acercarla. Se verá lo que queda dentro del marco.</p></div>
+          <div class="crop-wrap"><div class="crop-stage ${wide ? 'wide' : ''}"><img class="crop-img" src="${reader.result}" alt="" draggable="false"></div></div>
+          <div class="crop-zoom"><span>−</span><input type="range" class="crop-range" min="1" max="4" step="0.01" value="1"><span>+</span></div>
+          <div class="modal-foot" style="gap:10px"><button class="btn btn-ghost btn-sm" data-crop="0">Cancelar</button><button class="btn btn-accent btn-sm" data-crop="1">Usar esta imagen</button></div>`);
+        m.classList.add('crop-modal');
+        const stage = $('.crop-stage', m), el = $('.crop-img', m), range = $('.crop-range', m);
+        const W = stage.clientWidth, H = stage.clientHeight;
+        const base = Math.max(W / img.naturalWidth, H / img.naturalHeight);   // cubre el marco entero
+        let zoom = 1, x = 0, y = 0;
+        const clamp = () => {
+          const w = img.naturalWidth * base * zoom, h = img.naturalHeight * base * zoom;
+          x = Math.min(0, Math.max(W - w, x)); y = Math.min(0, Math.max(H - h, y));
+        };
+        const paint = () => { clamp(); el.style.width = img.naturalWidth * base * zoom + 'px'; el.style.transform = `translate(${x}px, ${y}px)`; };
+        // centrada al empezar
+        x = (W - img.naturalWidth * base) / 2; y = (H - img.naturalHeight * base) / 2; paint();
+        const setZoom = (z, cx = W / 2, cy = H / 2) => {
+          z = Math.min(4, Math.max(1, z));
+          // acercar hacia el punto indicado (el centro, o el ratón con la rueda)
+          x = cx - (cx - x) * z / zoom; y = cy - (cy - y) * z / zoom; zoom = z; range.value = z; paint();
+        };
+        range.addEventListener('input', () => setZoom(+range.value));
+        stage.addEventListener('wheel', ev => { ev.preventDefault(); const r = stage.getBoundingClientRect(); setZoom(zoom * (ev.deltaY < 0 ? 1.1 : 1 / 1.1), ev.clientX - r.left, ev.clientY - r.top); }, { passive: false });
+        let drag = null;
+        stage.addEventListener('pointerdown', ev => { drag = { px: ev.clientX, py: ev.clientY, x, y }; stage.setPointerCapture(ev.pointerId); stage.classList.add('dragging'); });
+        stage.addEventListener('pointermove', ev => { if (!drag) return; x = drag.x + ev.clientX - drag.px; y = drag.y + ev.clientY - drag.py; paint(); });
+        const end = () => { drag = null; stage.classList.remove('dragging'); };
+        stage.addEventListener('pointerup', end); stage.addEventListener('pointercancel', end);
+        m.addEventListener('click', ev => {
+          const b = ev.target.closest('[data-crop]');
+          if (!b) return;
+          if (b.dataset.crop === '0') { closeModal(); resolve(null); return; }
+          // lo que se ve en el marco, al tamaño final
+          const s = base * zoom, c = document.createElement('canvas');
+          c.width = OUT[0]; c.height = OUT[1];
+          const sw = W / s, sh = H / s;
+          const sw2 = Math.min(sw, img.naturalWidth), sh2 = Math.min(sh, img.naturalHeight);
+          c.getContext('2d').drawImage(img, -x / s, -y / s, sw2, sh2, 0, 0, OUT[0] * sw2 / sw, OUT[1] * sh2 / sh);
+          closeModal();
+          resolve(c.toDataURL('image/jpeg', 0.88));
+        });
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+function openCollectionEditor(id) {
+  const c = id ? customCollections().find(x => x.id === id) : null;
+  S.collEdit = { id: c?.id || null, name: c?.name || '', description: c?.description || '', items: c ? c.films.map(f => f.id) : [], poster: c?.poster || '', backdrop: c?.backdrop || '', posterSaved: c?.poster || '', backdropSaved: c?.backdrop || '', q: '' };
+  go('collection-edit');
+}
+async function saveCollection() {
+  const e = S.collEdit;
+  try {
+    const c = await window.api.collections.op({ op: e.id ? 'update' : 'create', id: e.id, name: e.name, description: e.description, items: e.items,
+      // la subida pendiente va después, cuando ya hay colección (undefined: se queda la que tenga)
+      poster: e.poster === 'upload' ? undefined : e.poster || null, backdrop: e.backdrop === 'upload' ? undefined : e.backdrop || null });
+    for (const kind of ['poster', 'backdrop']) {
+      if (e[kind] === 'upload' && e[kind + 'Data']) await window.api.collections.image({ id: c.id, kind, data: e[kind + 'Data'] });
+    }
+    setLib(await window.api.getLibrary());
+    S.collEdit = null;
+    S.history.pop();   // no volver al editor con «Atrás»
+    S.route = { name: 'collection', id: c.id };
+    render();
+    toast(e.id ? 'Colección guardada' : 'Colección creada: la verán todos', 'ok');
+  } catch (err) { toast(String(err.message || err).replace(/^Error invoking remote method '[^']+': (Error: )?/, ''), 'error'); }
+}
+/** Repinta el editor conservando el foco y el cursor del campo en el que se escribe */
+function paintCollectionEdit() {
+  const a = document.activeElement, id = a?.id, pos = a?.selectionStart;
+  render(true);
+  const el = id && document.getElementById(id);
+  if (el) { el.focus(); if (pos != null) el.setSelectionRange(pos, pos); }
+}
+
+// ---------- aviso de colecciones nuevas, al estilo de las novedades de Steam
+let collNewsShown = false;
+function maybeCollectionNews() {
+  if (collNewsShown || !S.lib.collectionsSeenAt || $('#modalRoot').innerHTML || S.route.name === 'collection-edit') return;
+  const me = (S.me?.user || '').toLowerCase();
+  const fresh = customCollections().filter(c => c.createdAt > S.lib.collectionsSeenAt && (c.createdBy || '').toLowerCase() !== me);
+  if (!fresh.length) return;
+  collNewsShown = true;
+  let i = 0;
+  const seen = () => window.api.collections?.seen().then(r => { if (r?.seenAt) S.lib.collectionsSeenAt = r.seenAt; }).catch(() => {});
+  const paint = () => {
+    const c = fresh[i];
+    const bg = collBackdrop(c);
+    const m = modal(`<div class="news">
+      <div class="news-art" ${bg ? `style="background-image:url('${esc(bg)}')"` : ''}><span class="news-tag">Nueva colección</span>
+        ${fresh.length > 1 ? `<span class="news-count">${i + 1} de ${fresh.length}</span>` : ''}</div>
+      <div class="news-body">
+        <h2>${esc(c.name)}</h2>
+        <p class="news-meta">${esc(filmsLabel2(c))}${c.createdBy ? ` · creada por ${esc(c.createdBy)}` : ''}</p>
+        ${c.description ? `<p class="news-desc">${esc(c.description)}</p>` : ''}
+        <div class="news-posters">${c.films.slice(0, 6).map(f => `<div class="art">${posterOf(f) ? `<img src="${esc(posterOf(f))}" alt="">` : placeholder(f)}</div>`).join('')}</div>
+      </div>
+      <div class="modal-foot news-foot">
+        ${fresh.length > 1 ? `<button class="btn btn-ghost btn-sm" data-news="prev" ${i === 0 ? 'disabled' : ''}>${I.left}</button><button class="btn btn-ghost btn-sm" data-news="next" ${i === fresh.length - 1 ? 'disabled' : ''}>${I.right}</button><span style="flex:1"></span>` : ''}
+        <button class="btn btn-ghost btn-sm" data-news="close">Ahora no</button>
+        <button class="btn btn-accent btn-sm" data-news="open">Ver colección</button>
+      </div></div>`);
+    m.classList.add('news-modal');
+    // también si se cierra pinchando fuera: ya está visto
+    $('#modalRoot .modal-back').addEventListener('mousedown', e => { if (e.target.classList.contains('modal-back')) seen(); });
+    m.addEventListener('click', e => {
+      const b = e.target.closest('[data-news]');
+      if (!b) return;
+      const a = b.dataset.news;
+      if (a === 'prev' || a === 'next') { i += a === 'next' ? 1 : -1; paint(); return; }
+      closeModal(); seen();
+      if (a === 'open') go('collection', { id: c.id });
+    });
+  };
+  paint();
 }
 
 function heroHTML() {
@@ -1123,6 +1410,7 @@ const ACCESS_KIND = {
   open: 'Abrir reproductor', watched: 'Marcado como visto', unwatched: 'Marcado como no visto',
   'fav-add': 'Añadido a la Watchlist', 'fav-remove': 'Quitado de la Watchlist',
   'list-create': 'Lista creada', 'list-rename': 'Lista renombrada', 'list-delete': 'Lista borrada', 'list-add': 'Añadido a una lista', 'list-remove': 'Quitado de una lista',
+  'collection-create': 'Colección creada', 'collection-update': 'Colección cambiada', 'collection-delete': 'Colección borrada',
   'request-create': 'Petición', 'request-cancel': 'Petición cancelada', 'request-resolve': 'Petición resuelta', 'request-remove': 'Petición borrada',
   settings: 'Ajustes', scan: 'Escaneo', 'meta-refresh': 'Buscar fichas', identify: 'Ficha corregida', poster: 'Carátula cambiada',
   error: 'Error', 'client-error': 'Error en la app'
@@ -2155,13 +2443,15 @@ function render(keepScroll = false) {
     case 'requests': html = viewRequests(); break;
     case 'access': html = viewAccess(); break;
     case 'title': html = viewTitle(r.type, r.id); break;
+    case 'collections': html = viewCollections(); break;
     case 'sagas': html = viewSagas(); break;
-    case 'saga': html = viewSaga(r.id); break;
+    case 'collection': html = viewCollection(r.id); break;
+    case 'collection-edit': html = S.collEdit ? viewCollectionEdit() : viewCollections(); break;
     default: html = viewHome();
   }
   view.innerHTML = html;
-  // Directores es una pestaña de Películas y cada saga, de Sagas
-  const section = { directors: 'movies', director: 'movies', saga: 'sagas' }[r.name] || r.name;
+  // Directores es una pestaña de Películas, y Sagas y cada colección, de Colecciones
+  const section = { directors: 'movies', director: 'movies', sagas: 'collections', collection: 'collections', 'collection-edit': 'collections' }[r.name] || r.name;
   $$('#nav a').forEach(a => a.classList.toggle('active', a.dataset.nav === section));
   if (r.name === 'director') loadPerson(r.id);
   if (r.name === 'detail') ensureFull(r.id);
@@ -2592,6 +2882,16 @@ document.addEventListener('click', async (e) => {
   if (action) {
     const a = action.dataset.action;
     if (a === 'back') back();
+    else if (a === 'coll-new') openCollectionEditor(null);
+    else if (a === 'coll-edit') openCollectionEditor(action.dataset.id);
+    else if (a === 'coll-save') saveCollection();
+    else if (a === 'coll-delete') {
+      const c = customCollections().find(x => x.id === action.dataset.id);
+      if (c && await confirmModal('Borrar colección', `Se borrará «${c.name}» para todos. Las películas y series siguen en la biblioteca.`, 'Borrar')) {
+        try { await window.api.collections.op({ op: 'delete', id: c.id }); setLib(await window.api.getLibrary()); back(); toast('Colección borrada', 'ok'); }
+        catch (err) { toast(String(err.message || err), 'error'); }
+      }
+    }
     else if (a === 'bio-more') {
       const d = allDirectors().find(x => x.key === S.route.id);
       const pp = d?.id ? S.people[d.id] : null;
@@ -2786,8 +3086,22 @@ document.addEventListener('click', async (e) => {
   const dot = t.closest('[data-hero-dot]');
   if (dot) { setHero(+dot.dataset.heroDot); startHeroTimer(); return; }
 
-  const sg = t.closest('[data-saga]');
-  if (sg) { go('saga', { id: sg.dataset.saga }); return; }
+  const sg = t.closest('[data-coll]');
+  if (sg) { go('collection', { id: sg.dataset.coll }); return; }
+  // editor de colecciones
+  const cu = t.closest('[data-coll-upload]');
+  if (cu && S.collEdit) { pickCollectionImage(cu.dataset.collUpload); return; }
+  const ci = t.closest('[data-coll-img]');
+  if (ci && S.collEdit) { S.collEdit[ci.dataset.collImg] = ci.dataset.img; paintCollectionEdit(); return; }
+  const ca = t.closest('[data-coll-add], [data-coll-remove], [data-coll-move]');
+  if (ca && S.collEdit) {
+    const e = S.collEdit;
+    if (ca.dataset.collAdd) e.items.push(ca.dataset.collAdd);
+    else if (ca.dataset.collRemove) e.items = e.items.filter(id => id !== ca.dataset.collRemove);
+    else { const [i, d] = ca.dataset.collMove.split(':').map(Number); const j = i + d; if (j >= 0 && j < e.items.length) [e.items[i], e.items[j]] = [e.items[j], e.items[i]]; }
+    paintCollectionEdit();
+    return;
+  }
   const cat = t.closest('[data-cat]');
   if (cat) { Object.assign(S.filters[S.route.name], { cat: cat.dataset.cat || null, shown: 0 }); render(true); return; }
 
@@ -2858,7 +3172,16 @@ document.addEventListener('change', (e) => {
   if (e.target.id === 'accessUser') { S.access.user = e.target.value; loadAccess(); }
   if (e.target.id === 'accessDays') { S.access.days = +e.target.value; loadAccess(); }
 });
+let collTimer = null;
 document.addEventListener('input', (e) => {
+  if (S.collEdit && ['collName', 'collDesc', 'collSearch'].includes(e.target.id)) {
+    const k = { collName: 'name', collDesc: 'description', collSearch: 'q' }[e.target.id];
+    S.collEdit[k] = e.target.value;
+    // el nombre y la descripción no cambian nada más que el botón; la búsqueda, los resultados
+    if (k === 'q') { clearTimeout(collTimer); collTimer = setTimeout(paintCollectionEdit, 150); }
+    else { const b = $('[data-action="coll-save"]'); if (b) b.disabled = S.collEdit.items.length < 2 || !S.collEdit.name.trim(); }
+    return;
+  }
   if (e.target.id === 'reqQuery') { searchRequests(e.target.value); return; }
   if (e.target.id === 'accessQuery') { S.access.q = e.target.value; clearTimeout(accessTimer); accessTimer = setTimeout(loadAccess, 350); return; }
   if (e.target.id !== 'dirFilter') return;
@@ -2925,6 +3248,7 @@ const ago = ts => {
 function notifText(n) {
   const name = `«${n.title}»${n.year ? ` (${n.year})` : ''}`;
   if (n.kind === 'request') return n.status === 'done' ? `Ya puedes ver ${name}, que pediste` : `Tu petición de ${name} se ha rechazado${n.reply ? ': ' + n.reply : ''}`;
+  if (n.kind === 'collection') return `Nueva colección: «${n.title}»`;
   if (n.kind === 'watchlist') return `De tu watchlist: ${name} ya está en la biblioteca`;
   return `${n.type === 'series' ? 'Novedades en la biblioteca' : 'Nueva en la biblioteca'}: ${name}`;
 }
@@ -2937,7 +3261,7 @@ function paintNotifs() {
   if (!NOTIF.open) return;
   p.innerHTML = '<div class="notif-h">Notificaciones</div>' + (NOTIF.items.length
     ? '<div class="notif-list">' + NOTIF.items.map((n, i) => `<button class="notif-it ${n.at > NOTIF.shownSeen ? 'new' : ''}" data-notif="${i}">
-        <span class="np">${n.poster ? `<img src="${esc(n.poster)}" alt="" loading="lazy">` : n.kind === 'request' ? I.check : I.film}</span>
+        <span class="np">${n.poster ? `<img src="${esc(imgSrc(n.poster))}" alt="" loading="lazy">` : n.kind === 'request' ? I.check : I.film}</span>
         <span class="nt"><span>${esc(notifText(n))}</span><small>${ago(n.at)}</small></span></button>`).join('') + '</div>'
     : '<div class="notif-empty">No hay novedades en los últimos 30 días.</div>');
 }
@@ -2958,6 +3282,7 @@ $('#notifPanel').addEventListener('click', e => {
   if (!n) return;
   toggleNotifs(false);
   if (n.kind === 'request') go('requests');
+  else if (n.kind === 'collection') go('collection', { id: n.id });
   else go('detail', { id: n.id });
 });
 document.addEventListener('click', () => { if (NOTIF.open) toggleNotifs(false); });
@@ -2970,6 +3295,7 @@ window.api.onLibrary((lib) => {
   // no re-renderizar ajustes ni descargas mientras el usuario escribe
   if (['settings', 'downloads'].includes(S.route.name) && /INPUT|SELECT/.test(document.activeElement?.tagName)) return;
   render(true);
+  setTimeout(maybeCollectionNews, 1200);
 });
 window.api.onProgress((p) => { S.lib.progress = p; });
 window.api.onPlayerClosed(({ error }) => {
@@ -3107,6 +3433,7 @@ async function boot() {
   paintUpdToast();
   paintEmule();
   if (emuleOn()) loadEmuleInfo();
+  setTimeout(maybeCollectionNews, 2000);   // colecciones nuevas desde la última vez
 }
 
 (async function init() {

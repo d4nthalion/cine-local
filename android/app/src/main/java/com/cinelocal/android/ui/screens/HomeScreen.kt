@@ -180,6 +180,10 @@ fun HomeScreen(nav: Nav) {
     val movies = remember(titles) { sortTitles(titles.filter { it.isMovie }, Sort.ADDED).take(30) }
     val topRated = remember(titles) { titles.filter { (it.meta?.rating ?: 0.0) >= 7.5 }.sortedByDescending { it.meta?.rating }.take(24) }
     val genres = remember(titles) { allGenres(titles).filter { it.second >= 4 }.take(8) }
+    // colecciones: las de los administradores y, aparte, las que encajan con lo que ves (si ninguna encaja, no sale)
+    val rawColls by repo.collections.collectAsStateWithLifecycle()
+    val customColls = remember(rawColls, titles) { customCollectionsOf(rawColls, titles) }
+    val forYou = remember(customColls, titles, progress) { recommendedCollections(customColls + sagasOf(titles).map { s -> Coll(s.id.toString(), s.name, "", s.poster, null, s.films, custom = false) }, titles, progress) }
 
     fun movieProgress(t: Title) = if (t.isMovie) fraction(progress[t.item.path]?.takeIf { !it.watched }) else 0f
 
@@ -247,8 +251,14 @@ fun HomeScreen(nav: Nav) {
                     if (t != null) poster(t) else MissingCard(e, CARD_W, e.key in user.requested) { sheet = e }
                 }
             }
+            if (forYou.isNotEmpty()) section("Colecciones para ti") {
+                items(forYou, key = { "cf-" + it.first.id }) { (c, note) -> CollCard(c, progress, CARD_W, note) { if (c.custom) nav.collection(c.id) else nav.saga(c.id.toInt()) } }
+            }
             if (series.isNotEmpty()) section("Series", { nav.tab("series") }) { items(series, key = { "s-" + it.id }) { poster(it) } }
             if (movies.isNotEmpty()) section("Películas", { nav.tab("movies") }) { items(movies, key = { "m-" + it.id }) { poster(it) } }
+            if (customColls.isNotEmpty()) section("Colecciones", { nav.tab("collections") }) {
+                items(customColls, key = { "c-" + it.id }) { c -> CollCard(c, progress, CARD_W) { nav.collection(c.id) } }
+            }
             if (topRated.size >= 4) section(if (topRated.size >= 10) "Las 10 mejor valoradas" else "Las mejor valoradas") {
                 itemsIndexed(topRated, key = { _, t -> "top-" + t.id }) { i, t ->
                     if (i < 10) RankedPosterCard(i + 1, t, isWatched(t, progress), movieProgress(t), lbOf(t, lbById)) { nav.detail(t.id) }

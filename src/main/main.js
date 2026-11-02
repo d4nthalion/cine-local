@@ -831,6 +831,9 @@ ipcMain.handle('requests:op', (_e, q) => api().post('/api/requests', q));
 ipcMain.handle('access:list', (_e, q) => api().get('/api/access?' + new URLSearchParams(q)));
 ipcMain.handle('log:error', (_e, e) => api().post('/api/log', e).catch(() => null));
 // Listas propias (además de Mi lista): crear, renombrar, borrar y añadir o quitar títulos
+ipcMain.handle('collections:image', (_e, q) => api().post('/api/collections/image', q));
+ipcMain.handle('collections:op', (_e, q) => api().post('/api/collections', q));
+ipcMain.handle('collections:seen', () => api().post('/api/collections/seen', {}));
 ipcMain.handle('lists:op', async (_e, q) => {
   const lists = await api().post('/api/lists', q);
   if (remoteView) remoteView.lists = lists;

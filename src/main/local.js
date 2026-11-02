@@ -134,6 +134,8 @@ class LocalServer extends EventEmitter {
     route('POST', '/api/progress/mark', ({ b }) => lib().markProgress(USER, b));
     route('POST', '/api/favorites/toggle', ({ b }) => lib().toggleFavorite(USER, b.id));
     route('POST', '/api/lists', ({ b }) => lib().listOp(USER, b));
+    route('POST', '/api/collections', ({ b }) => lib().collectionOp(USER, b));
+    route('POST', '/api/collections/seen', () => ({ seenAt: lib().collectionsSeen(USER) }));
     // peticiones y registro de actividad: sólo existen en CineLocal Server
     route('GET', '/api/requests', () => ({ items: [], pending: 0 }));
     route('GET', '/api/notifications', () => lib().notifications(USER));

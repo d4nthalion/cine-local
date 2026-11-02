@@ -264,6 +264,8 @@ class Repository(private val context: Context) {
     /** Biblioteca del servidor. El progreso se junta con el del móvil: lo más reciente de cada archivo gana */
     private fun scanServer() {
         val r = server().library()
+        collections.value = r.collections
+        collectionsSeenAt.value = r.collectionsSeenAt
         val now = System.currentTimeMillis()
         val lang = settings.value.metaLang
         library.set(LibraryData(r.items, now, r.error, r.links))
@@ -544,6 +546,14 @@ class Repository(private val context: Context) {
     val serverLang = MutableStateFlow<CineServer.UserSettings?>(null)
     /** Campana: lo que hay y hasta cuándo lo ha visto */
     val notifs = MutableStateFlow<CineServer.Notifs?>(null)
+    /** Colecciones de los administradores y hasta cuándo se ha visto el aviso de las nuevas */
+    val collections = MutableStateFlow<List<CineServer.Coll>>(emptyList())
+    val collectionsSeenAt = MutableStateFlow(0L)
+
+    suspend fun collectionsSeen() = withContext(Dispatchers.IO) {
+        runCatching { server().collectionsSeen() }
+        collectionsSeenAt.value = System.currentTimeMillis()
+    }
     /** Peticiones pendientes (para los administradores) */
     val pendingRequests = MutableStateFlow(0)
 

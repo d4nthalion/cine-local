@@ -3,6 +3,7 @@
 // el progreso, la lista y lo último visto guardados por usuario de DSM.
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const EventEmitter = require('events');
 const { scanLibraries } = require('../src/main/scanner');
 const { TMDB } = require('../src/main/metadata');
@@ -35,6 +36,8 @@ const EDITABLE = new Set(Object.keys(DEFAULT_SETTINGS));
 // (userMetaLang: el idioma de las fichas de cada uno; sin él, el principal del servidor)
 const PREF_KEYS = new Set(['audioLang', 'subLang', 'subMode', 'autoplayNext', 'myProviders', 'userMetaLang', 'lbMarkWatched']);
 const LANG_RE = /^[a-z]{2}-[A-Z]{2}$/;
+// imagen de una colección subida al servidor (setCollectionImage)
+const COLL_IMG = /^\/api\/collection-image\/([a-f0-9]{24}\.(?:jpg|png|webp))$/;
 
 // al cambiar cómo se elige la ficha de TMDB (findBest / rankResults en metadata.js) se sube y se empareja todo de nuevo
 const MATCHER_VERSION = 3;
@@ -91,6 +94,9 @@ class Library extends EventEmitter {
     this.people = store(dataDir, 'people.json', {});
     // carátulas elegidas a mano: { [id del título]: { poster } }; aparte de metadata.json para que no las borre recargar las fichas
     this.custom = store(dataDir, 'custom.json', {});
+    // colecciones hechas a mano por los administradores (las de TMDB salen solas de las fichas):
+    // { items: [{ id, name, description, items: [ids de títulos], createdAt, createdBy, updatedAt }] }
+    this.collections = store(dataDir, 'collections.json', { items: [] });
     this.users = new Map();
     this.fetching = false;
     this.fetchAgain = false;
@@ -214,8 +220,106 @@ class Library extends EventEmitter {
       const tmdb = this.metadata.data[it.id]?.tmdbId;
       out.push({ kind: tmdb && wanted.has(`${it.type}:${tmdb}`) ? 'watchlist' : 'new', id: it.id, at: Math.round(it.added), type: it.type, title: m?.title || it.title, year: m?.year || it.year || null, poster: small(this.custom.data[it.id]?.poster?.startsWith('https:') ? this.custom.data[it.id].poster : m?.poster) });
     }
+    for (const c of this.collectionsView()) {
+      if (!(c.createdAt > since) || c.createdBy?.toLowerCase() === String(userName).toLowerCase()) continue;
+      const first = c.items.map(id => this.metaOf(id, lang)).find(m => m?.poster);
+      out.push({ kind: 'collection', id: c.id, at: c.createdAt, title: c.name, year: null, poster: small(c.poster || first?.poster) });
+    }
     out.sort((a, b) => b.at - a.at);
     return { items: out.slice(0, 40), seenAt: prefs.notifSeenAt };
+  }
+
+  // ---------- colecciones de los administradores ----------
+  /** Las colecciones con los títulos que siguen en la biblioteca, las más nuevas primero */
+  collectionsView() {
+    const ids = new Set(this.library.data.items.map(i => i.id));
+    return this.collections.data.items
+      .map(c => ({ ...c, items: c.items.filter(id => ids.has(id)) }))
+      .sort((a, b) => b.createdAt - a.createdAt);
+  }
+
+  /** Hasta cuándo ha visto el aviso de colecciones nuevas (la primera vez, ahora: no se estrena con todas) */
+  collectionsSeenAt(userName) {
+    const u = this.user(userName);
+    const prefs = u.data.prefs || (u.data.prefs = {});
+    if (!prefs.collectionsSeenAt) { prefs.collectionsSeenAt = Date.now(); u.save(); }
+    return prefs.collectionsSeenAt;
+  }
+
+  collectionsSeen(userName) {
+    const u = this.user(userName);
+    u.data.prefs = { ...(u.data.prefs || {}), collectionsSeenAt: Date.now() };
+    u.save();
+    return u.data.prefs.collectionsSeenAt;
+  }
+
+  /** create (name, description, items, poster, backdrop) · update (id, …) · delete (id). Sólo administradores (lo comprueba la ruta) */
+  collectionOp(userName, q = {}) {
+    const all = this.collections.data.items;
+    const known = new Set(this.library.data.items.map(i => i.id));
+    const name = typeof q.name === 'string' ? q.name.trim().slice(0, 80) : null;
+    const description = typeof q.description === 'string' ? q.description.trim().slice(0, 600) : null;
+    const items = Array.isArray(q.items) ? [...new Set(q.items.filter(id => typeof id === 'string' && known.has(id)))].slice(0, 300) : null;
+    // portada (vertical) y fondo (horizontal) elegidos a mano: imágenes de TMDB, o null para la automática
+    const img = v => v === undefined ? undefined : typeof v === 'string' && (/^https:\/\/image\.tmdb\.org\/t\/p\/\w+\/[\w.-]+$/.test(v) || COLL_IMG.test(v)) ? v : null;
+    const poster = img(q.poster), backdrop = img(q.backdrop);
+    let c;
+    if (q.op === 'create') {
+      if (!name) throw new Error('Ponle un nombre a la colección');
+      if (!items || items.length < 2) throw new Error('Una colección necesita al menos dos títulos');
+      c = { id: 'c' + crypto.randomBytes(5).toString('hex'), name, description: description || '', items, poster: poster || null, backdrop: backdrop || null, createdAt: Date.now(), createdBy: userName, updatedAt: Date.now() };
+      all.push(c);
+    } else if (q.op === 'update') {
+      c = all.find(x => x.id === q.id);
+      if (!c) throw new Error('Colección no encontrada');
+      if (name !== null) { if (!name) throw new Error('Ponle un nombre a la colección'); c.name = name; }
+      if (description !== null) c.description = description;
+      if (items !== null) { if (items.length < 2) throw new Error('Una colección necesita al menos dos títulos'); c.items = items; }
+      // la imagen subida que se deja de usar, fuera
+      if (poster !== undefined) { if (poster !== c.poster) this.removeCollectionImage(c.poster); c.poster = poster; }
+      if (backdrop !== undefined) { if (backdrop !== c.backdrop) this.removeCollectionImage(c.backdrop); c.backdrop = backdrop; }
+      c.updatedAt = Date.now();
+    } else if (q.op === 'delete') {
+      c = all.find(x => x.id === q.id);
+      if (!c) throw new Error('Colección no encontrada');
+      this.collections.data.items = all.filter(x => x !== c);
+      this.removeCollectionImage(c.poster);
+      this.removeCollectionImage(c.backdrop);
+    } else throw new Error('Operación de colecciones no válida');
+    this.collections.save();
+    // cambia lo que lleva la biblioteca de todos: se rehace y las apps la vuelven a pedir
+    this.emit('library');
+    return c;
+  }
+
+  /**
+   * Imagen subida para una colección (ya encuadrada en la app): portada o fondo. Se guarda en collection-images/ con un
+   * nombre al azar (la sirve /api/collection-image/ sin sesión: el nombre no se puede adivinar)
+   */
+  setCollectionImage(id, kind, buf, ext) {
+    const c = this.collections.data.items.find(x => x.id === id);
+    if (!c) throw new Error('Colección no encontrada');
+    if (!['poster', 'backdrop'].includes(kind)) throw new Error('Imagen no válida');
+    const dir = path.join(this.dir, 'collection-images');
+    fs.mkdirSync(dir, { recursive: true });
+    const file = crypto.randomBytes(12).toString('hex') + '.' + ext;
+    fs.writeFileSync(path.join(dir, file), buf);
+    this.removeCollectionImage(c[kind]);
+    c[kind] = '/api/collection-image/' + file;
+    c.updatedAt = Date.now();
+    this.collections.save();
+    this.emit('library');
+    return c;
+  }
+
+  /** Archivo de una imagen subida (null si el nombre no es de una) */
+  collectionImagePath(file) {
+    return /^[a-f0-9]{24}\.(jpg|png|webp)$/.test(file) ? path.join(this.dir, 'collection-images', file) : null;
+  }
+
+  removeCollectionImage(url) {
+    const m = typeof url === 'string' && url.match(COLL_IMG);
+    if (m) fs.rm(this.collectionImagePath(m[1]), { force: true }, () => {});
   }
 
   /** La campana abierta: todo lo de hasta ahora queda visto */
@@ -302,6 +406,9 @@ class Library extends EventEmitter {
       progress: u.progress,
       favorites: this.favoritesOf(u),
       lists: u.lists || [],
+      collections: this.collectionsView(),
+      // colecciones nuevas desde la última vez (el aviso al estilo de las novedades de Steam)
+      collectionsSeenAt: this.collectionsSeenAt(userName),
       mpv: 'web',            // en la web no hace falta mpv: no mostrar el aviso
       hasKey: !!this.settings.data.tmdbKey,
       fetching: this.fetching

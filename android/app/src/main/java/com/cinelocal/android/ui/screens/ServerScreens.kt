@@ -70,7 +70,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-// Pantallas de lo que llegó al escritorio y a la web: Sagas, Directores (pestaña de Películas), la campana y, con
+// Pantallas de lo que llegó al escritorio y a la web (las Colecciones, en Collections.kt): Directores (pestaña de Películas), la campana y, con
 // CineLocal Server, Peticiones y el Registro de actividad (administradores)
 
 private val ES = Locale.forLanguageTag("es-ES")
@@ -83,82 +83,6 @@ fun ago(ts: Long): String {
     if (h < 24) return "hace $h h"
     val d = (h + 12) / 24
     return if (d == 1L) "ayer" else "hace $d días"
-}
-
-// ---------------------------------------------------------------- Sagas
-
-/** Saga de TMDB con las películas que tienes de ella (2 o más), por año */
-data class Saga(val id: Int, val name: String, val poster: String?, val films: List<Title>)
-
-fun sagasOf(titles: List<Title>): List<Saga> =
-    titles.filter { it.isMovie && it.meta?.collection != null }
-        .groupBy { it.meta!!.collection!!.id }
-        .filter { it.value.size >= 2 }
-        .map { (id, films) ->
-            val c = films.first().meta!!.collection!!
-            Saga(id, sagaName(c.name), c.poster ?: films.firstNotNullOfOrNull { it.meta?.poster }, films.sortedBy { it.year ?: 0 })
-        }
-        .sortedWith(compareByDescending<Saga> { it.films.size }.thenBy { it.name })
-
-/** "Terminator - Colección" -> "Terminator" (como sagaName() de app.js) */
-private fun sagaName(n: String) = n.replace(Regex("\\s*[-–:]?\\s*(Colecci[oó]n|Collection|Saga)$", RegexOption.IGNORE_CASE), "")
-    .replace(Regex("^(Colecci[oó]n|Saga)\\s*:?\\s*", RegexOption.IGNORE_CASE), "").ifBlank { n }
-
-@Composable
-fun SagasScreen(nav: Nav) {
-    val repo = LocalContext.current.repo
-    val titles by repo.titles.collectAsStateWithLifecycle()
-    val progress by repo.progress.flow.collectAsStateWithLifecycle()
-    val sagas = remember(titles) { sagasOf(titles) }
-    Column(Modifier.fillMaxSize()) {
-        MainTopBar(nav, compactLogo = true)
-        ScreenTitle("Sagas", sagas.size)
-        if (sagas.isEmpty()) {
-            EmptyState("Sin sagas", "Aquí aparecen las sagas de las que tienes dos películas o más (salen de las fichas de TMDB).")
-            return
-        }
-        LazyVerticalGrid(
-            columns = GridCells.Adaptive(104.dp),
-            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 24.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-            modifier = Modifier.fillMaxSize()
-        ) {
-            items(sagas, key = { it.id }) { s ->
-                val seen = s.films.count { isWatched(it, progress) }
-                Column(Modifier.tapRow { nav.saga(s.id) }) {
-                    Box(Modifier.fillMaxWidth().aspectRatio(2f / 3f).clip(RoundedCornerShape(4.dp))) {
-                        Artwork(s.poster, s.name, null, Modifier.fillMaxSize())
-                        if (seen == s.films.size) Box(
-                            Modifier.align(Alignment.TopEnd).padding(6.dp).size(22.dp).background(CL.accent, CircleShape),
-                            contentAlignment = Alignment.Center
-                        ) { Icon(Icons.Rounded.Check, "Todas vistas", Modifier.size(14.dp), tint = CL.onAccent) }
-                    }
-                    Text(s.name, Modifier.padding(top = 6.dp), style = MaterialTheme.typography.bodySmall, color = CL.text, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                    Text(
-                        "${s.films.size} películas" + if (seen in 1 until s.films.size) " · $seen vistas" else "",
-                        style = MaterialTheme.typography.labelMedium, color = CL.text3
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun SagaScreen(id: Int, nav: Nav) {
-    val repo = LocalContext.current.repo
-    val titles by repo.titles.collectAsStateWithLifecycle()
-    val progress by repo.progress.flow.collectAsStateWithLifecycle()
-    val saga = remember(titles, id) { sagasOf(titles).firstOrNull { it.id == id } }
-    Column(Modifier.fillMaxSize()) {
-        BackTopBar(saga?.name ?: "Saga", onBack = { nav.back() }, kicker = saga?.let {
-            val seen = it.films.count { t -> isWatched(t, progress) }
-            "${it.films.size} PELÍCULAS · $seen VISTAS · EN ORDEN DE ESTRENO"
-        })
-        if (saga == null) EmptyState("No encontrada", "Esta saga ya no tiene dos películas en la biblioteca.")
-        else TitleGrid(saga.films, progress, nav)
-    }
 }
 
 // ---------------------------------------------------------------- Directores (pestaña de Películas)
@@ -260,7 +184,7 @@ fun NotificationsScreen(nav: Nav) {
             items(items, key = { it.kind + it.id + it.at }) { n ->
                 val new = n.at > shownSeen.longValue
                 Row(
-                    Modifier.fillMaxWidth().tapRow { if (n.kind == "request") nav.requests() else nav.detail(n.id) }.padding(horizontal = 16.dp, vertical = 8.dp),
+                    Modifier.fillMaxWidth().tapRow { when (n.kind) { "request" -> nav.requests(); "collection" -> nav.collection(n.id); else -> nav.detail(n.id) } }.padding(horizontal = 16.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Box(Modifier.width(44.dp).aspectRatio(2f / 3f).clip(RoundedCornerShape(4.dp))) { Artwork(n.poster, n.title, null, Modifier.fillMaxSize(), placeholderSize = 9) }
@@ -282,6 +206,7 @@ private fun notifText(n: CineServer.Notif): String {
     return when (n.kind) {
         "request" -> if (n.status == "done") "Ya puedes ver $name, que pediste" else "Tu petición de $name se ha rechazado" + (n.reply?.let { ": $it" } ?: "")
         "watchlist" -> "De tu watchlist: $name ya está en la biblioteca"
+        "collection" -> "Nueva colección: «${n.title}»"
         else -> (if (n.type == "series") "Novedades en la biblioteca: " else "Nueva en la biblioteca: ") + name
     }
 }
@@ -386,6 +311,7 @@ private val ACCESS_KIND = mapOf(
     "login" to "Inicio de sesión", "login-failed" to "Intento fallido", "logout" to "Cierre de sesión",
     "open" to "Abrir reproductor", "watched" to "Marcado como visto", "unwatched" to "Marcado como no visto",
     "fav-add" to "Añadido a la Watchlist", "fav-remove" to "Quitado de la Watchlist",
+    "collection-create" to "Colección creada", "collection-update" to "Colección cambiada", "collection-delete" to "Colección borrada",
     "list-create" to "Lista creada", "list-rename" to "Lista renombrada", "list-delete" to "Lista borrada", "list-add" to "Añadido a una lista", "list-remove" to "Quitado de una lista",
     "request-create" to "Petición", "request-cancel" to "Petición cancelada", "request-resolve" to "Petición resuelta", "request-remove" to "Petición borrada",
     "settings" to "Ajustes", "scan" to "Escaneo", "meta-refresh" to "Buscar fichas", "identify" to "Ficha corregida", "poster" to "Carátula cambiada",

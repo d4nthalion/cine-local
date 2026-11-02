@@ -81,6 +81,9 @@ import com.cinelocal.android.ui.screens.MovieTabs
 import com.cinelocal.android.ui.screens.NotificationsScreen
 import com.cinelocal.android.ui.screens.RequestsScreen
 import com.cinelocal.android.ui.screens.SagaScreen
+import com.cinelocal.android.ui.screens.CollectionNews
+import com.cinelocal.android.ui.screens.CollectionScreen
+import com.cinelocal.android.ui.screens.CollectionsScreen
 import com.cinelocal.android.ui.screens.SagasScreen
 import androidx.compose.material.icons.filled.CollectionsBookmark
 import androidx.compose.material.icons.outlined.CollectionsBookmark
@@ -142,6 +145,8 @@ class Nav(private val nav: NavHostController, private val ctx: android.content.C
     fun watchlist() = nav.navigate("watchlist")
     fun downloads() = nav.navigate("downloads") { launchSingleTop = true }
     fun saga(id: Int) = nav.navigate("saga/$id")
+    fun sagas() = nav.navigate("sagas") { launchSingleTop = true }
+    fun collection(id: String) = nav.navigate("collection/" + android.net.Uri.encode(id))
     fun directors() = nav.navigate("directors") { launchSingleTop = true }
     fun director(name: String) = nav.navigate("director/" + android.net.Uri.encode(name))
     fun notifications() = nav.navigate("notifications") { launchSingleTop = true }
@@ -163,11 +168,11 @@ private val tabs = listOf(
     NavTab("home", "Inicio", Icons.Outlined.Home, Icons.Filled.Home),
     NavTab("movies", "Películas", Icons.Outlined.Movie, Icons.Filled.Movie),
     NavTab("series", "Series", Icons.Outlined.Tv, Icons.Filled.Tv),
-    NavTab("sagas", "Sagas", Icons.Outlined.CollectionsBookmark, Icons.Filled.CollectionsBookmark),
+    NavTab("collections", "Colecciones", Icons.Outlined.CollectionsBookmark, Icons.Filled.CollectionsBookmark),
     NavTab("list", "Listas", Icons.Outlined.BookmarkBorder, Icons.Filled.Bookmark)
 )
-// Directores es una pestaña de Películas: con la barra de abajo y Películas marcada
-private val tabRoutes = tabs.map { it.route }.toSet() + "directors"
+// Directores es una pestaña de Películas y Sagas, de Colecciones: con la barra de abajo y la sección marcada
+private val tabRoutes = tabs.map { it.route }.toSet() + "directors" + "sagas"
 private fun isTab(e: NavBackStackEntry) = e.destination.route in tabRoutes
 
 @Composable
@@ -220,7 +225,7 @@ private fun App() {
             }
         },
         bottomBar = {
-            if (route in tabRoutes) BottomNav(tabs, if (route == "directors") "movies" else route) { nav.tab(it.route) }
+            if (route in tabRoutes) BottomNav(tabs, when (route) { "directors" -> "movies"; "sagas" -> "collections"; else -> route }) { nav.tab(it.route) }
         }
     ) { pad ->
         NavHost(
@@ -248,6 +253,8 @@ private fun App() {
             composable("movies") { BrowseScreen(BrowseKind.MOVIES, nav, tabs = { MovieTabs(0, nav) }) }
             composable("directors") { DirectorsScreen(nav) }
             composable("director/{name}") { entry -> DirectorScreen(entry.arguments?.getString("name").orEmpty(), nav) }
+            composable("collections") { CollectionsScreen(nav) }
+            composable("collection/{id}") { entry -> CollectionScreen(entry.arguments?.getString("id").orEmpty(), nav) }
             composable("sagas") { SagasScreen(nav) }
             composable("saga/{id}") { entry -> SagaScreen(entry.arguments?.getString("id")?.toIntOrNull() ?: 0, nav) }
             composable("notifications") { NotificationsScreen(nav) }
@@ -261,6 +268,8 @@ private fun App() {
             composable("downloads") { DownloadsScreen(nav) }
             composable("detail/{id}") { entry -> DetailScreen(entry.arguments?.getString("id").orEmpty(), nav) }
         }
+        // colecciones nuevas desde la última vez: el aviso, encima de lo que haya
+        CollectionNews(nav)
     }
 }
 

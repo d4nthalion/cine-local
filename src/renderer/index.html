@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta http-equiv="Content-Security-Policy"
-        content="default-src 'self'; img-src 'self' data: https://image.tmdb.org; style-src 'self' 'unsafe-inline'; script-src 'self'">
+        content="default-src 'self'; img-src 'self' data: https://image.tmdb.org https: http:; style-src 'self' 'unsafe-inline'; script-src 'self'">
   <title>CineLocal</title>
   <link rel="stylesheet" href="styles.css">
 </head>
@@ -21,7 +21,7 @@
       <a data-nav="home">Inicio</a>
       <a data-nav="movies">Películas</a>
       <a data-nav="series">Series</a>
-      <a data-nav="sagas">Sagas</a>
+      <a data-nav="collections">Colecciones</a>
       <a data-nav="list">Listas</a>
       <a data-nav="requests" id="navRequests" class="hidden">Peticiones<span class="nav-badge hidden" id="reqBadge"></span></a>
       <a data-nav="access" id="navAccess" class="hidden">Registro</a>

@@ -74,6 +74,7 @@
     markProgress: q => post('/api/progress/mark', q),
     toggleFavorite: id => post('/api/favorites/toggle', { id }),
     lists: { op: q => post('/api/lists', q) },
+    collections: { op: q => post('/api/collections', q), seen: () => post('/api/collections/seen', {}), image: q => post('/api/collections/image', q) },
     requests: { get: () => get('/api/requests'), op: q => post('/api/requests', q) },
     notifications: { get: () => get('/api/notifications'), seen: () => post('/api/notifications/seen', {}) },
     accessLog: q => get('/api/access?' + new URLSearchParams(q)),

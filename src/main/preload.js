@@ -38,6 +38,7 @@ contextBridge.exposeInMainWorld('api', {
   markProgress: (q) => ipcRenderer.invoke('progress:mark', q),
   toggleFavorite: (id) => ipcRenderer.invoke('favorites:toggle', id),
   lists: { op: (q) => ipcRenderer.invoke('lists:op', q) },
+  collections: { op: (q) => ipcRenderer.invoke('collections:op', q), seen: () => ipcRenderer.invoke('collections:seen'), image: (q) => ipcRenderer.invoke('collections:image', q) },
   toggleFullscreen: () => ipcRenderer.invoke('window:toggleFullscreen'),
   setFullscreen: (v) => ipcRenderer.invoke('window:setFullscreen', v),
   isFullscreen: () => ipcRenderer.invoke('window:isFullscreen'),
