@@ -357,16 +357,19 @@ function reportRemoteProgress(id, pos, dur, force) {
 /**
  * Prepara la interfaz moderna del reproductor (uosc) en la carpeta de datos.
  * mpv no puede leer dentro del .asar y Archivos de programa no es escribible, así que se copia
- * player-ui/ a %APPDATA%CineLocalmpv-config cuando cambia su versión.
+ * player-ui/ a %APPDATA%CineLocalmpv-config cuando cambia su versión o cinelocal-osc.lua
+ * (si sólo se mirara VERSION, un cambio en el script sin subirla dejaría la interfaz vieja).
  */
 function playerUiDir() {
   if (settings.data.playerUi === 'classic') return null;
   const src = app.isPackaged ? path.join(process.resourcesPath, 'player-ui') : path.join(__dirname, '..', '..', 'player-ui');
   const dest = path.join(DATA, 'mpv-config');
+  const signature = dir => fs.readFileSync(path.join(dir, 'VERSION'), 'utf8') + '|' +
+    require('crypto').createHash('sha1').update(fs.readFileSync(path.join(dir, 'scripts', 'cinelocal-osc.lua'))).digest('hex');
   try {
-    const version = fs.readFileSync(path.join(src, 'VERSION'), 'utf8');
+    const version = signature(src);
     let current = null;
-    try { current = fs.readFileSync(path.join(dest, 'VERSION'), 'utf8'); } catch {}
+    try { current = signature(dest); } catch {}
     if (current !== version) {
       fs.rmSync(dest, { recursive: true, force: true });
       fs.cpSync(src, dest, { recursive: true });
