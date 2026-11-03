@@ -29,8 +29,12 @@ services:
       CINELOCAL_USER_GROUP: "${USER_GROUP:-cinelocal-user}"
       CINELOCAL_HWACCEL: "vaapi"
       TRUST_PROXY: "1"
+      # aMule (el servicio «amule» de abajo): su API en el propio NAS y la carpeta donde deja lo terminado
+      AMULE_URL: "http://127.0.0.1:4711"
+      AMULE_PASSWORD: "${AMULE_PASSWORD:-}"
+      AMULE_INCOMING: "/media/@amule/incoming"
     volumes:
-      - "${MEDIA_DIR}:/media:ro"      # la carpeta de vídeo, sólo lectura
+      - "${MEDIA_DIR}:/media"         # la carpeta de vídeo (con escritura: ahí se colocan las descargas de aMule)
       - ./data:/data                  # ajustes, metadatos, sesiones y progreso
       - /etc/group:/host/group:ro     # grupos del NAS: quién es administrador o usuario de CineLocal
     # contenedor sin privilegios: sistema de archivos de sólo lectura, sin capacidades extra
@@ -41,3 +45,23 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
+
+  # aMule en el NAS: descarga en ${MEDIA_DIR}/@amule (el escáner se salta las carpetas que empiezan por @) y, al estar en
+  # la misma carpeta compartida que la biblioteca, CineLocal mueve lo terminado al momento, sin copiarlo.
+  amule:
+    image: ngosang/amule:3.2.0-1
+    container_name: amule
+    restart: unless-stopped
+    # red del propio NAS: los puertos P2P (4662 TCP, 4665 y 4672 UDP) quedan abiertos tal cual para el router, y
+    # CineLocal llega a su API en 127.0.0.1:4711
+    network_mode: host
+    environment:
+      PUID: "${PUID}"
+      PGID: "${SHARE_GID}"      # el grupo con permiso en la carpeta compartida (las ACL de DSM no miran los permisos Unix)
+      UMASK: "0002"
+      TZ: "Europe/Madrid"
+      WEBUI_PWD: "${AMULE_PASSWORD}"
+      FIX_PERMISSIONS: "false"
+    volumes:
+      - "${AMULE_CONFIG:-/volume1/docker/amule/config}:/home/amule/.aMule"
+      - "${MEDIA_DIR}/@amule:/downloads"

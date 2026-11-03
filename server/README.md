@@ -8,11 +8,11 @@ CineLocal como **servicio web del NAS**, alternativa a Video Station / DS Video 
 
 ```
 Navegador ──HTTPS──► DSM (proxy inverso, certificado, bloqueo automático) ──► contenedor «cinelocal» :8095
-                                                                               ├─ /media = carpeta de vídeo (sólo lectura)
+                                                                               ├─ /media = carpeta de vídeo (con escritura sólo para colocar las descargas)
                                                                                └─ /data  = ajustes, metadatos, sesiones, progreso
 ```
 
-* **Interfaz:** `src/renderer/` tal cual. `server/web/api.js` sustituye a `preload.js`: el mismo `window.api`, pero hablando con el servidor por HTTP y recibiendo los cambios por Server-Sent Events (`/api/events`). En la web no hay mpv, eMule, Discord, Letterboxd ni actualizaciones (`WEB` en `app.js`).
+* **Interfaz:** `src/renderer/` tal cual. `server/web/api.js` sustituye a `preload.js`: el mismo `window.api`, pero hablando con el servidor por HTTP y recibiendo los cambios por Server-Sent Events (`/api/events`). En la web no hay mpv, Discord, Letterboxd ni actualizaciones (`WEB` en `app.js`).
 * **Biblioteca:** `server/library.js` reutiliza `scanner.js`, `metadata.js` y `watcher.js` (misma lógica que `main.js`). El progreso, la lista y lo último visto se guardan por usuario en `data/users/<usuario>.json`.
 * **Reproducción** (`server/media.js` y `server/web/player.js`). El navegador decide con `canPlayType` qué puede reproducir, igual que Plex o Video Station:
 
@@ -29,7 +29,7 @@ Navegador ──HTTPS──► DSM (proxy inverso, certificado, bloqueo automát
 
 Quién entra y qué puede hacer lo deciden dos grupos de DSM (*Panel de control → Grupo*), con estos nombres exactos (se cambian con `ADMIN_GROUP` y `USER_GROUP` en `.env`):
 
-* **`cinelocal-admin`:** carpetas de la biblioteca, clave e idioma de TMDB, escanear, corregir fichas, gestionar las peticiones y eMule en la app de escritorio.
+* **`cinelocal-admin`:** carpetas de la biblioteca, clave e idioma de TMDB, escanear, corregir fichas, gestionar las peticiones y descargar con aMule.
 * **`cinelocal-user`:** ver, llevar su progreso, sus listas, sus peticiones y sus preferencias de audio, subtítulos y plataformas.
 
 Los dos grupos necesitan *Privilegios de aplicaciones → DSM → Permitir*: la contraseña se comprueba con el inicio de sesión de DSM. Permisos de carpetas no hacen falta (el contenedor lee el vídeo con su propio grupo). En cuanto existe uno de los dos grupos, quien no esté en ninguno no entra (aunque esté en `ADMINS`/`USERS`, que sólo valen mientras no haya grupos), y quien sale de un grupo pierde el acceso, aunque tenga la sesión abierta, en el siguiente minuto.
@@ -71,7 +71,7 @@ Se guardan 12 meses (`CINELOCAL_LOG_MONTHS` para cambiarlo).
 * **Los vídeos se piden por su id, nunca por ruta.** No hay forma de pedir un archivo fuera de la biblioteca. Los estáticos tampoco salen de su carpeta.
 * **Peticiones que cambian algo:** llevan la cabecera `X-CineLocal: 1`, que otra web no puede enviar sin CORS. Junto con `SameSite=Strict`, eso evita CSRF.
 * **Cabeceras:** CSP estricta (sin scripts en línea), `X-Frame-Options: DENY`, `nosniff`, `no-referrer` y HSTS tras HTTPS.
-* **Contenedor:** usuario sin privilegios (el uid de DSM), carpeta de vídeo en sólo lectura, sistema de archivos de sólo lectura, `cap_drop: ALL` y `no-new-privileges`.
+* **Contenedor:** usuario sin privilegios (el uid de DSM), carpeta de vídeo con escritura (sólo para colocar lo que descarga aMule; los vídeos se piden por id, nunca por ruta), sistema de archivos de sólo lectura, `cap_drop: ALL` y `no-new-privileges`.
 * **Exposición:** sólo por HTTPS, a través del proxy inverso de DSM con el certificado de Let's Encrypt de `tu-nas.synology.me`. Nunca se abre el 8095 en el router. Para lo más seguro, no abras nada y entra por Tailscale o por la VPN.
 
 ## Instalación en el NAS
@@ -89,6 +89,37 @@ Se guardan 12 meses (`CINELOCAL_LOG_MONTHS` para cambiarlo).
    * Pide un certificado para ese nombre en *Seguridad → Certificado*.
    * Abre el 443 en el router hacia el DS220+.
    * Pon `BIND_HOST=127.0.0.1` en `.env`.
+
+## Descargas con aMule
+
+El servicio `amule` de `docker-compose.yml` ([ngosang/amule](https://github.com/ngosang/docker-amule), aMule 3.2) corre junto a CineLocal. CineLocal le habla por su API REST (`amuleapi`, `http://127.0.0.1:4711/api/v1`, con la contraseña de `AMULE_PASSWORD`) y la interfaz es la de **Descargas** (ver el [README](../README.md#descargas-con-amule)).
+
+```
+contenedor «amule» ── /downloads = ${MEDIA_DIR}/@amule  (temp/ a medias, incoming/ terminadas)
+contenedor «cinelocal» ── /media = ${MEDIA_DIR}  →  /media/@amule/incoming/X.mkv  ──rename──►  /media/Peliculas/Title (Year).mkv
+```
+
+* **Dónde descarga:** en `@amule`, dentro de la propia carpeta compartida de vídeo. El escáner se salta las carpetas que empiezan por `@`, y al ser el mismo montaje que la biblioteca, colocar un vídeo es un `rename`: instantáneo, sin copiar gigas.
+* **Qué hace el servidor** (`server/amule/`):
+  * `client.js` traduce el API de aMule a lo que espera la interfaz.
+  * `service.js` lo consulta cada 4 s y guarda en `data/amule.json` el plan de cada descarga: la ficha de TMDB y la carpeta, relativa a la biblioteca. Al terminar, `organize.js` la renombra en inglés y la mueve; después se vuelve a escanear con la ficha ya fijada (`library.pinMatch`).
+  * Lo que no se puede identificar con seguridad queda *pendiente de colocar*.
+  * Sólo se tocan las descargas que CineLocal ha visto en curso o ha lanzado él.
+* **Permisos:** el contenedor `cinelocal` monta la carpeta de vídeo **con escritura** (sólo esa carpeta; el resto sigue igual: sistema de archivos de sólo lectura, sin capacidades). aMule corre con el mismo usuario (`PUID`) y con `SHARE_GID` como grupo principal, porque las ACL de DSM dan el permiso de la carpeta compartida por grupo y dentro del contenedor no cuentan los grupos secundarios.
+
+### Instalación
+
+1. En `server/.env` añade `AMULE_PASSWORD` (una larga y aleatoria: `head -c 24 /dev/urandom | base64 | tr -dc A-Za-z0-9`) y, si quieres otra, `AMULE_CONFIG` (por defecto `/volume1/docker/amule/config`).
+2. Crea las carpetas con tu usuario:
+   ```sh
+   mkdir -p /volume1/docker/amule/config /volume2/Multimedia/@amule/temp /volume2/Multimedia/@amule/incoming
+   chmod 775 /volume1/docker/amule/config   # aMule se niega a arrancar si su carpeta no tiene permisos Unix (las ACL no le valen)
+   ```
+3. `cd server && docker compose up -d --build`.
+4. **Que su API y su control remoto sólo escuchen en el NAS:** con la red del host, aMule abre el 4711 (API) y el 4712 (control remoto) en todas las interfaces. Con el contenedor parado (`docker stop amule`), en `amuleapi.conf` pon `BindAddress=127.0.0.1` y en `amule.conf` (sección `[ExternalConnect]`) `ECAddress=127.0.0.1`, y vuelve a arrancarlo. No abras nunca el 4711 ni el 4712 en el router.
+5. **ID alta:** abre en el router hacia el NAS el **4662 TCP** y el **4672 UDP** (el 4665 UDP es opcional). Sin ellos funciona, pero con *ID baja* y más lento; Descargas y Ajustes lo indican.
+
+Para actualizar aMule, cambia la versión de la imagen (`ngosang/amule:3.2.0-1`) y `docker compose up -d`. Lo que está a medias y la configuración se conservan.
 
 ## Desarrollo en Windows
 

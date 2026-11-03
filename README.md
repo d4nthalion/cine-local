@@ -2,7 +2,7 @@
 
 Cliente de escritorio para Windows con estilo de plataforma de streaming (HBO Max / Netflix / Filmin) para la biblioteca de películas y series de **CineLocal Server**, el servicio que corre en el NAS ([`server/`](server/README.md)). Se entra con el usuario de DSM; la biblioteca, los metadatos, el progreso, las listas y las peticiones están en el servidor, y la app reproduce con mpv. También funciona **sin servidor**, leyendo directamente carpetas de este PC o del NAS por SMB (ver [Sin CineLocal Server](#sin-cinelocal-server)).
 
-> **Aviso legal.** CineLocal es únicamente un ejercicio de programación, hecho para aprender y experimentar. No apoya, fomenta ni facilita la descarga, la copia o la distribución de material protegido por derechos de autor. El proyecto no incluye ni enlaza ningún contenido: solo organiza y reproduce los archivos que cada persona ya tiene. Quien lo use es el único responsable de tener los derechos sobre lo que guarda, reproduce o comparte, y de cumplir la legislación de su país. Las funciones relacionadas con descargas, como la integración con eMule, se ofrecen solo como ejemplo técnico y deben usarse exclusivamente con contenido libre o propio. Los datos de películas y series proceden de [TMDB](https://www.themoviedb.org/); CineLocal no está respaldado ni certificado por TMDB.
+> **Aviso legal.** CineLocal es únicamente un ejercicio de programación, hecho para aprender y experimentar. No apoya, fomenta ni facilita la descarga, la copia o la distribución de material protegido por derechos de autor. El proyecto no incluye ni enlaza ningún contenido: solo organiza y reproduce los archivos que cada persona ya tiene. Quien lo use es el único responsable de tener los derechos sobre lo que guarda, reproduce o comparte, y de cumplir la legislación de su país. Las funciones relacionadas con descargas, como la integración con aMule, se ofrecen solo como ejemplo técnico y deben usarse exclusivamente con contenido libre o propio. Los datos de películas y series proceden de [TMDB](https://www.themoviedb.org/); CineLocal no está respaldado ni certificado por TMDB.
 
 ## Cómo organiza la biblioteca
 
@@ -21,7 +21,7 @@ D:\Películas y Series\
 * **Archivo suelto = película. Carpeta = serie.**
 * **Carpetas de categoría:** en la raíz de una carpeta de la biblioteca, una carpeta `Películas` (o `Peliculas`, `Pelis`, `Movies`, `Films`, `Cine`) contiene películas y una `Series` (o `TV`, `TV Shows`, `Shows`) contiene series. Así `\\NAS\Multimedia` con `Peliculas\` y `Series\` dentro funciona como una sola carpeta, también en Android.
   * Dentro de `Películas`, cada vídeo es una película, aunque esté en su propia carpeta (`Blade Runner (1982)\br.mkv` toma el título de la carpeta) o en una carpeta de saga con varias.
-  * eMule copia ahí las películas y crea ahí las series nuevas.
+  * Las descargas de aMule dejan ahí las películas y crean ahí las series nuevas.
   * Se ignoran las carpetas internas de los NAS Synology (`@eaDir`, `#recycle`, `#snapshot`).
 * **Varias carpetas:** un administrador puede sumar las que quiera en *Ajustes → Biblioteca del servidor → Añadir nueva ruta* (rutas dentro del contenedor, p. ej. `/media/Documentales`).
   * Todo aparece en una sola biblioteca. Una serie repartida entre carpetas (mismo título y año) se muestra como una sola.
@@ -50,7 +50,7 @@ En la pantalla de inicio de sesión, *Usar sin servidor: carpetas de este PC o d
 * **Carpetas:** en *Ajustes → Biblioteca → Añadir nueva ruta* se escriben (`D:\Películas`, `\\NAS\video`, o `\\10.8.0.1\video` por la VPN del Synology), o se eligen con *Examinar*. Se pueden poner varias, del PC y del NAS.
 * **NAS por SMB:** con alguna carpeta `\\NAS\…`, aparece *Inicio de sesión en el NAS*. Con un usuario, CineLocal inicia sesión en el NAS antes de cada escaneo (`net use`, contraseña cifrada con `safeStorage`), sin depender de las credenciales guardadas en el Explorador de Windows. Sin usuario, se usa la sesión que tenga Windows. Si el NAS no responde, se conservan sus títulos y se avisa.
 * Mientras CineLocal está abierto, vigila las carpetas y añade lo nuevo cuando termina de copiarse.
-* Todo lo de administrador es tuyo: TMDB, carpetas, corregir fichas y eMule. Con eMule, lo descargado se copia a la primera carpeta de la biblioteca.
+* Todo lo de administrador es tuyo: TMDB, carpetas y corregir fichas. Las descargas con aMule sólo existen con CineLocal Server.
 * No hay peticiones ni registro de actividad: sólo existen en el servidor.
 * La primera vez se importa la biblioteca local de antes de la 1.16 si sigue en `%APPDATA%\CineLocal` (fichas, correcciones, progreso y Mi lista, que pasa a la Watchlist). Las carpetas hay que volver a añadirlas.
 * Por dentro, `src/main/local.js` usa la misma biblioteca que el servidor (`server/library.js`) y responde a las mismas rutas `/api/…`, así que el resto de la app no distingue los dos modos.
@@ -59,12 +59,12 @@ En la pantalla de inicio de sesión, *Usar sin servidor: carpetas de este PC o d
 
 Quién entra y qué puede hacer lo deciden dos grupos de DSM (ver [`server/README.md`](server/README.md#grupos-de-dsm)):
 
-* **`cinelocal-admin`:** además de todo lo de un usuario, cambia las carpetas de la biblioteca del servidor y TMDB (*Ajustes → Biblioteca del servidor* y *Metadatos*), escanea, corrige fichas, gestiona las peticiones y usa eMule.
+* **`cinelocal-admin`:** además de todo lo de un usuario, cambia las carpetas de la biblioteca del servidor y TMDB (*Ajustes → Biblioteca del servidor* y *Metadatos*), escanea, corrige fichas, gestiona las peticiones y descarga con aMule.
 * **`cinelocal-user`:** ve y lleva su progreso, sus listas y sus peticiones, y sus ajustes de audio, subtítulos y plataformas.
 
 ### Peticiones
 
-En **Peticiones** se piden películas y series que no están en la biblioteca (buscador de TMDB, o *Pedir* en cualquier título que no tengas), con una nota opcional. Si dos usuarios piden lo mismo, queda una sola petición con los dos. Los administradores ven todas, con un contador en el menú y un aviso al momento, y las marcan como conseguidas o rechazadas (con motivo); quien la pidió recibe el aviso. Lo que llega a la biblioteca se marca solo como conseguido. Con eMule activo, cada petición pendiente tiene *Buscar en eMule*.
+En **Peticiones** se piden películas y series que no están en la biblioteca (buscador de TMDB, o *Pedir* en cualquier título que no tengas), con una nota opcional. Si dos usuarios piden lo mismo, queda una sola petición con los dos. Los administradores ven todas, con un contador en el menú y un aviso al momento, y las marcan como conseguidas o rechazadas (con motivo); quien la pidió recibe el aviso. Lo que llega a la biblioteca se marca solo como conseguido. Con aMule en el servidor, cada petición pendiente tiene *Buscar en aMule*: lo que se descarga desde ahí lleva su ficha, así que al colocarse la petición se marca sola.
 
 Cualquier título que no está en la biblioteca (al buscar, en la filmografía de un director, en tus listas o en Peticiones) tiene su propia ficha con sinopsis, reparto, tráiler, *Pedir*, *Dónde verla* y *Guardar en lista*.
 
@@ -75,7 +75,7 @@ Cualquier título que no está en la biblioteca (al buscar, en la filmografía d
 * Reanuda donde lo dejaste y reproduce el siguiente episodio automáticamente. Se marca como visto un episodio, una temporada entera (*Marcar temporada como vista*) o la serie; se ve al momento, sin esperar al servidor. Si un episodio tiene dos archivos (dos versiones, p. ej. en distinta calidad), cuenta como visto en cuanto ves cualquiera de los dos, y marcarlo o desmarcarlo afecta a los dos.
 * **Listas:** la **Watchlist** de cada uno (botón de marcador en la ficha, también en títulos que no tienes; sustituye a la antigua «Mi lista», con lo que había en ella), las listas propias y, con Letterboxd vinculado, su watchlist en otra pestaña. Añadir y quitar se ve al momento. Las apps antiguas siguen viendo «Mi lista» como los títulos de la Watchlist que están en la biblioteca.
 * Búsqueda (título, actor, director, género) y orden en Películas y Series, con filtro de vistas / sin ver y, tras el icono de filtros, por género.
-* Si la búsqueda no encuentra nada en tu biblioteca, busca la película en TMDB: cada resultado lleva *Dónde verla* y, con eMule activado, *Buscar en eMule*. Un año al final («dune 2021») afina la búsqueda.
+* Si la búsqueda no encuentra nada en tu biblioteca, busca la película en TMDB: cada resultado lleva *Dónde verla* y, para administradores con aMule en el servidor, *Buscar en aMule*. Un año al final («dune 2021») afina la búsqueda.
 * Detección automática: lo que se copie o descargue en la carpeta del NAS aparece solo (cuando termina de copiarse), con aviso en la app y notificación de Windows.
 * Pantalla completa de la app: botón en la barra superior, **F11**, u opción *Iniciar en pantalla completa*.
 * Discord: tu perfil muestra lo que estás viendo («Viendo CineLocal», con póster y tiempo). Ver [Discord](#discord).
@@ -115,42 +115,30 @@ Viene siempre activado y no tiene nada que configurar.
 
 Pruebas: `node test/introdb-test.js` (normalización, tramo activo, caché, 429; añade `real` para 3 consultas a la API de verdad) y capturas del botón con `node test/skip-intro-ui-test.js "C:\ruta\mpv.exe" <carpeta>`.
 
-## Descargas con eMule
+## Descargas con aMule
 
-Sólo para administradores (grupo `cinelocal-admin`). CineLocal puede buscar y descargar con el eMule de este PC y seguir el progreso desde la sección **Descargas**. Se comunica con eMule a través de su servidor web, con una plantilla propia que devuelve datos en lugar de páginas HTML. Está probado con eMule 0.50a.
+Sólo para administradores (grupo `cinelocal-admin`), en la app de escritorio y en la web. aMule corre en el propio NAS, en un contenedor junto a CineLocal Server, así que no hace falta tener el PC encendido ni subir nada después: CineLocal busca, descarga y, al terminar, **renombra y coloca** cada vídeo en la biblioteca. La instalación está en [`server/README.md`](server/README.md#descargas-con-amule). Sin CineLocal Server (carpetas de este PC) no hay descargas.
 
-1. *Ajustes → Descargas (eMule)* → activa **Buscar y descargar con eMule**.
-2. En eMule: *Opciones → Servidor Web* → marca **Activado**, escribe una contraseña y deja el puerto 4711.
-3. En **Plantilla** pon la ruta que muestra CineLocal (`%APPDATA%\CineLocal\emule\CineLocal.tmpl`), pulsa **Recargar** y después **Aplicar**.
-4. Escribe la misma contraseña en CineLocal y pulsa **Probar**.
+* **Buscar:** en **Descargas** (servidores o Kad), o desde un título: `···` → **Buscar en aMule** en la ficha, en Peticiones, en los resultados de TMDB y en la watchlist de Letterboxd. También se puede pegar un enlace `ed2k://`.
+* **Descargar:** al pulsar *Descargar* se elige:
+  * **Título:** ya viene puesto si se buscó desde su ficha. *Cambiar* busca otro en TMDB y *Sin ficha* deja que se identifique por el nombre del archivo al terminar.
+  * **Carpeta:** *Automática* (películas a `Películas`, episodios a la carpeta de su serie: la que ya tiene en la biblioteca o una nueva en `Series`) o cualquier carpeta de la biblioteca, con un navegador de carpetas.
+* **Al terminar:** el vídeo se renombra con el título **en inglés** de TMDB y se mueve, sin sobrescribir nunca nada:
+  * Película: `Night of the Living Dead (1968).mkv`
+  * Episodio: `Dracula (2020)/Dracula (2020) 1x01 The Rules of the Beast.mkv` (sin título de episodio si TMDB no lo tiene)
 
-* Busca en servidores o Kad, descarga, pausa, reanuda y cancela, o pega un enlace `ed2k://`.
-* En la ficha de un título: `···` → **Buscar en eMule**.
+  La ficha queda fijada como si se hubiera corregido a mano, así que el escaneo no la confunde con otra, y si alguien la había pedido, la petición se marca como conseguida. Cada descarga en curso muestra adónde irá.
+* **Pendientes de colocar:** sin ficha, si el nombre no deja claro qué es (en películas hace falta el año: hay varias *Night of the Living Dead*), si es un episodio sin `S01E02`/`1x02`/`Cap.102`, o si ya existe un archivo con ese nombre, la descarga queda en *Pendientes de colocar* con el motivo y, si la hay, la ficha más probable. **Colocar** pide la ficha (y la temporada y el episodio, en series) y la carpeta. **Quitar** la saca de la lista; el archivo se queda en `@amule/incoming`.
+* **Conexión:** la barra de arriba muestra el servidor (*ID alta* / *ID baja*), Kad (*Abierto*, *Tras cortafuegos*…, con los contactos) y las velocidades, con **Conectar** / **Desconectar** para cada red. **Servidores** despliega la lista (usuarios, archivos, ping, fallos; se ordena pulsando la cabecera y cada fila tiene **Conectar**), **Añadir servidores de un server.met** y, con Kad sin conectar, **Conectar Kad desde un nodo** (`IP:puerto`).
+* **Ajustes → Descargas (aMule)** muestra si el servidor llega a aMule y avisa si hay *ID baja*.
 
-### Conexión: servidores y Kad
-
-La barra de arriba de **Descargas** muestra el servidor (con *ID alta* o *ID baja*) y el estado de Kad (*Desconectado*, *Conectando…*, *Tras cortafuegos* o *Abierto*, con los contactos), sin tener que abrir la ventana de eMule:
-
-* **Conectar** entra en el primer servidor disponible (como el botón de eMule); mientras conecta, **Cancelar**; ya conectado, **Desconectar**.
-* **Conectar Kad** / **Desconectar Kad**.
-* **Servidores** despliega la lista de servidores de eMule: nombre y descripción, dirección, usuarios, archivos, ping y fallos, con las etiquetas *Estático* y *Prioridad alta*. Se ordena por usuarios, archivos, ping o nombre pulsando la cabecera; el servidor conectado aparece arriba y resaltado, y cada fila tiene su botón **Conectar**. Mientras está a la vista se actualiza cada 5 s. Se abre sola si no hay servidor conectado.
-* Debajo de la lista: **Añadir servidores de un server.met** (pega su dirección `http://…/server.met`; eMule lo descarga y muestra su ventana de progreso) y, con Kad sin conectar, **Conectar Kad desde un nodo** (`IP:puerto`), útil si Kad no encuentra contactos.
-
-Esto necesita la revisión 2 de la plantilla, que CineLocal copia al arrancar en `%APPDATA%\CineLocal\emule\CineLocal.tmpl`. eMule solo lee la plantilla al activar el servidor web o al pulsar *Recargar*, así que si ya la tenías puesta, la primera vez hay que ir a *eMule → Opciones → Servidor Web*, pulsar **Recargar** junto a la plantilla y después **Aplicar** (no hace falta reiniciar eMule). Mientras tanto, Descargas lo avisa en lugar de la lista.
-
-Límites del servidor web de eMule 0.50a: mientras conecta no dice con qué servidor lo está intentando, de Kad solo da el estado y el número de contactos (no los nodos), y no puede cargar un `nodes.dat` desde una dirección (solo arrancar Kad desde un nodo concreto). Si alguna vez ocultaste columnas en la lista de servidores de la interfaz web original, eMule las devuelve vacías.
-
-* Prueba del parser y de los comandos contra un eMule simulado: `node test/emule-servers-test.js`. Capturas del panel: `npx electron test/emule-servers-ui-test.js <carpetaTemporal> <carpetaCapturas>`.
-* Con **Copiar al NAS al terminar**, los vídeos que acaba eMule se copian a la carpeta de la biblioteca en el NAS vista desde Windows (*Carpeta de la biblioteca en el NAS*, p. ej. `\\NAS\Multimedia`): las películas a su carpeta `Películas` y los episodios (`S01E02`, `1x02`, `Cap.102`) a la carpeta de su serie (se reutiliza la de la biblioteca si la serie ya existe). Antes de copiar, CineLocal inicia sesión en el NAS con el usuario de esa opción (`net use`, contraseña cifrada con `safeStorage`); sin usuario, usa la sesión que tenga Windows. El PC tiene que llegar al NAS (en casa o con la VPN). CineLocal Server detecta lo copiado y lo añade, y si alguien lo había pedido, la petición se marca como conseguida. Solo se copian las descargas que CineLocal ha visto en curso.
-* Con la plantilla de CineLocal, la interfaz web original de eMule deja de verse en el navegador. Para recuperarla, elige `eMule.tmpl` en *Opciones → Servidor Web*.
-* No abras el puerto del servidor web en el router: CineLocal solo se conecta a `127.0.0.1`.
-* Prueba contra un eMule real: `npx electron test/emule-test.js <carpetaTemporal> <carpetaCapturas> <contraseña>`.
+Pruebas: `node test/amule-test.js` (cliente del API de aMule simulado, nombres, identificación y el paso de descarga terminada a la biblioteca sobre carpetas temporales).
 
 ## Letterboxd
 
 En *Ajustes → Letterboxd* escribe tu usuario y CineLocal importa tu perfil público: las películas vistas, tus notas, los “me gusta”, las fechas del diario y la watchlist.
 
-* **Portada:** fila *Tu watchlist de Letterboxd*, con las que ya tienes primero. Las que no tienes llevan *Dónde verla* y *Buscar en eMule*. *Ver todo* abre la watchlist completa.
+* **Portada:** fila *Tu watchlist de Letterboxd*, con las que ya tienes primero. Las que no tienes llevan *Dónde verla* y *Buscar en aMule*. *Ver todo* abre la watchlist completa.
 * **Tarjetas y fichas:** muestran tu nota en estrellas y el ♥. La ficha añade además la fecha en que la viste y enlaza a la película en Letterboxd.
 * **Orden y filtros:** *Mi nota (Letterboxd)* en Películas y en la filmografía de los directores. La filmografía tiene también el filtro *Vistas en Letterboxd*.
 * **Vistas:** opcionalmente (*Marcar como vistas las que has visto en Letterboxd*, activado por defecto), marca como vistas en CineLocal, en tu usuario del servidor o en la biblioteca local, las películas de tu biblioteca que ya has visto, sin tocar las que tienen progreso. Se hace al sincronizar y cuando llegan títulos o fichas nuevas. Cada archivo se marca una sola vez: si lo desmarcas en CineLocal, no se vuelve a marcar.
@@ -251,4 +239,4 @@ gh release create vX.Y.Z dist/CineLocal-Setup-X.Y.Z.exe dist/CineLocal-Setup-X.Y
 * No renombres los archivos: `latest.yml` los busca por su nombre exacto.
 * Las releases de Android van siempre con `--latest=false`, para que la *Latest* sea siempre la de escritorio.
 
-En `%APPDATA%\CineLocal` sólo quedan los ajustes de este PC (reproductor, eMule, Letterboxd, Discord), la sesión cifrada y las cachés; la biblioteca y el progreso están en el servidor.
+En `%APPDATA%\CineLocal` sólo quedan los ajustes de este PC (reproductor, Letterboxd, Discord), la sesión cifrada y las cachés; la biblioteca y el progreso están en el servidor.

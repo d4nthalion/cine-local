@@ -5,7 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const EventEmitter = require('events');
-const { scanLibraries } = require('../src/main/scanner');
+const { scanLibraries, hashId } = require('../src/main/scanner');
 const { TMDB } = require('../src/main/metadata');
 const { LibraryWatcher, isStable } = require('../src/main/watcher');
 const { GENERIC_EPISODE } = require('../src/main/discord');
@@ -749,6 +749,12 @@ class Library extends EventEmitter {
     return this.library.data.items.map(it => ({ type: it.type, meta: this.metadata.data[it.id]?.meta || null }));
   }
 
+  /** Carpeta y ficha de cada serie: para dejar los episodios descargados junto a los demás */
+  seriesFolders() {
+    return this.library.data.items.filter(it => it.type === 'series')
+      .map(it => ({ type: 'series', path: it.path, meta: { tmdbId: this.metadata.data[it.id]?.tmdbId || null } }));
+  }
+
   /** Un título con su ficha completa, en el idioma del usuario */
   item(id, userName) {
     if (userName && !this.canSee(userName, id)) return null;
@@ -1033,6 +1039,17 @@ class Library extends EventEmitter {
 
   search({ type, query, year }, userName) {
     return this.requireTmdb(this.langOf(userName)).search(type, query, year);
+  }
+
+  /**
+   * Ficha ya sabida de una película (su archivo) o una serie (su carpeta) que va a aparecer en el próximo escaneo,
+   * como si se hubiera corregido a mano: lo que descarga aMule no se empareja por el nombre. No toca una que ya tenga.
+   */
+  pinMatch(type, p, tmdbId) {
+    const id = hashId((type === 'movie' ? 'movie:' : 'series:') + p);
+    if (this.metadata.data[id]?.tmdbId) return;
+    this.metadata.data[id] = { tmdbId, manual: true, at: 0 };
+    this.metadata.save();
   }
 
   async identify({ itemId, tmdbId }, userName) {

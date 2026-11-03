@@ -7,7 +7,7 @@ const args = process.argv.slice(process.argv.findIndex(a => /letterboxd-test.js$
 const [ud, out, mode, arg] = args;
 const sf = path.join(ud, 'settings.json');
 const st = JSON.parse(fs.readFileSync(sf, 'utf8'));
-fs.writeFileSync(sf, JSON.stringify({ ...st, lbUser: '', startFullscreen: false, emuleEnabled: false }));
+fs.writeFileSync(sf, JSON.stringify({ ...st, lbUser: '', startFullscreen: false }));
 if (mode === 'export') dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [arg] });
 app.setPath('userData', ud);
 app.commandLine.appendSwitch('no-sandbox');

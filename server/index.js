@@ -12,6 +12,8 @@ const { AccessLog, clientOf } = require('./accesslog');
 const media = require('./media');
 const { store } = require('./store');
 const { IntroDB, flatten } = require('../src/main/introdb');
+const { AmuleClient } = require('./amule/client');
+const { AmuleService } = require('./amule/service');
 
 const env = process.env;
 const PORT = +env.PORT || 8095;
@@ -45,6 +47,14 @@ const requests = new Requests(DATA);
 const lbUsers = new LetterboxdUsers(DATA, library);
 const access = new AccessLog(DATA, { months: +env.CINELOCAL_LOG_MONTHS || 12 });
 const introDb = new IntroDB({ fetch: globalThis.fetch, store: store(DATA, 'introdb.json', { entries: {} }), userAgent: `CineLocal-Server/${VERSION}` });
+// aMule en el NAS (otro contenedor): sólo con AMULE_URL y AMULE_PASSWORD; lo terminado se coloca en la biblioteca
+const amule = new AmuleService({
+  client: env.AMULE_URL && env.AMULE_PASSWORD ? new AmuleClient({ url: env.AMULE_URL, password: env.AMULE_PASSWORD }) : null,
+  library,
+  store: store(DATA, 'amule.json', { plans: {}, tracked: {}, pending: {}, placed: [] }),
+  incoming: env.AMULE_INCOMING || '/media/@amule/incoming',
+  root: env.AMULE_LIBRARY || null
+});
 
 // ---------- utilidades HTTP ----------
 const SECURITY_HEADERS = {
@@ -182,6 +192,11 @@ library.on('rules', name => {
     else c.res.write('event: library:changed\ndata: {}\n\n');
   }
 });
+// descargas: sólo a los administradores
+const toAdmins = (event, data) => sendTo(u => auth.isAdmin(u), event, () => data);
+amule.on('update', snap => toAdmins('emule:update', snap));
+amule.on('placed', ({ dest }) => toAdmins('toast', { type: 'ok', text: `Descarga colocada en la biblioteca: ${dest}`, action: 'downloads' }));
+amule.on('pending', p => toAdmins('toast', { type: 'info', text: `«${p.name}» ha terminado y está pendiente de colocar: ${p.reason}`, action: 'downloads' }));
 setInterval(() => { for (const c of clients) c.res.write(': ping\n\n'); }, 25000).unref();
 
 // ---------- rutas ----------
@@ -211,6 +226,7 @@ route('GET', '/api/me', (req, res, { user }) => json(res, 200, {
   user, role: auth.role(user), admin: auth.isAdmin(user), version: VERSION, hwaccel: media.HWACCEL,
   // moderador: las carpetas de los NAS en los que puede corregir coincidencias
   mod: library.modRoots(user),
+  downloads: auth.isAdmin(user) && amule.enabled,
   groups: auth.groupsActive() ? { admin: auth.adminGroup, user: auth.userGroup } : null
 }));
 
@@ -463,6 +479,35 @@ route('POST', '/api/requests', async (req, res, { user }) => {
   json(res, 200, requestsView(user));
 });
 
+// ---------- descargas (aMule en el NAS, administradores) ----------
+route('GET', '/api/downloads', (req, res) => json(res, 200, amule.snapshot), { admin: true });
+route('GET', '/api/downloads/folders', (req, res, { q }) => json(res, 200, amule.folders(q.get('path') || '')), { admin: true });
+route('POST', '/api/downloads', async (req, res, { user }) => {
+  const b = await readBody(req, 16384);
+  const ops = {
+    search: () => amule.query(c => c.search({ query: b.query, method: b.method })),
+    results: () => amule.query(c => c.searchResults()),
+    download: () => amule.download({ hash: b.hash, link: b.link, entry: b.entry, dest: b.dest }).then(() => ({ ok: true })),
+    op: () => amule.run(c => c.fileOp(String(b.hash || ''), String(b.op || ''))).then(() => ({ ok: true })),
+    connect: () => amule.run(c => c.connect()).then(() => ({ ok: true })),
+    servers: () => amule.query(c => c.servers()),
+    connectServer: () => amule.run(c => c.connectServer(b.ip, b.port)),
+    disconnect: () => amule.run(c => c.disconnectServer()),
+    kad: () => amule.run(c => c.kad(b.op, b.ip, b.port)),
+    updateServerMet: () => amule.run(c => c.updateServerMet(b.url)),
+    place: () => amule.placePending(b).then(dest => ({ ok: true, dest })),
+    dismiss: () => { amule.dismissPending(b.hash); return { ok: true }; },
+    clearPlaced: () => { amule.clearPlaced(); return { ok: true }; }
+  };
+  const fn = ops[b.action];
+  if (!fn) throw httpError(400, 'Operación no válida');
+  if (['download', 'place', 'dismiss'].includes(b.action) || (b.action === 'op' && b.op === 'cancel')) {
+    act(req, user, 'download-' + (b.action === 'op' ? 'cancel' : b.action), b.entry?.title || b.name || null, b.dest || null);
+  }
+  try { json(res, 200, await fn()); }
+  catch (e) { throw e.status ? e : httpError(e.code === 'offline' || e.code === 'unconfigured' ? 503 : 400, e.message); }
+}, { admin: true });
+
 route('GET', '/api/segments', async (req, res, { q }) => {
   const skip = { type: q.get('type'), tmdbId: +q.get('tmdbId'), ...(q.get('season') && { season: +q.get('season'), episode: +q.get('episode') }) };
   const dur = +q.get('dur') || 0;
@@ -631,11 +676,12 @@ function redirect(res, to) { res.writeHead(302, { Location: to }); res.end(); }
 server.listen(PORT, HOST, () => {
   console.log(`CineLocal Server ${VERSION} en http://${HOST}:${PORT} · datos en ${DATA} · biblioteca: ${library.roots().join(', ') || '(sin configurar)'}`);
   library.start();
+  amule.start();
 });
 
 for (const sig of ['SIGTERM', 'SIGINT']) process.on(sig, () => {
   access.closeIdle(true);
-  for (const s of [library.settings, library.library, library.metadata, library.people, library.custom, library.collections, library.rules, library.announcements, auth.store, requests.store]) s.flushSync();
+  for (const s of [library.settings, library.library, library.metadata, library.people, library.custom, library.collections, library.rules, library.announcements, auth.store, requests.store, amule.store]) s.flushSync();
   for (const u of library.users.values()) u.flushSync();
   process.exit(0);
 });

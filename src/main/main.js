@@ -3,8 +3,6 @@ const path = require('path');
 const fs = require('fs');
 const { Player, findMpv } = require('./player');
 const { WinEmbed } = require('./winembed');
-const emule = require('./emule');
-const { EmuleService } = require('./emule/service');
 const { LetterboxdService, keyOf: lbKey } = require('./letterboxd');
 const { Updater } = require('./updater');
 const { DiscordPresence, mediaInfo } = require('./discord');
@@ -30,14 +28,7 @@ const DEFAULT_SETTINGS = {
   minimizeOnPlay: false,
   mpvPath: '',
   extraMpvArgs: '',
-  emuleEnabled: false,           // sólo administradores
-  emulePort: 4711,
-  emulePassword: '',
-  emulePath: '',
-  emuleMoveToLibrary: true,      // copiar los vídeos terminados a la carpeta del NAS
-  emuleDest: '',                 // carpeta de la biblioteca en el NAS vista desde Windows: \\NAS\Multimedia
-  emuleSearchMethod: 'global',
-  nasUser: '',                   // usuario del NAS (net use): para leer la biblioteca local y copiar ahí las descargas
+  nasUser: '',                   // usuario del NAS (net use): para leer la biblioteca local
   nasPasswordEnc: '',            // contraseña cifrada con safeStorage (nunca se envía a la ventana)
   lbUser: '',                    // usuario de Letterboxd
   autoUpdate: true,              // buscar actualizaciones al abrir (se descargan solas y se instalan al cerrar)
@@ -80,7 +71,6 @@ const settings = store('settings.json', DEFAULT_SETTINGS);
 if (Object.keys(settings.data).some(k => !(k in DEFAULT_SETTINGS))) {
   settings.data = Object.fromEntries(Object.entries(settings.data).filter(([k]) => k in DEFAULT_SETTINGS));
 }
-const emuleState = store('emule.json', { tracked: {} });
 const lbStore = store('letterboxd.json', { films: {}, ids: {}, user: '', syncedAt: 0, fullAt: 0, source: null });
 const introStore = store('introdb.json', { entries: {} });
 
@@ -170,10 +160,9 @@ app.whenReady().then(() => { if (settings.data.localMode) local.start(); configu
 app.on('window-all-closed', () => {
   player.stop();
   winEmbed.stop();
-  emuleService.stop();
   discord.shutdown();
   local.stop();
-  for (const s of [settings, emuleState, lbStore, introStore]) s.flushSync();
+  for (const s of [settings, lbStore, introStore]) s.flushSync();
   app.quit();
 });
 
@@ -228,14 +217,13 @@ function configureRemote(s = settings.data) {
   remote.configure({ url: s.remoteUrl, token: s.localMode ? '' : decryptSecret(s.remoteTokenEnc) });
 }
 
-/** Con la sesión abierta (o la biblioteca local): quién soy, mis ajustes y la biblioteca; y eMule si soy administrador */
+/** Con la sesión abierta (o la biblioteca local): quién soy, mis ajustes y la biblioteca */
 async function startSession() {
-  if (!api().ready) { me = null; serverSettings = {}; remoteView = null; emuleService.restart(); return; }
+  if (!api().ready) { me = null; serverSettings = {}; remoteView = null; return; }
   me = await api().get('/api/me').catch(() => me);
   serverSettings = await api().get('/api/settings').catch(() => serverSettings);
   discord.configure(discordConfig());
   await remoteFetch();
-  emuleService.restart();
   send('library:updated', view());
   await pullLetterboxd();
   markLetterboxdWatched();
@@ -337,7 +325,6 @@ remote.on('unauthorized', () => {
   settings.data = { ...settings.data, remoteTokenEnc: '' };
   configureRemote();
   me = null; remoteView = null;
-  emuleService.restart();
   send('session:expired', 'La sesión ha caducado o ya no tienes acceso. Vuelve a iniciar sesión.');
 });
 remote.on('offline', () => { if (localOn()) return; remoteError = 'No se puede conectar con CineLocal Server'; send('library:updated', view()); });
@@ -530,45 +517,10 @@ async function playEmbedded({ mpv, playlist, uiDir }) {
   send('toast', { type: 'error', text: 'No se pudo integrar el reproductor en la ventana; se abre en una ventana aparte.' });
 }
 
-// ---------- eMule (sólo administradores) ----------
-// Al terminar, el vídeo se copia a la carpeta de la biblioteca en el NAS (\\NAS\Multimedia); el servidor lo ve solo.
-// En modo local, a la primera carpeta de la biblioteca (y el vigilante la añade).
-const emuleDest = () => (localOn() ? local.roots()[0] || '' : settings.data.emuleDest);
-const emuleService = new EmuleService({
-  getSettings: () => ({ ...settings.data, emuleEnabled: settings.data.emuleEnabled && isAdmin(), libraryPath: emuleDest() }),
-  // series de la biblioteca con su carpeta vista desde Windows, para dejar cada episodio junto a los demás
-  getItems: () => (localOn() ? view().items : view().items.map(it => ({ ...it, path: uncPathOf(it.path) })).filter(it => it.path)),
-  state: emuleState,
-  // antes de copiar: sesión en el NAS con el usuario de Ajustes (si se ha puesto uno)
-  prepare: async () => {
-    const s = settings.data, dest = emuleDest();
-    if (!s.nasUser || !isUnc(dest)) return;
-    const r = await nas.ensure({ host: cleanHost(dest), user: s.nasUser, password: decryptSecret(s.nasPasswordEnc), roots: [dest] });
-    if (!r.ok) throw new Error('NAS: ' + r.error);
-  }
-});
-/** Ruta del servidor (/media/Series/X) → la misma carpeta desde Windows (\\NAS\Multimedia\Series\X) */
-function uncPathOf(serverPath) {
-  const base = (serverSettings.libraryPath || '/media').replace(/\/+$/, '');
-  const dest = settings.data.emuleDest;
-  if (!dest || !serverPath?.startsWith(base + '/')) return null;
-  return path.join(dest, ...serverPath.slice(base.length + 1).split('/'));
-}
-emuleService.on('update', snap => send('emule:update', snap));
-emuleService.on('completed', ({ name, moved, problem }) => {
-  const where = localOn() ? 'a la biblioteca' : 'al NAS';
-  const text = moved ? `Descarga terminada: ${name}\nCopiada ${where}; aparecerá en la biblioteca en unos segundos`
-    : problem ? `Descarga terminada: ${name}\nNo se pudo copiar ${where}: ${problem}` : `Descarga terminada: ${name}`;
-  send('toast', { type: problem ? 'error' : 'ok', text });
-  // Si se ha copiado, el aviso de "Nuevo en CineLocal" llega del servidor; si no, avisar aquí
-  if (!moved && Notification.isSupported() && win && !win.isFocused()) {
-    new Notification({ title: 'Descarga terminada', body: name, icon: path.join(__dirname, '..', '..', 'build', 'icon.png') }).show();
-  }
-});
 /** Como ipcMain.handle, pero sólo para administradores de CineLocal */
 function adminHandle(ch, fn) {
   ipcMain.handle(ch, (...a) => {
-    if (!isAdmin()) throw new Error('Sólo un administrador de CineLocal puede usar eMule');
+    if (!isAdmin()) throw new Error('Sólo un administrador de CineLocal puede hacer esto');
     return fn(...a);
   });
 }
@@ -660,10 +612,6 @@ function autoSyncLetterboxd() {
   letterboxd.sync(user, { full }).catch(e => console.error('Letterboxd:', e.message));
 }
 
-function emuleTemplatePath() {
-  try { return emule.installTemplate(DATA); } catch (e) { console.error('Plantilla de eMule:', e); return null; }
-}
-
 // ---------- actualizaciones ----------
 const updater = new Updater({
   getSettings: () => settings.data,
@@ -690,11 +638,10 @@ ipcMain.handle('settings:set', async (_e, patch) => {
   const own = Object.fromEntries(Object.entries(patch).filter(([k]) => !SERVER_KEYS.has(k)));
   settings.data = { ...settings.data, ...own };
   const s = settings.data;
-  if (['nasUser', 'nasPasswordEnc', 'emuleDest'].some(k => before[k] !== s[k])) {
+  if (['nasUser', 'nasPasswordEnc'].some(k => before[k] !== s[k])) {
     await nas.disconnect();
     if (localOn() && ['nasUser', 'nasPasswordEnc'].some(k => before[k] !== s[k])) local.library.scan();
   }
-  if (['emuleEnabled', 'emulePort', 'emulePassword'].some(k => before[k] !== s[k])) emuleService.restart();
   if (before.lbUser !== s.lbUser) {
     if (lbStore.data.user && lbStore.data.user !== s.lbUser) letterboxd.reset();
     if (s.lbUser) letterboxd.sync(s.lbUser, { full: true }).catch(() => {});
@@ -702,18 +649,6 @@ ipcMain.handle('settings:set', async (_e, patch) => {
   if (toServer.lbMarkWatched === true) markLetterboxdWatched();
   if (['discordEnabled', 'discordDiscreet'].some(k => before[k] !== s[k]) || 'discordClientId' in toServer) discord.configure(discordConfig(s));
   return publicSettings();
-});
-// Carpeta del NAS para eMule: inicia sesión con el usuario escrito (contraseña vacía = la guardada) y comprueba que se ve
-adminHandle('nas:test', async (_e, { dest, user, password }) => {
-  const host = cleanHost(dest);
-  if (!/^\\\\[^\\]+\\[^\\]+/.test(dest || '')) return { ok: false, error: 'Escribe la carpeta como \\\\NAS\\Multimedia' };
-  await nas.disconnect();
-  if (user) {
-    const r = await nas.connect(host, { host, user, password: password || decryptSecret(settings.data.nasPasswordEnc), roots: [dest] });
-    if (!r.ok) return r;
-  }
-  if (!fs.existsSync(dest)) return { ok: false, error: `No se puede abrir ${dest}. ¿Estás en casa o con la VPN conectada?` };
-  return { ok: true };
 });
 /**
  * Biblioteca local en el NAS: inicia sesión con el usuario escrito (contraseña vacía = la guardada) en el NAS de las
@@ -895,32 +830,7 @@ ipcMain.handle('letterboxd:import', async () => {
 });
 ipcMain.handle('letterboxd:clear', () => { letterboxd.reset(); return letterboxd.snapshot(); });
 
-ipcMain.handle('emule:get', () => emuleService.snapshot);
-adminHandle('emule:info', async () => ({ ...(await emule.inspect(settings.data.emulePath)), templatePath: emuleTemplatePath() }));
-adminHandle('emule:test', async (_e, { port, password }) => {
-  try { await new emule.EmuleClient({ port, password }).transfers(); return { ok: true }; }
-  catch (e) { return { ok: false, code: e.code, error: e.message }; }
-});
-adminHandle('emule:launch', async () => {
-  const inst = await emule.findInstall(settings.data.emulePath);
-  if (!inst) return { ok: false, error: 'No se encuentra emule.exe. Selecciónalo en Ajustes.' };
-  if (!(await emule.isRunning())) emule.startEmule(inst.exe);
-  setTimeout(() => emuleService.tick(), 4000);
-  return { ok: true };
-});
-adminHandle('emule:refresh', () => emuleService.refresh().catch(() => emuleService.snapshot));
-adminHandle('emule:connect', () => emuleService.run(c => c.connect()).then(() => true));
-adminHandle('emule:servers', () => emuleService.query(c => c.servers()));
-adminHandle('emule:connectServer', (_e, a = {}) => emuleService.run(c => c.connectServer(a.ip, a.port)));
-adminHandle('emule:disconnect', () => emuleService.run(c => c.disconnectServer()));
-adminHandle('emule:kad', (_e, a = {}) => emuleService.run(c => c.kad(a.op, a.ip, a.port)));
-adminHandle('emule:updateServerMet', (_e, url) => emuleService.run(c => c.updateServerMet(url)));
-adminHandle('emule:search', (_e, q) => emuleService.run(c => c.search({ method: settings.data.emuleSearchMethod, ...q })));
-adminHandle('emule:results', () => emuleService.run(c => c.searchResults()));
-adminHandle('emule:download', (_e, hash) => emuleService.run(c => c.download(hash)).then(() => true));
-adminHandle('emule:addLink', (_e, link) => emuleService.run(c => c.addLink(link)).then(() => true));
-adminHandle('emule:op', (_e, { hash, op }) => emuleService.run(c => c.fileOp(hash, op)).then(() => true));
-ipcMain.handle('dialog:pickEmule', async () => {
-  const r = await dialog.showOpenDialog(win, { properties: ['openFile'], filters: [{ name: 'eMule', extensions: ['exe'] }] });
-  return r.canceled ? null : r.filePaths[0];
-});
+// descargas: el aMule del servidor (server/amule/), sólo administradores
+adminHandle('downloads:get', () => api().get('/api/downloads'));
+adminHandle('downloads:folders', (_e, dir) => api().get('/api/downloads/folders?path=' + encodeURIComponent(dir || '')));
+adminHandle('downloads:call', (_e, { action, q }) => api().post('/api/downloads', { ...q, action }));

@@ -44,7 +44,7 @@ const META_LANGS = [
   ['fr-FR', 'Francés'], ['de-DE', 'Alemán'], ['it-IT', 'Italiano'], ['pt-PT', 'Portugués'], ['pt-BR', 'Portugués (Brasil)']
 ];
 
-// CineLocal Server (server/): la misma interfaz en el navegador, sin mpv, eMule, Discord ni actualizaciones
+// CineLocal Server (server/): la misma interfaz en el navegador, sin mpv, Discord ni actualizaciones
 const WEB = window.api.platform === 'web';
 
 const S = {
@@ -74,11 +74,11 @@ const S = {
   annEdit: null,                                                   // el aviso que se está escribiendo
   titles: {},                                                      // fichas de TMDB de lo que no está en la biblioteca
   emule: {
-    snap: { ok: false, code: 'disabled', downloads: [] },
-    info: null,
+    snap: { ok: false, code: 'offline', downloads: [], pending: [], placed: [] },
+    method: 'global',   // buscar en los servidores eD2k o en Kad
     search: { query: '', results: [], message: '', busy: false, error: null, run: 0 },
     // servidores: list null = sin cargar · open null = decidir según la conexión · busy: 'srv' | 'kad'
-    srv: { list: null, kad: null, outdated: false, error: null, at: 0, loading: false, open: null, sort: 'users', dir: -1, busy: null }
+    srv: { list: null, kad: null, error: null, at: 0, loading: false, open: null, sort: 'users', dir: -1, busy: null }
   }
 };
 
@@ -314,7 +314,7 @@ function lbBadge(lb) {
   if (!lb?.rating && !lb?.liked) return '';
   return `<span class="lb-badge" title="Tu nota en Letterboxd">${lb.rating ? `<b>${lbStars(lb.rating)}</b>` : ''}${lb.liked ? '<i>♥</i>' : ''}</span>`;
 }
-/** Película que no está en la biblioteca: su ficha, pedirla, guardarla y, si eMule está activo, buscarla */
+/** Película que no está en la biblioteca: su ficha, pedirla, guardarla y, si hay aMule en el servidor, buscarla */
 function missingCard(f, { tag = '', sub, entry } = {}) {
   const ph = { title: f.title, year: f.year, type: 'movie', meta: null };
   const lb = lbOf(f.id);
@@ -328,7 +328,7 @@ function missingCard(f, { tag = '', sub, entry } = {}) {
     <div class="art">${f.poster ? `<img loading="lazy" src="${esc(f.poster)}" alt="">` : placeholder(ph)}
       ${tag}${lbBadge(lb)}
       ${saved ? `<span class="watched-mark in-list" title="En una de tus listas">${I.check}</span>` : ''}
-      <div class="missing-hover">${tmdbE || f.url ? `<span>${I.info}${tmdbE ? 'Ver ficha' : 'Ver en Letterboxd'}</span>` : ''}${requestButton(e)}${e ? `<button class="mh-emule" data-action="wl-toggle" data-entry="${esc(JSON.stringify(e))}">${inWatchlist(e.key) ? I.bookmarkOn : I.bookmark}${inWatchlist(e.key) ? 'En tu Watchlist' : 'Watchlist'}</button>` : ''}${e ? `<button class="mh-emule" data-action="lists-pick" data-entry="${esc(JSON.stringify(e))}">${saved ? I.check : I.plus}${saved ? 'En tus listas' : 'Guardar en lista'}</button>` : ''}${emuleOn() ? `<button class="mh-emule" data-action="emule-find" data-q="${esc(f.title)}" data-alt="${esc(f.originalTitle || '')}">${I.download}Buscar en eMule</button>` : ''}</div>
+      <div class="missing-hover">${tmdbE || f.url ? `<span>${I.info}${tmdbE ? 'Ver ficha' : 'Ver en Letterboxd'}</span>` : ''}${requestButton(e)}${e ? `<button class="mh-emule" data-action="wl-toggle" data-entry="${esc(JSON.stringify(e))}">${inWatchlist(e.key) ? I.bookmarkOn : I.bookmark}${inWatchlist(e.key) ? 'En tu Watchlist' : 'Watchlist'}</button>` : ''}${e ? `<button class="mh-emule" data-action="lists-pick" data-entry="${esc(JSON.stringify(e))}">${saved ? I.check : I.plus}${saved ? 'En tus listas' : 'Guardar en lista'}</button>` : ''}${emuleOn() ? `<button class="mh-emule" ${emuleFindAttrs(f.title, f.originalTitle, tmdbE && { ...tmdbE, title: f.title, year: f.year })}>${I.download}Buscar en aMule</button>` : ''}</div>
     </div>
     <div class="cap"><div class="t">${esc(f.title)}</div><div class="s">${esc(line || 'Sin fecha')}</div></div>
   </div>`;
@@ -1485,8 +1485,10 @@ const canFix = it => {
   const p = (it?.type === 'movie' ? it.path : it?.episodes?.[0]?.path) || '';
   return (S.me?.mod || []).some(r => p.startsWith(r.replace(/\/+$/, '') + '/'));
 };
-/** eMule: sólo en el escritorio y sólo para administradores */
-const emuleOn = () => !WEB && !!S.settings.emuleEnabled && isAdmin();
+/** Descargas con el aMule del servidor: sólo administradores, y si el servidor tiene aMule configurado */
+const emuleOn = () => !!S.me?.downloads && isAdmin();
+/** Botón «Buscar en aMule»: con la ficha, para que al terminar se renombre y se coloque sin preguntar */
+const emuleFindAttrs = (q, alt, entry) => `data-action="emule-find" data-q="${esc(q)}" data-alt="${esc(alt || '')}"${entry?.tmdb ? ` data-entry="${esc(JSON.stringify({ tmdb: entry.tmdb, type: entry.type, title: entry.title, year: entry.year || null }))}"` : ''}`;
 
 /** Quién soy en CineLocal Server (web, o escritorio conectado al servidor): rol, peticiones y botones de administrador */
 async function refreshMe() {
@@ -1601,7 +1603,7 @@ function requestRow(r) {
     ? `<div class="req-reply">${REQ_STATUS[r.status]}${r.resolvedAt ? ' el ' + date(r.resolvedAt) : ''}${r.resolvedBy ? ` por ${esc(r.resolvedBy)}` : r.status === 'done' ? ' (al llegar a la biblioteca)' : ''}${r.reply ? ` · «${esc(r.reply)}»` : ''}</div>` : '';
   const actions = admin
     ? (r.status === 'pending'
-      ? `${emuleOn() ? `<button class="btn btn-ghost btn-sm" data-action="emule-find" data-q="${esc(r.title)}">${I.download}Buscar en eMule</button>` : ''}
+      ? `${emuleOn() ? `<button class="btn btn-ghost btn-sm" ${emuleFindAttrs(r.title, '', r)}>${I.download}Buscar en aMule</button>` : ''}
          <button class="btn btn-accent btn-sm" data-action="req-resolve" data-id="${r.id}" data-status="done">Conseguida</button>
          <button class="btn btn-ghost btn-sm" data-action="req-resolve" data-id="${r.id}" data-status="rejected">Rechazar</button>`
       : `<button class="btn btn-ghost btn-sm" data-action="req-resolve" data-id="${r.id}" data-status="pending">Volver a pendiente</button>`)
@@ -1630,6 +1632,7 @@ const ACCESS_KIND = {
   'collection-create': 'Colección creada', 'collection-update': 'Colección cambiada', 'collection-delete': 'Colección borrada',
   'request-create': 'Petición', 'request-cancel': 'Petición cancelada', 'request-resolve': 'Petición resuelta', 'request-remove': 'Petición borrada',
   settings: 'Ajustes', scan: 'Escaneo', 'meta-refresh': 'Buscar fichas', identify: 'Ficha corregida', poster: 'Carátula cambiada',
+  'download-download': 'Descarga en aMule', 'download-cancel': 'Descarga cancelada', 'download-place': 'Descarga colocada', 'download-dismiss': 'Descarga quitada',
   'user-access': 'Acceso de usuario', 'folder-access': 'Carpeta privada', 'announce-create': 'Aviso enviado', 'announce-delete': 'Aviso borrado', 'announce-clear': 'Avisos borrados', error: 'Error', 'client-error': 'Error en la app'
 };
 const ACCESS_TYPES = [['', 'Todo'], ['video', 'Vídeo'], ['action', 'Acciones'], ['session', 'Sesiones'], ['error', 'Errores']];
@@ -2140,7 +2143,7 @@ function viewDetail(id) {
               <button data-action="mark-all" data-id="${it.id}" data-watched="${watchedAll ? 0 : 1}">${watchedAll ? I.restart : I.eye}${watchedAll ? 'Marcar como no visto' : 'Marcar como visto'}</button>
               ${canFix(it) ? `<button data-action="identify" data-id="${it.id}">${I.tag}Corregir coincidencia</button>` : ''}
               ${canManage() ? `<button data-action="poster" data-id="${it.id}">${I.image}Cambiar carátula</button>` : ''}
-              ${emuleOn() ? `<button data-action="emule-find" data-q="${esc(T(it))}">${I.download}Buscar en eMule</button>` : ''}
+              ${emuleOn() ? `<button ${emuleFindAttrs(T(it), m.originalTitle, m.tmdbId && { tmdb: m.tmdbId, type: it.type, title: T(it), year: m.year })}>${I.download}Buscar en aMule</button>` : ''}
               ${WEB ? '' : `<button data-action="reveal" data-path="${esc(it.type === 'movie' ? it.path : it.episodes[0].path)}">${I.folder}Abrir ubicación</button>`}
             </div>
           </div>
@@ -2218,7 +2221,7 @@ function viewTitle(type, id) {
           <button class="round-btn ${inWatchlist(e.key) ? 'on' : ''}" title="${inWatchlist(e.key) ? 'Quitar de la Watchlist' : 'Añadir a la Watchlist'}" data-action="wl-toggle" data-entry="${esc(JSON.stringify(e))}">${inWatchlist(e.key) ? I.bookmarkOn : I.bookmark}</button>
           <button class="round-btn ${saved ? 'on' : ''}" title="Guardar en una lista" data-action="lists-pick" data-entry="${esc(JSON.stringify(e))}">${saved ? I.check : I.plus}</button>
           ${m.trailer ? `<button class="round-btn" title="Ver tráiler" data-action="trailer" data-url="${esc(m.trailer)}">${I.yt}</button>` : ''}
-          ${emuleOn() ? `<button class="round-btn" title="Buscar en eMule" data-action="emule-find" data-q="${esc(m.title)}" data-alt="${esc(m.originalTitle || '')}">${I.download}</button>` : ''}
+          ${emuleOn() ? `<button class="round-btn" title="Buscar en aMule" ${emuleFindAttrs(m.title, m.originalTitle, e)}>${I.download}</button>` : ''}
         </div>
       </div>
     </section>
@@ -2340,8 +2343,8 @@ function viewSettings() {
       ${letterboxdSettingsHTML(s, sw)}
     </div>
 
-    ${!WEB && isAdmin() ? `<div class="set-group"><h3>Descargas (eMule)</h3>
-      ${emuleSettingsHTML(s, sw)}
+    ${emuleOn() ? `<div class="set-group"><h3>Descargas (aMule)</h3>
+      ${downloadsSettingsHTML()}
     </div>` : ''}
 
     ${!WEB && window.api.platform === 'win32' ? `<div class="set-group" id="discord"><h3>Discord</h3>
@@ -2379,7 +2382,7 @@ const isUncPath = p => /^\\\\[^\\]+\\[^\\]+/.test(p || '');
 /** Biblioteca local en el NAS: usuario propio para leer las carpetas \\NAS\… (opcional) */
 function nasLoginHTML(s) {
   return `<div class="set-row nas-row"><div class="lbl"><div class="t">Inicio de sesión en el NAS</div>
-      <div class="d">Opcional: un usuario del NAS con permiso de lectura en esas carpetas (de escritura si eMule copia ahí las descargas), sin depender de las credenciales guardadas en el Explorador de Windows. Vacío = la sesión que tenga Windows. La contraseña se guarda cifrada con tu cuenta de Windows.</div></div>
+      <div class="d">Opcional: un usuario del NAS con permiso de lectura en esas carpetas, sin depender de las credenciales guardadas en el Explorador de Windows. Vacío = la sesión que tenga Windows. La contraseña se guarda cifrada con tu cuenta de Windows.</div></div>
       <div class="ctl">
         <input class="input" data-lnas="user" value="${esc(s.nasUser)}" placeholder="Usuario del NAS" spellcheck="false">
         <input class="input" type="password" data-lnas="password" placeholder="${s.nasHasPassword ? 'Contraseña guardada' : 'Contraseña'}">
@@ -2388,16 +2391,15 @@ function nasLoginHTML(s) {
       <div class="nas-status" id="nasStatus">${nasStatePill()}</div></div>`;
 }
 
-// ---------------------------------------------------------------- descargas (eMule)
+// ---------------------------------------------------------------- descargas (aMule en el NAS)
 const DL_STATES = {
   downloading: 'Descargando', waiting: 'En espera', stalled: 'Sin fuentes', paused: 'En pausa', stopped: 'Detenida',
-  complete: 'Completada', completing: 'Completando…', hashing: 'Comprobando…', waitinghash: 'Comprobando…', error: 'Error'
+  complete: 'Completada', completing: 'Completando…', hashing: 'Comprobando…', error: 'Error'
 };
 const EMULE_ERRORS = {
-  offline: ['eMule no está abierto', 'O su servidor web está desactivado (Opciones → Servidor Web). Cuando responda, aquí podrás elegir servidor y conectar Kad.'],
-  auth: ['eMule ha rechazado la contraseña', 'Escribe en Ajustes la misma contraseña que pusiste en eMule → Opciones → Servidor Web.'],
-  template: ['eMule no está usando la plantilla de CineLocal', 'Indícala en eMule → Opciones → Servidor Web → Plantilla y pulsa «Recargar». La ruta está en Ajustes.'],
-  unconfigured: ['Falta configurar eMule', 'Sigue los pasos de Ajustes → Descargas (eMule).']
+  offline: ['aMule no responde', 'Comprueba en el NAS que el contenedor «amule» está en marcha (Container Manager).'],
+  auth: ['aMule ha rechazado la contraseña', 'AMULE_PASSWORD de server/.env tiene que ser la contraseña de la interfaz web de aMule (WEBUI_PWD).'],
+  unconfigured: ['aMule no está configurado en el servidor', 'Falta AMULE_URL o AMULE_PASSWORD en server/.env.']
 };
 
 function fmtRate(bps) {
@@ -2427,15 +2429,14 @@ function releaseTags(name) {
   return t;
 }
 
-function activeDownloads() { return (S.emule.snap.downloads || []).filter(d => d.state !== 'complete'); }
+/** Lo que pide atención: descargas en curso y las terminadas que esperan a que se elija dónde van */
+function activeDownloads() { return [...(S.emule.snap.downloads || []).filter(d => d.state !== 'complete'), ...(S.emule.snap.pending || [])]; }
 
 function emuleStatusHTML() {
   const sn = S.emule.snap;
   if (!sn.ok) {
-    const [t, d] = EMULE_ERRORS[sn.code] || ['No se puede conectar con eMule', sn.error || ''];
-    return `<div class="banner"><div class="txt"><b>${esc(t)}.</b> ${esc(d)}</div>
-      ${sn.code === 'offline' ? '<button class="btn btn-accent btn-sm" data-action="emule-launch">Abrir eMule</button>' : ''}
-      <button class="btn btn-ghost btn-sm" data-nav="settings">Ajustes</button></div>`;
+    const [t, d] = EMULE_ERRORS[sn.code] || ['No se puede conectar con aMule', sn.error || ''];
+    return `<div class="banner"><div class="txt"><b>${esc(t)}.</b> ${esc(d)}</div></div>`;
   }
   const st = sn.status;
   const srv = S.emule.srv;
@@ -2445,7 +2446,7 @@ function emuleStatusHTML() {
   const n = srv.list?.length;
   return `<div class="dl-status">
     <span><small>Servidor</small><span class="status-pill ${server[0]}">${server[1]}</span>${(st.server === 'high' || st.server === 'low') && st.serverName ? `<em title="${esc(st.serverName)}">${esc(st.serverName)}</em>` : ''}</span>
-    <span><small>Kad</small><span class="status-pill ${kad[0]}">${kad[1]}</span>${srv.kad && st.kad !== 'off' && !srvOutdated() ? `<em>${srv.kad.contacts} contactos</em>` : ''}</span>
+    <span><small>Kad</small><span class="status-pill ${kad[0]}">${kad[1]}</span>${st.kad !== 'off' && st.kadContacts ? `<em>${st.kadContacts} contactos</em>` : ''}</span>
     <span><small>Bajada</small><b>${fmtRate(st.down) || '0 KB/s'}</b></span>
     <span><small>Subida</small><b>${fmtRate(st.up) || '0 KB/s'}</b></span>
     <span class="dl-conn-btns">
@@ -2455,17 +2456,12 @@ function emuleStatusHTML() {
       ${st.kad === 'off'
         ? `<button class="btn btn-accent btn-sm" data-action="emule-kad" data-op="connect"${busy('kad')}>Conectar Kad</button>`
         : `<button class="btn btn-ghost btn-sm" data-action="emule-kad" data-op="disconnect"${busy('kad')}>Desconectar Kad</button>`}
-      ${srvOutdated() ? '' : `<button class="btn btn-ghost btn-sm srv-toggle${srvOpen() ? ' on' : ''}" data-action="emule-srv-toggle" aria-expanded="${srvOpen()}">Servidores${n ? `<span class="srv-n">${n}</span>` : ''}${I.right}</button>`}
+      <button class="btn btn-ghost btn-sm srv-toggle${srvOpen() ? ' on' : ''}" data-action="emule-srv-toggle" aria-expanded="${srvOpen()}">Servidores${n ? `<span class="srv-n">${n}</span>` : ''}${I.right}</button>
     </span>
   </div>`;
 }
 
 // ---- conexión: lista de servidores y Kad
-/** eMule sigue con una plantilla anterior en memoria: no sabe devolver la lista de servidores */
-function srvOutdated() {
-  const sn = S.emule.snap;
-  return !!(sn.ok && ((sn.status?.template || 1) < 2 || S.emule.srv.outdated));
-}
 /** Abierta por defecto mientras no haya servidor conectado; después, lo que elija el usuario */
 function srvOpen() {
   const srv = S.emule.srv, st = S.emule.snap.status;
@@ -2484,19 +2480,11 @@ function sortedServers() {
     || b.users - a.users);
 }
 
-function serversHintHTML() {
-  if (!srvOutdated()) return '';
-  const p = S.emule.info?.templatePath;
-  return `<div class="banner warn"><div class="txt"><b>eMule sigue usando la versión anterior de la plantilla de CineLocal.</b>
-    Para ver y elegir servidores desde aquí, en eMule abre <b>Opciones → Servidor Web</b>, pulsa <b>Recargar</b> junto a la plantilla y después <b>Aplicar</b>. No hace falta cerrar eMule.${p ? `<br><small>Plantilla: <code>${esc(p)}</code></small>` : ''}</div>
-    <button class="btn btn-ghost btn-sm" data-action="emule-srv-refresh">Comprobar</button></div>`;
-}
-
 function serversBodyHTML() {
   const srv = S.emule.srv;
   if (srv.error) return `<p class="dl-empty err">${esc(srv.error)}</p>`;
-  if (!srv.list) return '<div class="srv-empty"><div class="spinner"></div>Cargando la lista de servidores de eMule…</div>';
-  if (!srv.list.length) return `<div class="srv-empty">eMule no tiene servidores en su lista. Añade los de un <b>server.met</b> aquí abajo o conéctate sólo a Kad.</div>`;
+  if (!srv.list) return '<div class="srv-empty"><div class="spinner"></div>Cargando la lista de servidores de aMule…</div>';
+  if (!srv.list.length) return `<div class="srv-empty">aMule no tiene servidores en su lista. Añade los de un <b>server.met</b> aquí abajo o conéctate sólo a Kad.</div>`;
   const st = S.emule.snap.status || {};
   const arrow = (k) => srv.sort === k ? `<i class="srv-arrow">${srv.dir < 0 ? '▼' : '▲'}</i>` : '';
   const th = (k, label, cls = '') => `<th class="sortable ${cls}${srv.sort === k ? ' on' : ''}" data-action="emule-srv-sort" data-k="${k}" title="Ordenar por ${label.toLowerCase()}">${label}${arrow(k)}</th>`;
@@ -2517,13 +2505,12 @@ function serversBodyHTML() {
   return `<div class="srv-wrap"><table class="srv">
     <thead><tr>${th('name', 'Servidor')}<th>Dirección</th>${th('users', 'Usuarios', 'num')}${th('files', 'Archivos', 'num')}${th('ping', 'Ping', 'num')}<th></th></tr></thead>
     <tbody>${rows}</tbody></table></div>
-    ${st.server === 'connecting' ? '<p class="srv-note"><span class="spinner sm"></span>eMule está probando servidores. Si tarda, elige uno de la lista o pulsa Cancelar.</p>' : ''}`;
+    ${st.server === 'connecting' ? '<p class="srv-note"><span class="spinner sm"></span>aMule está probando servidores. Si tarda, elige uno de la lista o pulsa Cancelar.</p>' : ''}`;
 }
 
 function serversPanelHTML() {
   const kadIdle = S.emule.snap.status?.kad === 'off' || S.emule.snap.status?.kad === 'connecting';
-  return `<div id="dlSrvHint">${serversHintHTML()}</div>
-    <div class="srv-panel${S.emule.snap.ok && srvOpen() && !srvOutdated() ? '' : ' hidden'}" id="dlServers">
+  return `<div class="srv-panel${S.emule.snap.ok && srvOpen() ? '' : ' hidden'}" id="dlServers">
       <div id="dlSrvBody">${serversBodyHTML()}</div>
       <div class="srv-foot">
         <form id="srvMet" class="srv-form"><label for="srvMetUrl">Añadir servidores de un server.met</label>
@@ -2538,32 +2525,29 @@ function serversPanelHTML() {
 
 function paintServers() {
   if (S.route.name !== 'downloads' || !$('#dlServers')) return;
-  $('#dlSrvHint').innerHTML = serversHintHTML();
-  $('#dlServers').classList.toggle('hidden', !(S.emule.snap.ok && srvOpen() && !srvOutdated()));
+  $('#dlServers').classList.toggle('hidden', !(S.emule.snap.ok && srvOpen()));
   $('#dlSrvBody').innerHTML = serversBodyHTML();
   const st = S.emule.snap.status;
   $('#kadBoot').classList.toggle('hidden', !(st && (st.kad === 'off' || st.kad === 'connecting')));
 }
 
-/** Aplica la respuesta de servers()/connectServer()/disconnect()/updateServerMet() */
+/** Aplica la respuesta de servers/connectServer/disconnect/updateServerMet */
 function setServers(r) {
   const srv = S.emule.srv;
   srv.at = Date.now();
   srv.error = null;
-  srv.outdated = r.outdated;
-  if (!r.outdated) srv.list = r.servers;
+  srv.list = r.servers;
   srv.kad = r.kad;
 }
 
-/** Se pide al abrir Descargas y, con la lista visible, cada 5 s como mucho (al ritmo del sondeo de eMule) */
+/** Se pide al abrir Descargas y, con la lista visible, cada 5 s como mucho (al ritmo del sondeo del servidor) */
 async function loadServers(force = false) {
   const srv = S.emule.srv;
   if (S.route.name !== 'downloads' || !emuleOn() || !S.emule.snap.ok || document.hidden) return;
-  // con la plantilla antigua sólo se vuelve a mirar si lo pide el usuario o si la cabecera ya trae la nueva
-  if (!force && ((S.emule.snap.status?.template || 1) < 2 || (!srvOpen() && srv.list))) return;
+  if (!force && !srvOpen() && srv.list) return;
   if (srv.loading || (!force && Date.now() - srv.at < 5000)) return;
   srv.loading = true;
-  try { setServers(await window.api.emule.servers()); }
+  try { setServers(await window.api.emule.call('servers')); }
   catch (e) { srv.error = errText(e); srv.at = Date.now(); }
   finally { srv.loading = false; }
   paintServers();
@@ -2572,13 +2556,13 @@ async function loadServers(force = false) {
 
 function downloadRow(d) {
   const pc = Math.floor(d.progress * 1000) / 10;
-  const active = !['complete', 'completing', 'hashing', 'waitinghash', 'error'].includes(d.state);
+  const active = !['complete', 'completing', 'hashing', 'error'].includes(d.state);
   const paused = d.state === 'paused' || d.state === 'stopped';
   const sub = [
     `<b class="st-${esc(d.state)}">${DL_STATES[d.state] || esc(d.state)}</b>`,
     d.state === 'complete' ? fmtSize(d.size) : `${pc.toFixed(1)}% · ${d.done ? fmtSize(d.done) : '0 MB'} de ${fmtSize(d.size)}`,
     fmtRate(d.speed),
-    active && !paused ? `${d.sources} ${d.sources === 1 ? 'fuente' : 'fuentes'}` : '',
+    active && !paused ? `${d.sources} de ${d.sourcesTotal} ${d.sourcesTotal === 1 ? 'fuente' : 'fuentes'}` : '',
     fmtEta(d) ? `quedan ${fmtEta(d)}` : ''
   ].filter(Boolean).join('<i class="dot"></i>');
   return `<div class="dl ${esc(d.state)}">
@@ -2586,24 +2570,53 @@ function downloadRow(d) {
       <div class="dl-name" title="${esc(d.name)}">${esc(d.name)}</div>
       <div class="dl-bar"><i style="width:${pc}%"></i></div>
       <div class="dl-sub">${sub}</div>
+      ${d.target ? `<div class="dl-target" title="Al terminar">${I.right}${esc(d.target)}</div>` : ''}
     </div>
     <div class="dl-actions">
       ${active ? (paused
         ? `<button class="round-btn sm" title="Reanudar" data-action="dl-op" data-op="resume" data-hash="${d.hash}">${I.play}</button>`
         : `<button class="round-btn sm" title="Pausar" data-action="dl-op" data-op="pause" data-hash="${d.hash}">${I.pause}</button>`) : ''}
       ${d.link ? `<button class="round-btn sm" title="Copiar enlace ed2k" data-action="dl-copy" data-link="${esc(d.link)}">${I.link}</button>` : ''}
-      ${d.state === 'complete'
-        ? `<button class="round-btn sm" title="Quitar de la lista" data-action="dl-op" data-op="clear" data-hash="${d.hash}">${I.check}</button>`
-        : active ? `<button class="round-btn sm" title="Cancelar descarga" data-action="dl-cancel" data-hash="${d.hash}" data-name="${esc(d.name)}">${I.close}</button>` : ''}
+      ${active ? `<button class="round-btn sm" title="Cancelar descarga" data-action="dl-cancel" data-hash="${d.hash}" data-name="${esc(d.name)}">${I.close}</button>` : ''}
     </div>
   </div>`;
 }
 
 function downloadsListHTML() {
-  const list = [...(S.emule.snap.downloads || [])].sort((a, b) => (a.state === 'complete') - (b.state === 'complete'));
   if (!S.emule.snap.ok) return '';
-  if (!list.length) return '<p class="dl-empty">No hay descargas en eMule. Busca arriba o pega un enlace ed2k.</p>';
+  // las completadas sólo se ven un momento: el servidor las coloca y las quita de aMule
+  const list = [...(S.emule.snap.downloads || [])].sort((a, b) => (a.state === 'complete') - (b.state === 'complete'));
+  if (!list.length) return '<p class="dl-empty">No hay descargas en aMule. Busca arriba o pega un enlace ed2k.</p>';
   return list.map(downloadRow).join('');
+}
+
+/** Terminadas que no se han podido colocar solas: se elige la ficha y la carpeta */
+function pendingHTML() {
+  const list = S.emule.snap.pending || [];
+  if (!list.length) return '';
+  return `<h2 class="section-title">Pendientes de colocar</h2>
+    <div class="dl-list">${list.map(p => `<div class="dl pending">
+      <div class="dl-main">
+        <div class="dl-name" title="${esc(p.name)}">${esc(p.name)}</div>
+        <div class="dl-sub"><b class="st-error">${esc(p.reason)}</b><i class="dot"></i>${fmtSize(p.size)}${p.suggestion ? `<i class="dot"></i>¿${esc(p.suggestion.title)}${p.suggestion.year ? ` (${p.suggestion.year})` : ''}?` : ''}</div>
+      </div>
+      <div class="dl-actions">
+        <button class="btn btn-accent btn-sm" data-action="dl-place" data-hash="${p.hash}">Colocar</button>
+        <button class="round-btn sm" title="Quitar de la lista (el archivo se queda en la carpeta de descargas de aMule)" data-action="dl-dismiss" data-hash="${p.hash}" data-name="${esc(p.name)}">${I.close}</button>
+      </div>
+    </div>`).join('')}</div>`;
+}
+
+function placedHTML() {
+  const list = S.emule.snap.placed || [];
+  if (!list.length) return '';
+  return `<h2 class="section-title">Colocadas en la biblioteca <button class="link-btn" data-action="dl-clear-placed">Vaciar</button></h2>
+    <div class="dl-list">${list.map(p => `<div class="dl placed">
+      <div class="dl-main">
+        <div class="dl-name" title="${esc(p.dest)}">${I.check}${esc(p.dest)}</div>
+        <div class="dl-sub">${esc(p.name)}<i class="dot"></i>${new Date(p.at).toLocaleString('es-ES', { dateStyle: 'short', timeStyle: 'short' })}</div>
+      </div>
+    </div>`).join('')}</div>`;
 }
 
 function searchResultsHTML() {
@@ -2614,6 +2627,7 @@ function searchResultsHTML() {
   const res = [...s.results].sort((a, b) => b.sources - a.sources);
   const head = `<div class="dl-res-head">${s.busy ? '<div class="spinner"></div>' : ''}
     <span>${res.length ? `${res.length} resultados` : s.busy ? 'Buscando en la red eD2k…' : 'Sin resultados. Prueba con menos palabras o con el título original.'}</span>
+    ${s.entry ? `<small>Para: ${esc(s.entry.title)}${s.entry.year ? ` (${s.entry.year})` : ''}</small>` : ''}
     ${s.message && !s.busy ? `<small>${esc(s.message)}</small>` : ''}
     <span class="spacer"></span>${s.alt && !s.busy ? `<button class="btn btn-ghost btn-sm" data-action="emule-alt">${I.search}Buscar «${esc(s.alt)}»</button>` : ''}
     ${res.length || !s.busy ? '<button class="link-btn" data-action="dl-clear-results">Cerrar</button>' : ''}</div>`;
@@ -2623,33 +2637,35 @@ function searchResultsHTML() {
         <div class="dl-sub">${fmtSize(r.size)}<i class="dot"></i>${r.sources} ${r.sources === 1 ? 'fuente' : 'fuentes'}${r.complete ? ` (${r.complete} ${r.complete === 1 ? 'completa' : 'completas'})` : ''}
         ${releaseTags(r.name).map(t => `<span class="badge">${t}</span>`).join('')}</div></div>
       ${inList.has(r.hash) ? '<span class="status-pill ok">En descargas</span>'
-        : `<button class="btn btn-ghost btn-sm" data-action="dl-get" data-hash="${r.hash}">${I.download}Descargar</button>`}
+        : `<button class="btn btn-ghost btn-sm" data-action="dl-get" data-hash="${r.hash}" data-name="${esc(r.name)}">${I.download}Descargar</button>`}
     </div>`;
   }).join('')}</div>` : '');
 }
 
 function viewDownloads() {
   const s = S.emule.search;
-  const method = S.settings.emuleSearchMethod || 'global';
+  const method = S.emule.method;
   return `<div class="page downloads">
     ${adminHead('downloads')}
     <div id="dlStatus">${emuleStatusHTML()}</div>
     ${serversPanelHTML()}
     <form class="dl-search" id="dlSearch">
-      <div class="search big">${I.search}<input name="q" value="${esc(s.query)}" placeholder="Buscar en eMule: título, año, calidad…" spellcheck="false" autocomplete="off"></div>
-      <select class="select" name="method" data-set="emuleSearchMethod" title="Dónde buscar">
+      <div class="search big">${I.search}<input name="q" value="${esc(s.query)}" placeholder="Buscar en aMule: título, año, calidad…" spellcheck="false" autocomplete="off"></div>
+      <select class="select" name="method" title="Dónde buscar">
         <option value="global" ${method === 'global' ? 'selected' : ''}>Servidores</option>
         <option value="kademlia" ${method === 'kademlia' ? 'selected' : ''}>Kad</option>
       </select>
       <button class="btn btn-primary btn-sm">Buscar</button>
     </form>
     <div id="dlResults">${searchResultsHTML()}</div>
-    <h2 class="section-title">En eMule</h2>
+    <div id="dlPending">${pendingHTML()}</div>
+    <h2 class="section-title">En aMule</h2>
     <div class="dl-list" id="dlList">${downloadsListHTML()}</div>
     <form class="dl-link" id="dlLink">
       <input class="input" name="link" placeholder="Pega un enlace ed2k://|file|…" spellcheck="false" autocomplete="off">
       <button class="btn btn-ghost btn-sm">Añadir</button>
     </form>
+    <div id="dlPlaced">${placedHTML()}</div>
   </div>`;
 }
 
@@ -2662,7 +2678,9 @@ function paintEmule() {
   if (S.route.name === 'downloads') {
     $('#dlStatus').innerHTML = emuleStatusHTML();
     $('#dlList').innerHTML = downloadsListHTML();
-    if (!S.emule.snap.ok) S.emule.srv.list = S.emule.srv.kad = null;   // eMule cerrado: no enseñar datos viejos
+    $('#dlPending').innerHTML = pendingHTML();
+    $('#dlPlaced').innerHTML = placedHTML();
+    if (!S.emule.snap.ok) S.emule.srv.list = S.emule.srv.kad = null;   // aMule parado: no enseñar datos viejos
     paintServers();
     loadServers();
   }
@@ -2670,29 +2688,28 @@ function paintEmule() {
 }
 function paintResults() { if (S.route.name === 'downloads') $('#dlResults').innerHTML = searchResultsHTML(); }
 
-/** alt: otra forma de buscar lo mismo (p. ej. el título original), ofrecida con un clic en los resultados */
-async function emuleSearch(query, alt) {
+/**
+ * alt: otra forma de buscar lo mismo (p. ej. el título original), ofrecida con un clic en los resultados.
+ * entry: la ficha del título que se busca (desde su página): al descargar, ya se sabe qué es
+ */
+async function emuleSearch(query, alt, entry = null) {
   query = query.trim();
   if (!query) return;
   alt = alt && normName(alt) !== normName(query) ? alt.trim() : null;
-  const s = S.emule.search = { query, alt, results: [], message: '', busy: true, error: null, run: S.emule.search.run + 1 };
+  const s = S.emule.search = { query, alt, entry, results: [], message: '', busy: true, error: null, run: S.emule.search.run + 1 };
   const input = $('#dlSearch')?.q;
   if (input && input.value !== query) input.value = query;
   const run = s.run;
   paintResults();
   try {
-    let r = await window.api.emule.search({ query });
-    // eMule va recibiendo resultados: consultar hasta que dejen de llegar
-    let stable = 0;
-    for (let i = 0; i < 20 && run === S.emule.search.run; i++) {
+    let r = await window.api.emule.call('search', { query, method: S.emule.method });
+    // aMule va recibiendo resultados: consultar hasta que termine (o dejen de llegar)
+    for (let i = 0; i < 30 && run === S.emule.search.run && !r.done; i++) {
       s.results = r.results; s.message = r.message;
       paintResults();
       await new Promise(res => setTimeout(res, 2500));
       if (run !== S.emule.search.run) return;
-      const prev = s.results.length;
-      r = await window.api.emule.results();
-      stable = r.results.length === prev ? stable + 1 : 0;
-      if (i >= 4 && stable >= 3) break;
+      r = await window.api.emule.call('results');
     }
     s.results = r.results; s.message = r.message;
   } catch (e) {
@@ -2712,52 +2729,135 @@ function confirmModal(title, text, okLabel) {
   });
 }
 
+/**
+ * Dónde y como qué va una descarga. mode «download»: antes de empezar (ficha opcional: sin ella se identifica por el
+ * nombre al terminar) · «place»: una pendiente (ficha obligatoria). Devuelve { entry, dest } o null si se cancela.
+ */
+function placeDialog({ mode, name, entry = null, dest = '' }) {
+  return new Promise(resolve => {
+    const st = { entry, dest, browse: dest || '', auto: !dest, searching: !entry && mode === 'place' };
+    const guess = parseNameLite(name);
+    const m = modal(`<div class="modal-head"><h2>${mode === 'place' ? 'Colocar en la biblioteca' : 'Descargar'}</h2><p class="pl-file">${esc(name)}</p></div>
+      <div class="pl-sec"><h3>Título</h3><div id="plEntry"></div>
+        <form class="modal-search hidden" id="plForm">
+          <input class="input" name="q" value="${esc(entry?.title || guess.title)}" placeholder="Título">
+          <input class="input year" name="y" value="${esc(entry?.year || guess.year || '')}" placeholder="Año">
+          <select class="select" name="t"><option value="movie">Película</option><option value="series" ${(entry?.type || guess.type) === 'series' ? 'selected' : ''}>Serie</option></select>
+          <button class="btn btn-primary btn-sm">Buscar</button>
+        </form>
+        <div class="modal-list pl-list hidden" id="plList"></div>
+        <div class="pl-ep hidden" id="plEp"><label>Temporada <input class="input" name="season" inputmode="numeric" value="${guess.season ?? ''}"></label>
+          <label>Episodio <input class="input" name="episode" inputmode="numeric" value="${guess.episode ?? ''}"></label></div>
+      </div>
+      <div class="pl-sec"><h3>Carpeta</h3>
+        <label class="pl-radio"><input type="radio" name="plDest" value="auto" ${st.auto ? 'checked' : ''}> Automática <small>películas a «Películas»; episodios a la carpeta de su serie</small></label>
+        <label class="pl-radio"><input type="radio" name="plDest" value="pick" ${st.auto ? '' : 'checked'}> Elegir carpeta</label>
+        <div class="pl-browser hidden" id="plBrowser"></div>
+      </div>
+      <div class="modal-foot" style="gap:10px"><button class="btn btn-ghost btn-sm" data-r="0">Cancelar</button>
+        <button class="btn btn-accent btn-sm" data-r="1">${mode === 'place' ? 'Colocar' : `${I.download}Descargar`}</button></div>`);
+    const form = $('#plForm', m), list = $('#plList', m), ep = $('#plEp', m), browser = $('#plBrowser', m);
+    const paintEntry = () => {
+      const e = st.entry;
+      $('#plEntry', m).innerHTML = e
+        ? `<div class="pl-chosen"><span><b>${esc(e.title)}</b>${e.year ? ` (${e.year})` : ''} · ${e.type === 'series' ? 'Serie' : 'Película'}</span><button class="link-btn" data-act="change">Cambiar</button>${mode === 'download' ? '<button class="link-btn" data-act="clear">Sin ficha</button>' : ''}</div>`
+        : `<div class="pl-chosen"><span>${mode === 'place' ? 'Elige la ficha:' : 'Sin ficha: al terminar se identificará por el nombre del archivo (si no es seguro, quedará pendiente).'}</span>${st.searching ? '' : '<button class="link-btn" data-act="change">Elegir ficha</button>'}</div>`;
+      form.classList.toggle('hidden', !st.searching);
+      list.classList.toggle('hidden', !st.searching);
+      // la temporada y el episodio sólo hacen falta al colocar una serie a mano
+      ep.classList.toggle('hidden', !(mode === 'place' && (st.entry?.type || form.t.value) === 'series'));
+    };
+    const search = async () => {
+      list.innerHTML = '<p class="pl-msg">Buscando…</p>';
+      try {
+        const type = form.t.value;
+        const res = await window.api.searchMeta({ type, query: form.q.value.trim(), year: form.y.value.trim() || null });
+        list.innerHTML = res.length ? res.slice(0, 12).map(r => `<div class="result" data-tmdb="${r.id}" data-type="${type}" data-title="${esc(r.title)}" data-year="${esc(r.year || '')}">
+          <div class="p">${r.poster ? `<img src="${esc(r.poster)}" alt="">` : ''}</div>
+          <div><div class="t">${esc(r.title)}<small>${r.year || ''}${r.originalTitle && r.originalTitle !== r.title ? ' · ' + esc(r.originalTitle) : ''}</small></div>
+          <div class="o">${esc(r.overview || '')}</div></div></div>`).join('') : '<p class="pl-msg">Sin resultados. Prueba con el título original.</p>';
+      } catch (e) { list.innerHTML = `<p class="pl-msg err">${esc(errText(e))}</p>`; }
+    };
+    const browse = async (dir) => {
+      browser.innerHTML = '<p class="pl-msg">Cargando…</p>';
+      try {
+        const r = await window.api.emule.folders(dir);
+        st.browse = r.path;
+        const parts = r.path ? r.path.split('/') : [];
+        const crumbs = [`<button class="link-btn" data-dir="">${esc(r.root)}</button>`, ...parts.map((p, i) => `<button class="link-btn" data-dir="${esc(parts.slice(0, i + 1).join('/'))}">${esc(p)}</button>`)].join(' / ');
+        browser.innerHTML = `<div class="pl-crumbs">${crumbs}</div>
+          <div class="pl-dirs">${r.dirs.map(d => `<button class="pl-dir" data-dir="${esc(r.path ? r.path + '/' + d : d)}">${I.right}${esc(d)}</button>`).join('') || '<p class="pl-msg">Sin subcarpetas</p>'}</div>
+          <div class="pl-here">Irá a: <b>${esc([r.root, ...parts].join(' / '))}</b></div>`;
+      } catch (e) { browser.innerHTML = `<p class="pl-msg err">${esc(errText(e))}</p>`; }
+    };
+    const paintDest = () => {
+      browser.classList.toggle('hidden', st.auto);
+      if (!st.auto && !browser.innerHTML) browse(st.browse);
+    };
+    form.addEventListener('submit', e => { e.preventDefault(); search(); });
+    form.t.addEventListener('change', paintEntry);
+    m.addEventListener('change', e => { if (e.target.name === 'plDest') { st.auto = e.target.value === 'auto'; paintDest(); } });
+    m.addEventListener('click', async e => {
+      const t = e.target;
+      const act = t.closest('[data-act]')?.dataset.act;
+      if (act === 'change') { st.searching = true; paintEntry(); search(); return; }
+      if (act === 'clear') { st.entry = null; st.searching = false; paintEntry(); return; }
+      const r = t.closest('.result[data-tmdb]');
+      if (r) {
+        st.entry = { tmdb: +r.dataset.tmdb, type: r.dataset.type, title: r.dataset.title, year: +r.dataset.year || null };
+        st.searching = false;
+        paintEntry();
+        return;
+      }
+      const dir = t.closest('[data-dir]');
+      if (dir) { browse(dir.dataset.dir); return; }
+      const b = t.closest('[data-r]');
+      if (!b) return;
+      if (b.dataset.r === '0') { closeModal(); return resolve(null); }
+      if (mode === 'place' && !st.entry) return toast('Elige la ficha del título', 'error');
+      const out = { entry: st.entry ? { ...st.entry } : null, dest: st.auto ? '' : st.browse };
+      if (mode === 'place' && st.entry.type === 'series') {
+        const season = $('[name="season"]', m).value.trim(), episode = $('[name="episode"]', m).value.trim();
+        if (season || episode) Object.assign(out.entry, { season: +season, episode: +episode });
+      }
+      closeModal();
+      resolve(out);
+    });
+    paintEntry();
+    paintDest();
+    if (st.searching) search();
+  });
+}
+
+/** Lo justo para rellenar el buscador del diálogo con el nombre del archivo */
+function parseNameLite(name) {
+  let s = String(name || '').replace(/\.[a-z0-9]{2,4}$/i, '').replace(/[._]+/g, ' ');
+  const ep = /S(\d{1,2})\s*E(\d{1,3})|(?:^|\D)(\d{1,2})x(\d{2,3})(?:\D|$)/i.exec(s);
+  if (ep) s = s.slice(0, ep.index);
+  const y = /\b(19\d{2}|20\d{2})\b/.exec(s);
+  if (y) s = s.slice(0, y.index);
+  s = s.replace(/\[[^\]]*\]|\([^)]*\)/g, ' ').replace(/\s+/g, ' ').replace(/[\s-]+$/, '').trim();
+  return { title: s, year: y ? +y[1] : null, type: ep ? 'series' : 'movie', season: ep ? +(ep[1] || ep[3]) : null, episode: ep ? +(ep[2] || ep[4]) : null };
+}
+
 function emuleStatePill() {
   const sn = S.emule.snap;
-  if (sn.ok) return '<span class="status-pill ok">Conectado con eMule</span>';
-  if (sn.code === 'disabled') return '';
+  if (sn.ok) {
+    const id = sn.status?.server === 'high' ? 'ID alta' : sn.status?.server === 'low' ? 'ID baja' : 'sin servidor';
+    return `<span class="status-pill ${sn.status?.server === 'high' ? 'ok' : 'warn'}">Conectado con aMule · ${id}</span>`;
+  }
   return `<span class="status-pill bad">${esc((EMULE_ERRORS[sn.code] || [sn.error || 'Sin conexión'])[0])}</span>`;
 }
 
-function emuleSettingsHTML(s, sw) {
-  const info = S.emule.info;
-  if (!s.emuleEnabled) {
-    return `<div class="set-row"><div class="lbl"><div class="t">Buscar y descargar con eMule</div>
-      <div class="d">Usa el servidor web de eMule de este PC para buscar, descargar y seguir el progreso desde CineLocal. Lo descargado se copia ${LOCAL() ? 'a la biblioteca' : 'al NAS'} al terminar.${LOCAL() ? '' : ' Sólo para administradores.'}</div></div>
-      <div class="ctl">${sw('emuleEnabled', false)}</div></div>`;
-  }
-  const tmpl = info?.templatePath || '…';
-  return `<div class="set-row"><div class="lbl"><div class="t">Buscar y descargar con eMule</div><div class="d">Aparece la sección <b>Descargas</b> en la barra superior.</div></div>
-      <div class="ctl"><span id="emuleState">${emuleStatePill()}</span>${sw('emuleEnabled', true)}</div></div>
-    <div class="set-row"><div class="lbl"><div class="t">Cómo conectarlo</div>
-      <ol class="steps">
-        <li>En eMule abre <b>Opciones → Servidor Web</b> y marca <b>Activado</b>.</li>
-        <li>Escribe una <b>contraseña</b> (sólo para CineLocal) y deja el puerto en ${esc(s.emulePort || 4711)}.</li>
-        <li>En <b>Plantilla</b> pon esta ruta y pulsa <b>Recargar</b>:<br>
-          <code class="path">${esc(tmpl)}</code> <button class="link-btn" data-action="copy" data-text="${esc(tmpl)}">Copiar</button></li>
-        <li>Pulsa <b>Aplicar</b> en eMule y escribe aquí abajo la misma contraseña.</li>
-      </ol>
-      <div class="d">La plantilla hace que el servidor web de eMule hable con CineLocal en vez de mostrar su página; si algún día quieres volver a la interfaz web original, elige <code>eMule.tmpl</code>. No abras el puerto ${esc(s.emulePort || 4711)} en el router.</div></div></div>
-    <div class="set-row"><div class="lbl"><div class="t">Contraseña del servidor web</div><div class="d">La que pusiste en eMule → Opciones → Servidor Web.</div></div>
-      <div class="ctl"><input class="input" type="password" data-set-text="emulePassword" value="${esc(s.emulePassword)}" placeholder="Contraseña" style="min-width:200px">
-      <button class="btn btn-ghost btn-sm" data-action="emule-test">Probar</button><span id="emuleTest"></span></div></div>
-    <div class="set-row"><div class="lbl"><div class="t">Puerto</div></div>
-      <div class="ctl"><input class="input" data-set-text="emulePort" value="${esc(s.emulePort)}" style="min-width:0;width:100px"></div></div>
-    <div class="set-row"><div class="lbl"><div class="t">${LOCAL() ? 'Copiar a la biblioteca al terminar' : 'Copiar al NAS al terminar'}</div>
-      <div class="d">Las películas van a la carpeta «Películas» de la biblioteca${LOCAL() ? ` (la primera: <code>${esc(libPaths()[0] || '…')}</code>)` : ''} y los episodios (S01E02, 1x02, Cap.102) a la carpeta de su serie; ${LOCAL() ? 'CineLocal' : 'CineLocal Server'} los añade solo. Sólo se copian las descargas que CineLocal ha visto en curso${info?.incoming?.length ? `, desde <code>${esc(info.incoming.join(', '))}</code>` : ''}.${LOCAL() ? '' : ' El PC tiene que llegar al NAS (en casa o con la VPN).'}</div></div>
-      <div class="ctl">${sw('emuleMoveToLibrary', s.emuleMoveToLibrary !== false)}</div></div>
-    ${s.emuleMoveToLibrary !== false && !LOCAL() ? `<div class="set-row nas-row"><div class="lbl"><div class="t">Carpeta de la biblioteca en el NAS</div>
-      <div class="d">La misma carpeta que usa CineLocal Server, vista desde Windows: <code>\\\\NAS\\Multimedia</code> (o <code>\\\\10.8.0.1\\Multimedia</code> por la VPN). Usuario del NAS con permiso de escritura en ella; si lo dejas vacío, se usa la sesión que tenga Windows. La contraseña se guarda cifrada con tu cuenta de Windows.</div></div>
-      <div class="ctl">
-        <input class="input" data-nas="dest" value="${esc(s.emuleDest)}" placeholder="\\\\NAS\\Multimedia" spellcheck="false">
-        <input class="input" data-nas="user" value="${esc(s.nasUser)}" placeholder="Usuario del NAS" spellcheck="false">
-        <input class="input" type="password" data-nas="password" placeholder="${s.nasHasPassword ? 'Contraseña guardada' : 'Contraseña'}">
-        <button class="btn btn-ghost btn-sm" data-action="nas-test">Comprobar y guardar</button>
-      </div>
-      <div class="nas-status" id="nasStatus">${nasStatePill()}</div></div>` : ''}
-    <div class="set-row"><div class="lbl"><div class="t">Programa eMule</div>
-      <div class="d">${info?.exe ? `Detectado: ${esc(info.exe)}` : info ? 'No encontrado.' : 'Buscando…'}</div></div>
-      <div class="ctl"><button class="btn btn-ghost btn-sm" data-action="emule-launch">Abrir eMule</button><button class="btn btn-ghost btn-sm" data-action="pick-emule">Seleccionar emule.exe</button></div></div>`;
+function downloadsSettingsHTML() {
+  const low = S.emule.snap.ok && S.emule.snap.status?.server === 'low';
+  return `<div class="set-row"><div class="lbl"><div class="t">aMule en el NAS</div>
+      <div class="d">Busca y descarga desde <b>Descargas</b>. Al terminar, cada vídeo se renombra con su título en inglés de TMDB
+      («Title (Year)», «Show (Year) 1x01 Episode») y se mueve a la carpeta que elegiste o, en automático, a «Películas» o a la de su serie.
+      Lo que no se pueda identificar con seguridad queda en Descargas, pendiente de colocar.</div></div>
+      <div class="ctl"><span id="emuleState">${emuleStatePill()}</span></div></div>
+    ${low ? `<div class="set-row"><div class="lbl"><div class="t">ID baja</div>
+      <div class="d">Las descargas irán más lentas. Para tener ID alta, abre en el router hacia el NAS el puerto <b>4662 TCP</b> y el <b>4672 UDP</b>.</div></div></div>` : ''}`;
 }
 
 function lbStatusHTML() {
@@ -2912,11 +3012,6 @@ function paintUpdate() {
   if (el) el.innerHTML = updInfoHTML();
 }
 
-
-async function loadEmuleInfo() {
-  S.emule.info = await window.api.emule.info();
-  if (S.route.name === 'settings' && !/INPUT|SELECT/.test(document.activeElement?.tagName)) render(true);
-}
 
 // ---------------------------------------------------------------- render y navegación
 function render(keepScroll = false) {
@@ -3223,10 +3318,8 @@ async function saveLibPaths(list) {
 async function saveSetting(key, value) {
   S.settings = await window.api.setSettings({ [key]: value });
   if (key === 'userMetaLang' || key === 'metaLang') { setLib(await window.api.getLibrary()); render(true); }
-  if (key === 'subLang' || key === 'emuleEnabled' || key === 'emuleMoveToLibrary' || key === 'playerMode' || key === 'region') render(true);
+  if (key === 'subLang' || key === 'playerMode' || key === 'region') render(true);
   if (key === 'lbUser') { setLb(await window.api.letterboxd.get()); paintLbStatus(); }
-  if (key.startsWith('emule')) paintEmule();
-  if (key === 'emuleEnabled' && value) loadEmuleInfo();
 }
 
 async function scanNow() {
@@ -3239,23 +3332,17 @@ async function scanNow() {
 // ---------------------------------------------------------------- eventos
 async function emuleAction(a, el) {
   const d = el.dataset;
+  const call = (action, q) => window.api.emule.call(action, q);
   try {
-    if (a === 'copy') { await window.api.copy(d.text); toast('Copiado al portapapeles', 'ok'); }
-    else if (a === 'emule-launch') {
-      const r = await window.api.emule.launch();
-      toast(r.ok ? 'Abriendo eMule…' : r.error, r.ok ? '' : 'error');
-    } else if (a === 'emule-connect') { await window.api.emule.connect(); toast('Conectando a la red eD2k y Kad…'); }
-    else if (a === 'emule-srv-any' || a === 'emule-srv-connect' || a === 'emule-srv-off') {
+    if (a === 'emule-srv-any' || a === 'emule-srv-connect' || a === 'emule-srv-off') {
       S.emule.srv.busy = 'srv'; paintEmule();
-      try {
-        if (a === 'emule-srv-off') setServers(await window.api.emule.disconnect());
-        else setServers(await window.api.emule.connectServer(d.ip, d.port));
-      } finally { S.emule.srv.busy = null; }
+      try { setServers(await (a === 'emule-srv-off' ? call('disconnect') : call('connectServer', { ip: d.ip, port: d.port }))); }
+      finally { S.emule.srv.busy = null; }
       toast(a === 'emule-srv-off' ? 'Desconectado del servidor' : a === 'emule-srv-any' ? 'Conectando al primer servidor disponible…' : `Conectando a ${d.name}…`);
       paintEmule();
     } else if (a === 'emule-kad') {
       S.emule.srv.busy = 'kad'; paintEmule();
-      try { const r = await window.api.emule.kad(d.op); if (r.kad) S.emule.srv.kad = r.kad; }
+      try { const r = await call('kad', { op: d.op }); if (r.kad) S.emule.srv.kad = r.kad; }
       finally { S.emule.srv.busy = null; }
       toast(d.op === 'connect' ? 'Conectando a Kad…' : 'Kad desconectado');
       paintEmule();
@@ -3268,41 +3355,36 @@ async function emuleAction(a, el) {
       srv.dir = srv.sort === d.k ? -srv.dir : SRV_SORTS[d.k];
       srv.sort = d.k;
       paintServers();
-    } else if (a === 'emule-srv-refresh') {
-      await loadServers(true);
-      if (srvOutdated()) toast('eMule todavía no ha recargado la plantilla', 'error');
-    }
-    else if (a === 'emule-test') {
-      const password = $('[data-set-text="emulePassword"]').value;
-      const port = +$('[data-set-text="emulePort"]').value || 4711;
-      const st = $('#emuleTest');
-      st.innerHTML = '<span class="status-pill">Probando…</span>';
-      const r = await window.api.emule.test({ port, password });
-      st.innerHTML = r.ok ? '<span class="status-pill ok">Conexión correcta</span>' : `<span class="status-pill bad">${esc((EMULE_ERRORS[r.code] || [r.error])[0])}</span>`;
-      if (r.ok && (password !== S.settings.emulePassword || port !== +S.settings.emulePort)) {
-        S.settings = await window.api.setSettings({ emulePassword: password, emulePort: port });
-      }
-    } else if (a === 'pick-emule') {
-      const p = await window.api.emule.pickExe();
-      if (p) { await saveSetting('emulePath', p); await loadEmuleInfo(); }
     } else if (a === 'emule-find') {
       $('#detailMenu')?.classList.add('hidden');
       closeModal();
       S.emule.search.query = d.q;
       go('downloads');
-      emuleSearch(d.q, d.alt);
+      emuleSearch(d.q, d.alt, d.entry ? JSON.parse(d.entry) : null);
     } else if (a === 'emule-alt') {
-      const { alt, query } = S.emule.search;
-      if (alt) emuleSearch(alt, query);
+      const { alt, query, entry } = S.emule.search;
+      if (alt) emuleSearch(alt, query, entry);
     } else if (a === 'dl-get') {
+      const plan = await placeDialog({ mode: 'download', name: d.name, entry: S.emule.search.entry });
+      if (!plan) return;
       el.disabled = true;
-      await window.api.emule.download(d.hash);
-      toast('Añadido a las descargas de eMule', 'ok');
+      await call('download', { hash: d.hash, ...plan });
+      toast('Añadido a las descargas de aMule', 'ok');
       paintResults();
-    } else if (a === 'dl-op') await window.api.emule.op(d.hash, d.op);
+    } else if (a === 'dl-op') await call('op', { hash: d.hash, op: d.op });
     else if (a === 'dl-cancel') {
-      if (await confirmModal('¿Cancelar la descarga?', d.name + ' — se borrará lo descargado hasta ahora.', 'Cancelar descarga')) await window.api.emule.op(d.hash, 'cancel');
+      if (await confirmModal('¿Cancelar la descarga?', d.name + ' — se borrará lo descargado hasta ahora.', 'Cancelar descarga')) await call('op', { hash: d.hash, op: 'cancel', name: d.name });
     } else if (a === 'dl-copy') { await window.api.copy(d.link); toast('Enlace ed2k copiado', 'ok'); }
+    else if (a === 'dl-place') {
+      const p = (S.emule.snap.pending || []).find(x => x.hash === d.hash);
+      if (!p) return;
+      const plan = await placeDialog({ mode: 'place', name: p.name, entry: p.suggestion, dest: p.dest });
+      if (!plan) return;
+      const r = await call('place', { hash: p.hash, name: p.name, ...plan });
+      toast(`Colocada en la biblioteca: ${r.dest}`, 'ok');
+    } else if (a === 'dl-dismiss') {
+      if (await confirmModal('¿Quitar de la lista?', d.name + ' — el archivo no se borra: se queda en la carpeta de descargas de aMule (@amule/incoming).', 'Quitar')) await call('dismiss', { hash: d.hash, name: d.name });
+    } else if (a === 'dl-clear-placed') await call('clearPlaced');
     else if (a === 'dl-clear-results') {
       S.emule.search = { ...S.emule.search, results: [], message: '', busy: false, error: null, hidden: true, run: S.emule.search.run + 1 };
       paintResults();
@@ -3315,22 +3397,26 @@ async function emuleAction(a, el) {
 
 document.addEventListener('submit', async (e) => {
   const f = e.target;
-  if (f.id === 'dlSearch') { e.preventDefault(); emuleSearch(f.q.value); }
+  if (f.id === 'dlSearch') {
+    e.preventDefault();
+    S.emule.method = f.method.value;
+    // una búsqueda escrita a mano ya no es la del título desde el que se llegó
+    emuleSearch(f.q.value, null, normName(f.q.value) === normName(S.emule.search.query) ? S.emule.search.entry : null);
+  }
   else if (f.id === 'srvMet' || f.id === 'kadBoot') {
     e.preventDefault();
     const btn = $('button', f);
     btn.disabled = true;
     try {
       if (f.id === 'srvMet') {
-        toast('eMule está descargando el server.met…');
-        const r = await window.api.emule.updateServerMet(f.url.value.trim());
+        const r = await window.api.emule.call('updateServerMet', { url: f.url.value.trim() });
         setServers(r);
         f.url.value = '';
         toast(r.message || 'Lista de servidores actualizada', 'ok');
       } else {
         const m = /^\s*([^\s:]+):(\d+)\s*$/.exec(f.addr.value);
         if (!m) throw new Error('Escribe la IP y el puerto del nodo, p. ej. 1.2.3.4:4672');
-        const r = await window.api.emule.kad('bootstrap', m[1], +m[2]);
+        const r = await window.api.emule.call('kad', { op: 'bootstrap', ip: m[1], port: +m[2] });
         if (r.kad) S.emule.srv.kad = r.kad;
         f.addr.value = '';
         toast('Conectando a Kad desde el nodo…');
@@ -3341,10 +3427,17 @@ document.addEventListener('submit', async (e) => {
   }
   else if (f.id === 'dlLink') {
     e.preventDefault();
+    const link = f.link.value.trim();
+    const name = /\|file\|([^|]+)\|/.exec(link)?.[1];
+    if (!name) return toast('Eso no parece un enlace ed2k de archivo', 'error');
+    let shown = name;
+    try { shown = decodeURIComponent(name); } catch {}
     try {
-      await window.api.emule.addLink(f.link.value.trim());
+      const plan = await placeDialog({ mode: 'download', name: shown });
+      if (!plan) return;
+      await window.api.emule.call('download', { link, ...plan });
       f.link.value = '';
-      toast('Añadido a las descargas de eMule', 'ok');
+      toast('Añadido a las descargas de aMule', 'ok');
     } catch (err) { toast(errText(err), 'error'); }
   }
 });
@@ -3539,20 +3632,6 @@ document.addEventListener('click', async (e) => {
       clearTimeout(S.discordTestTimer);
       S.discordTestTimer = setTimeout(() => { S.discordTest = null; paintDiscord(); }, r.ok ? 15000 : 8000);
     }
-    else if (a === 'nas-test') {
-      // carpeta del NAS donde eMule copia lo descargado: sólo se guarda si se puede abrir
-      const val = k => $(`[data-nas="${k}"]`).value.trim();
-      const q = { dest: val('dest').replace(/[\\/]+$/, ''), user: val('user'), password: $('[data-nas="password"]').value };
-      S.nasTest = 'running'; $('#nasStatus').innerHTML = nasStatePill();
-      const r = await window.api.testNas(q).catch(e => ({ ok: false, error: errText(e) }));
-      S.nasTest = r;
-      if (r.ok) {
-        const patch = { emuleDest: q.dest, nasUser: q.user };
-        if (q.password) patch.nasPassword = q.password;
-        S.settings = await window.api.setSettings(patch);
-        render(true);
-      } else $('#nasStatus').innerHTML = nasStatePill();
-    }
     else if (a === 'test-key') {
       const key = $('[data-set-text="tmdbKey"]').value.trim();
       const st = $('#keyStatus');
@@ -3579,7 +3658,7 @@ document.addEventListener('click', async (e) => {
       if (!(await window.api.update.install())) { action.disabled = false; toast('La actualización aún no está lista', 'error'); }
     } else if (a === 'upd-open') window.api.update.openRelease();
     else if (a === 'upd-dismiss') { S.updDismissed = S.update.version; paintUpdToast(); }
-    else if (a.startsWith('emule-') || a.startsWith('dl-') || a === 'pick-emule' || a === 'copy') emuleAction(a, action);
+    else if (a.startsWith('emule-') || a.startsWith('dl-')) emuleAction(a, action);
     return;
   }
 
@@ -3920,7 +3999,7 @@ window.api.onPlayerClosed(({ error }) => {
 });
 window.api.onFullscreen((fs) => document.body.classList.toggle('fullscreen', fs));
 window.api.onSessionExpired?.(async (msg) => { S.session = await window.api.session.get(); showLogin(msg); });
-window.api.onToast(({ type, text, action }) => toast(text, type, action === 'requests' ? () => go('requests') : null));
+window.api.onToast(({ type, text, action }) => toast(text, type, action === 'requests' ? () => go('requests') : action === 'downloads' && emuleOn() ? () => go('downloads') : null));
 window.api.onRequests?.((v) => {
   loadNotifs();
   setRequests(v);
@@ -4040,15 +4119,14 @@ async function useServer() {
 async function boot() {
   S.settings = await window.api.getSettings();
   setLib(await window.api.getLibrary());
-  S.emule.snap = await window.api.emule.get();
   setLb(await window.api.letterboxd.get());
   S.update = await window.api.update.status();
   S.discord = await window.api.discord.status();
   await refreshMe();
+  if (emuleOn()) S.emule.snap = await window.api.emule.get().catch(() => S.emule.snap);
   render();
   paintUpdToast();
   paintEmule();
-  if (emuleOn()) loadEmuleInfo();
   setTimeout(maybeCollectionNews, 2000);   // colecciones nuevas desde la última vez
 }
 

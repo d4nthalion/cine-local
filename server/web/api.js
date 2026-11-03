@@ -26,7 +26,7 @@
   // eventos en vivo del servidor (biblioteca, metadatos, progreso desde otro dispositivo…)
   function connect() {
     const es = new EventSource('/api/events');
-    for (const ev of ['meta:progress', 'progress:updated', 'toast', 'library:new', 'requests:updated', 'letterboxd:update', 'letterboxd:status']) {
+    for (const ev of ['meta:progress', 'progress:updated', 'toast', 'library:new', 'requests:updated', 'letterboxd:update', 'letterboxd:status', 'emule:update']) {
       es.addEventListener(ev, e => emit(ev, JSON.parse(e.data)));
     }
     es.addEventListener('library:changed', reloadLibrary);
@@ -46,7 +46,6 @@
     return !!document.fullscreenElement;
   };
 
-  const disabled = { ok: false, error: null, code: 'disabled', status: null, downloads: [] };
   const noop = () => () => {};
 
   window.api = {
@@ -54,7 +53,6 @@
     getSettings: () => get('/api/settings'),
     setSettings: patch => post('/api/settings', patch),
     testKey: key => post('/api/tmdb/test', { key }),
-    testNas: async () => ({ ok: false, error: 'No disponible en la web' }),
     getLibrary: () => get('/api/library?slim=1'),
     getItem: id => get('/api/item/' + encodeURIComponent(id)),
     scan: () => post('/api/scan'),
@@ -92,12 +90,13 @@
     me: () => get('/api/me'),
     logout: async () => { await post('/api/logout'); location.href = '/login'; },
     reportProgress: (id, pos, dur) => post('/api/progress', { id, pos, dur }).catch(() => {}),
+    // descargas con aMule en el NAS (sólo administradores): server/amule/
     emule: {
-      get: async () => disabled, info: async () => ({}), test: async () => ({ ok: false }), launch: async () => ({ ok: false }),
-      refresh: async () => disabled, connect: async () => true, servers: async () => [], connectServer: async () => null,
-      disconnect: async () => null, kad: async () => ({}), updateServerMet: async () => null, search: async () => null,
-      results: async () => [], download: async () => true, addLink: async () => true, op: async () => true, pickExe: async () => null,
-      onUpdate: noop()
+      get: () => get('/api/downloads'),
+      refresh: () => get('/api/downloads'),
+      folders: dir => get('/api/downloads/folders?path=' + encodeURIComponent(dir || '')),
+      call: (action, q) => post('/api/downloads', { ...q, action }),
+      onUpdate: on('emule:update')
     },
     // Letterboxd guardado en el servidor (server/letterboxd.js): lo sube la app de escritorio o la exportación ZIP de aquí
     letterboxd: {

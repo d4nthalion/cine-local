@@ -25,7 +25,7 @@ const ud = path.join(tmp, 'userData');
 const lib = path.join(tmp, 'biblioteca');
 const feed = path.join(tmp, 'feed');
 for (const d of [ud, lib, feed, out]) fs.mkdirSync(d, { recursive: true });
-fs.writeFileSync(path.join(ud, 'settings.json'), JSON.stringify({ libraryPath: lib, startFullscreen: false, emuleEnabled: false, lbUser: '' }));
+fs.writeFileSync(path.join(ud, 'settings.json'), JSON.stringify({ libraryPath: lib, startFullscreen: false, lbUser: '' }));
 app.setPath('userData', ud);
 app.commandLine.appendSwitch('no-sandbox');
 
