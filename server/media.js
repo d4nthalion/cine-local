@@ -100,7 +100,14 @@ const langOf = s => {
 
 // ---------- envío ----------
 /** Archivo tal cual, con soporte de Range para poder saltar */
-function sendFile(req, res, file) {
+/** «attachment» con el nombre en ASCII para los navegadores viejos y el de verdad (tildes, eñes) en filename* */
+function attachment(name) {
+  const ascii = name.normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^\x20-\x7e]|["\\]/g, '_');
+  return `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(name)}`;
+}
+
+/** download: el navegador lo guarda con su nombre en vez de abrirlo (botón «Descargar» de la web) */
+function sendFile(req, res, file, { download = false } = {}) {
   const st = fs.statSync(file);
   const type = MIME[path.extname(file).toLowerCase()] || 'application/octet-stream';
   const m = /^bytes=(\d*)-(\d*)$/.exec(req.headers.range || '');
@@ -112,7 +119,8 @@ function sendFile(req, res, file) {
   }
   res.writeHead(m ? 206 : 200, {
     'Content-Type': type, 'Accept-Ranges': 'bytes', 'Content-Length': end - start + 1,
-    ...(m && { 'Content-Range': `bytes ${start}-${end}/${st.size}` }), 'Cache-Control': 'private, no-store'
+    ...(m && { 'Content-Range': `bytes ${start}-${end}/${st.size}` }), 'Cache-Control': 'private, no-store',
+    ...(download && { 'Content-Disposition': attachment(path.basename(file)) })
   });
   const stream = fs.createReadStream(file, { start, end });
   stream.pipe(res);

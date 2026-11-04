@@ -371,6 +371,13 @@ function row(title, inner, key, more) {
   </section>`;
 }
 
+/** Guardar el vídeo en el equipo: sólo en la web, donde el navegador lo descarga con su nombre (id de película o episodio) */
+function downloadLink(id, size, cls) {
+  if (!WEB) return '';
+  const title = `Descargar el vídeo${size ? ` (${fmtSize(size)})` : ''}`;
+  return `<a class="${cls} dl-file" href="/api/media/${encodeURIComponent(id)}/file?dl=1" download title="${title}" aria-label="${title}">${I.download}</a>`;
+}
+
 function playButtonFor(it) {
   if (it.type === 'movie') {
     const p = prog(it.path);
@@ -2136,6 +2143,7 @@ function viewDetail(id) {
           ${restart}
           <button class="round-btn ${wl ? 'on' : ''}" title="${wl ? 'Quitar de la Watchlist' : 'Añadir a la Watchlist'}" data-action="wl-toggle" data-id="${it.id}">${wl ? I.bookmarkOn : I.bookmark}</button>
           <button class="round-btn ${saved ? 'on' : ''}" title="Guardar en una lista" data-action="lists-pick" data-id="${it.id}">${saved ? I.check : I.plus}</button>
+          ${it.type === 'movie' ? downloadLink(it.id, it.size, 'round-btn') : ''}
           ${m.trailer ? `<button class="round-btn" title="Ver tráiler" data-action="trailer" data-url="${esc(m.trailer)}">${I.yt}</button>` : ''}
           <div class="menu-wrap">
             <button class="round-btn" title="Más opciones" data-action="menu">${I.more}</button>
@@ -2272,7 +2280,7 @@ function seasonSection(it) {
           ${em.overview ? `<p>${esc(em.overview)}</p>` : ''}
           <div class="file">${esc(e.fileName)}</div>
         </div>
-        <div class="side"><button class="check-btn ${epSeen(it, e) ? 'on' : ''}" title="${epSeen(it, e) ? 'Marcar como no visto' : 'Marcar como visto'}" data-action="mark" data-id="${it.id}" data-ep="${e.id}" data-watched="${epSeen(it, e) ? 0 : 1}">${I.check}</button></div>
+        <div class="side">${downloadLink(e.id, e.size, 'check-btn')}<button class="check-btn ${epSeen(it, e) ? 'on' : ''}" title="${epSeen(it, e) ? 'Marcar como no visto' : 'Marcar como visto'}" data-action="mark" data-id="${it.id}" data-ep="${e.id}" data-watched="${epSeen(it, e) ? 0 : 1}">${I.check}</button></div>
       </div>`;
     }).join('')}</div>`;
 }
@@ -3444,6 +3452,8 @@ document.addEventListener('submit', async (e) => {
 
 document.addEventListener('click', async (e) => {
   const t = e.target;
+  // descargar el vídeo: lo hace el navegador; que no cuente como clic en el episodio (reproducirlo)
+  if (t.closest('a.dl-file')) return;
 
   // menú contextual abierto: cerrar al hacer clic fuera
   const menu = $('#detailMenu');

@@ -345,6 +345,8 @@ body.fullscreen #btnFullscreen .ico-enter { display: none; }
 .check-btn:hover { border-color: rgba(255,255,255,.4); color: var(--text); }
 .check-btn.on { color: var(--ok); border-color: rgba(34,197,94,.5); }
 .check-btn svg { width: 18px; height: 18px; fill: currentColor; }
+/* «Descargar el vídeo» (web): un enlace con aspecto de botón redondo */
+a.round-btn, a.check-btn { text-decoration: none; box-sizing: border-box; }
 
 .cast { display: flex; gap: 18px; overflow-x: auto; padding-bottom: 10px; }
 .person { flex: none; width: 112px; text-align: center; }

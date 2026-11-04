@@ -521,8 +521,10 @@ route('GET', '/api/media/:id/info', async (req, res, { p, user }) => {
 });
 route('GET', '/api/media/:id/file', (req, res, { p, q, user }) => {
   const f = mediaFile(p.id, user);
-  logAccess(req, res, user, p.id, f, q.get('dl') === '1' ? 'download' : 'play');
-  media.sendFile(req, res, f.path);
+  const dl = q.get('dl') === '1';
+  logAccess(req, res, user, p.id, f, dl ? 'download' : 'play');
+  // la web pide guardarlo (Android también manda dl=1, pero guarda él el archivo: la cabecera no le estorba)
+  media.sendFile(req, res, f.path, { download: dl });
 }, { signed: true });
 route('GET', '/api/media/:id/stream', (req, res, { p, q, user }) => {
   const f = mediaFile(p.id, user);
