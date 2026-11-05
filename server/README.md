@@ -119,6 +119,13 @@ contenedor «cinelocal» ── /media = ${MEDIA_DIR}  →  /media/@amule/incomi
 4. **Que su API y su control remoto sólo escuchen en el NAS:** con la red del host, aMule abre el 4711 (API) y el 4712 (control remoto) en todas las interfaces. Con el contenedor parado (`docker stop amule`), en `amuleapi.conf` pon `BindAddress=127.0.0.1` y en `amule.conf` (sección `[ExternalConnect]`) `ECAddress=127.0.0.1`, y vuelve a arrancarlo. No abras nunca el 4711 ni el 4712 en el router.
 5. **ID alta:** abre en el router hacia el NAS el **4662 TCP** y el **4672 UDP** (el 4665 UDP es opcional). Sin ellos funciona, pero con *ID baja* y más lento; Descargas y Ajustes lo indican.
 
+**Moderadores que descargan en otro NAS** (p. ej. las carpetas de `nas2` de `docker-compose.override.yml`): esas carpetas tienen que poder escribirse en los tres sitios:
+1. en el otro NAS, el usuario con el que se montan (`CineLocal`) necesita *Lectura/Escritura* en sus carpetas compartidas;
+2. el montaje de File Station no puede ser de sólo lectura (vuelve a montarlas después del paso 1);
+3. en `docker-compose.override.yml`, sin `:ro`.
+
+Lo descargado se copia por la red al otro NAS (a un `.part` que se renombra al terminar). Las carpetas en las que no se puede escribir no salen en el selector de destino.
+
 Para actualizar aMule, cambia la versión de la imagen (`ngosang/amule:3.2.0-1`) y `docker compose up -d`. Lo que está a medias y la configuración se conservan.
 
 ## Desarrollo en Windows

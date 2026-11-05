@@ -246,7 +246,7 @@ class Library extends EventEmitter {
    * Cambia lo que puede ver: mode 'all' (todo), 'except' (todo menos items) u 'only' (sólo items), y si puede entrar.
    * Lo que no se envía se queda como estaba.
    */
-  setRule(userName, { mode, items, blocked, mod, folders } = {}) {
+  setRule(userName, { mode, items, blocked, mod, dl, folders } = {}) {
     const key = String(userName || '').toLowerCase().trim();
     if (!key) throw new Error('Falta el usuario');
     const r = { ...(this.rules.data.users[key] || {}) };
@@ -266,6 +266,9 @@ class Library extends EventEmitter {
       r.mod = [...new Set(mod.filter(k => keys.has(k)))];
       if (!r.mod.length) delete r.mod;
     }
+    // descargar con aMule en los NAS que modera
+    if (dl !== undefined) { if (dl) r.dl = true; else delete r.dl; }
+    if (!r.mod) delete r.dl;
     // las carpetas privadas que puede ver (las demás, no)
     if (Array.isArray(folders)) {
       for (const f of this.privateFolders()) {
@@ -275,7 +278,7 @@ class Library extends EventEmitter {
       }
     }
     if (!r.mode) r.items = r.items || [];
-    if (!r.mode && !r.blocked && !r.items.length && !r.mod) delete this.rules.data.users[key];
+    if (!r.mode && !r.blocked && !r.items.length && !r.mod && !r.dl) delete this.rules.data.users[key];
     else this.rules.data.users[key] = r;
     this.rulesVer++;
     this.rules.save();
@@ -288,7 +291,7 @@ class Library extends EventEmitter {
     const key = String(userName).toLowerCase();
     const r = this.rules.data.users[key] || {};
     return {
-      name: key, mode: r.mode || 'all', items: r.items || [], blocked: !!r.blocked, mod: r.mod || [],
+      name: key, mode: r.mode || 'all', items: r.items || [], blocked: !!r.blocked, mod: r.mod || [], dl: !!r.dl,
       folders: this.privateFolders().filter(f => f.users.includes(key)).map(f => f.path), seenAt: this.rules.data.seen?.[key] || null
     };
   }
@@ -335,6 +338,22 @@ class Library extends EventEmitter {
   modRoots(userName) {
     const mod = this.isAdmin(userName) ? [] : this.rules.data.users[String(userName).toLowerCase()]?.mod || [];
     return this.sources().filter(s => mod.includes(s.key)).flatMap(s => s.roots);
+  }
+
+  /**
+   * Las carpetas de la biblioteca en las que puede guardar descargas: un administrador, en todas; un moderador con
+   * permiso de descargar, en las de sus NAS. Que se pueda escribir en ellas lo comprueba quien las usa
+   */
+  downloadRoots(userName) {
+    if (this.isAdmin(userName)) return this.roots();
+    return this.rules.data.users[String(userName).toLowerCase()]?.dl ? this.modRoots(userName) : [];
+  }
+
+  /** «vorgak4b · video»: el NAS y, si tiene varias carpetas en la biblioteca, cuál */
+  rootLabel(root) {
+    const s = this.sources().find(x => x.roots.includes(root));
+    if (!s) return path.basename(root) || root;
+    return s.roots.length > 1 ? `${s.label} · ${path.basename(root)}` : s.label;
   }
 
   /** Nombres de los usuarios con datos guardados (progreso, listas…) o con regla */

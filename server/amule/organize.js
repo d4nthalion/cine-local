@@ -64,20 +64,21 @@ const pad = n => String(n).padStart(2, '0');
 
 /**
  * Ruta final. info: { type, tmdb, season, episode } · names: englishNames() · ext: «.mkv»
- * root: la biblioteca en la que se escribe · dest: carpeta elegida (dentro de root) o null para «Automática»
- * items: elementos de la biblioteca, para reutilizar la carpeta de una serie que ya está
+ * roots: las carpetas de biblioteca entre las que elige «Automática» (la primera con «Películas» o «Series», o la
+ * primera) · dest: carpeta elegida o null para «Automática» · items: series de la biblioteca, para reutilizar su carpeta
  */
-function targetPath({ info, names, ext, root, dest, items = [] }) {
+function targetPath({ info, names, ext, roots, dest, items = [] }) {
   const show = withYear(names.title, names.year);
-  if (info.type === 'movie') return path.join(dest || categoryDir(root, 'movies') || root, show + ext);
+  const category = kind => roots.map(r => categoryDir(r, kind)).find(Boolean) || roots[0];
+  if (info.type === 'movie') return path.join(dest || category('movies'), show + ext);
   const file = safeName(`${show} ${info.season}x${pad(info.episode)}${names.epTitle ? ' ' + names.epTitle : ''}`) + ext;
-  const series = items.filter(it => it.type === 'series' && isInside(root, it.path));
+  const series = items.filter(it => it.type === 'series' && (dest ? path.resolve(it.path) === path.resolve(dest) || isInside(dest, it.path) : roots.some(r => isInside(r, it.path))));
   // la carpeta elegida ya es la de una serie: ahí mismo
   if (dest && series.some(it => path.resolve(it.path) === path.resolve(dest))) return path.join(dest, file);
   // la serie ya está en la biblioteca (por su ficha): su carpeta, si cae dentro de la elegida
-  const known = series.find(it => it.meta?.tmdbId === info.tmdb && (!dest || isInside(dest, it.path)));
+  const known = series.find(it => it.meta?.tmdbId === info.tmdb);
   if (known) return path.join(known.path, file);
-  return path.join(dest || categoryDir(root, 'series') || root, show, file);
+  return path.join(dest || category('series'), show, file);
 }
 
 function isInside(dir, p) {
@@ -87,8 +88,8 @@ function isInside(dir, p) {
 
 /**
  * Mueve el archivo sin sobrescribir nunca nada, ni aunque dos descargas acaben a la vez con el mismo nombre: un
- * enlace duro falla si el destino ya existe (rename lo reemplazaría). Entre discos distintos copia antes a un
- * ".part" (que el vigilante de la biblioteca ignora), para que no aparezca a medio copiar.
+ * enlace duro falla si el destino ya existe (rename lo reemplazaría). Entre discos distintos (otro NAS por SMB) copia
+ * antes a un ".part" (que el vigilante de la biblioteca ignora), para que no aparezca a medio copiar.
  */
 async function moveInto(src, dest) {
   const exists = () => new Error(`Ya existe «${path.basename(dest)}» en la biblioteca`);
@@ -101,8 +102,14 @@ async function moveInto(src, dest) {
     const tmp = dest + '.part';
     await fs.promises.copyFile(src, tmp, fs.constants.COPYFILE_EXCL);
     try { await fs.promises.link(tmp, dest); }
-    catch (e2) { throw e2.code === 'EEXIST' ? exists() : e2; }
-    finally { await fs.promises.unlink(tmp).catch(() => {}); }
+    catch (e2) {
+      if (e2.code === 'EEXIST') { await fs.promises.unlink(tmp).catch(() => {}); throw exists(); }
+      // las carpetas de otro NAS montadas por SMB no admiten enlaces duros: renombrar, comprobando antes que no exista
+      if (fs.existsSync(dest)) { await fs.promises.unlink(tmp).catch(() => {}); throw exists(); }
+      try { await fs.promises.rename(tmp, dest); }
+      catch (e3) { await fs.promises.unlink(tmp).catch(() => {}); throw e3; }
+    }
+    await fs.promises.unlink(tmp).catch(() => {});
   }
   await fs.promises.unlink(src);
   return dest;

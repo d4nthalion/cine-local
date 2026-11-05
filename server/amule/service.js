@@ -1,6 +1,8 @@
-// Descargas con aMule en el NAS: consulta aMule periódicamente, recuerda para qué título y a qué carpeta va cada
-// descarga y, al terminar, la renombra y la mueve a la biblioteca. Lo que no se puede identificar con seguridad
-// queda «pendiente de colocar» hasta que un administrador elige la ficha y la carpeta.
+// Descargas con aMule en el NAS: consulta aMule periódicamente, recuerda para qué título, a qué carpeta y de quién es
+// cada descarga y, al terminar, la renombra y la mueve a la biblioteca. Lo que no se puede identificar con seguridad
+// queda «pendiente de colocar» hasta que alguien elige la ficha y la carpeta.
+// Descargan los administradores (en cualquier carpeta de la biblioteca) y los moderadores con permiso (en las de sus
+// NAS); cada moderador sólo ve y toca sus propias descargas.
 const EventEmitter = require('events');
 const fs = require('fs');
 const path = require('path');
@@ -10,24 +12,29 @@ const { episodeOf, identify, englishNames, targetPath, moveInto, isInside } = re
 const FAST = 4000;      // con aMule respondiendo
 const SLOW = 15000;     // aMule parado o sin configurar
 const AUTH_RETRY = 5 * 60000;   // contraseña rechazada
-const KEEP_PLACED = 20; // últimas colocadas que se enseñan en Descargas
+const KEEP_PLACED = 30; // últimas colocadas que se enseñan en Descargas
 const SKIP_DIRS = /^(\..*|@.*|#recycle|#snapshot|\$recycle\.bin|system volume information)$/i;
 const HASH = /^[0-9a-f]{32}$/i;
 
 const httpError = (status, message) => Object.assign(new Error(message), { status });
+const keyOf = user => String(user || '').toLowerCase();
+const within = (root, p) => path.resolve(root) === path.resolve(p) || isInside(root, p);
+/** Las carpetas en las que de verdad se puede escribir (las de otro NAS pueden estar montadas sólo para leer) */
+const writable = roots => roots.filter(r => {
+  try { fs.accessSync(r, fs.constants.W_OK); return fs.statSync(r).isDirectory(); } catch { return false; }
+});
 
 class AmuleService extends EventEmitter {
   /**
    * client: AmuleClient · library: Library del servidor · store: { plans, tracked, pending, placed }
-   * incoming: carpeta de aMule con lo terminado, vista desde este contenedor · root: biblioteca en la que se escribe
+   * incoming: carpeta de aMule con lo terminado, vista desde este contenedor
    */
-  constructor({ client, library, store, incoming, root }) {
+  constructor({ client, library, store, incoming }) {
     super();
     this.client = client;
     this.library = library;
     this.store = store;
     this.incoming = incoming;
-    this.rootDir = root;
     this.snapshot = { ok: false, code: 'offline', error: null, status: null, downloads: [], pending: [], placed: [] };
     this.last = '';
     this.timer = null;
@@ -35,7 +42,6 @@ class AmuleService extends EventEmitter {
   }
 
   get enabled() { return !!this.client; }
-  get root() { return this.rootDir || this.library.settings.data.libraryPath || ''; }
   get data() { return this.store.data; }
 
   start() {
@@ -79,7 +85,7 @@ class AmuleService extends EventEmitter {
   /** Publica el estado (con lo pendiente y lo colocado), sólo si ha cambiado algo */
   publish(snap) {
     const plans = this.data.plans;
-    const downloads = snap.downloads.map(d => ({ ...d, target: plans[d.hash] ? this.planLabel(plans[d.hash]) : null }));
+    const downloads = snap.downloads.map(d => ({ ...d, target: plans[d.hash] ? this.planLabel(plans[d.hash]) : null, by: plans[d.hash]?.by || null }));
     this.snapshot = { ...snap, downloads, pending: Object.values(this.data.pending), placed: this.data.placed };
     const key = JSON.stringify(this.snapshot);
     if (key !== this.last) {
@@ -89,9 +95,19 @@ class AmuleService extends EventEmitter {
   }
   republish() { this.publish(this.snapshot); }
 
+  /** Lo que ve cada uno: un administrador, todo; un moderador, sólo lo suyo */
+  snapshotFor(user) {
+    // canWrite: hay al menos una carpeta suya en la que se puede escribir (si no, la interfaz lo avisa)
+    const canWrite = this.rootsFor(user).length > 0;
+    if (this.library.isAdmin(user)) return { ...this.snapshot, canWrite };
+    const mine = x => x.by === keyOf(user);
+    const s = this.snapshot;
+    return { ...s, canWrite, downloads: s.downloads.filter(mine), pending: s.pending.filter(mine), placed: s.placed.filter(mine) };
+  }
+
   planLabel(p) {
     const what = p.title ? `${p.title}${p.year ? ` (${p.year})` : ''}` : '';
-    return [what, p.dest ? p.dest : 'Automática'].filter(Boolean).join(' → ');
+    return [what, p.dest ? this.library.folderLabel(p.dest) : 'Automática'].filter(Boolean).join(' → ');
   }
 
   /** Ejecuta una acción en aMule y vuelve a leer el estado */
@@ -108,10 +124,25 @@ class AmuleService extends EventEmitter {
     return fn(this.client);
   }
 
+  // ---------- quién puede qué ----------
+
+  /** Las carpetas de biblioteca en las que puede guardar descargas y en las que de verdad se puede escribir */
+  rootsFor(user) { return writable(this.library.downloadRoots(user)); }
+
+  canUse(user) { return this.enabled && this.library.downloadRoots(user).length > 0; }
+
+  /** ¿Es suya esta descarga (o es administrador)? */
+  owns(user, hash) {
+    if (this.library.isAdmin(user)) return true;
+    hash = String(hash || '').toLowerCase();
+    const by = this.data.plans[hash]?.by || this.data.pending[hash]?.by;
+    return !!by && by === keyOf(user);
+  }
+
   // ---------- plan de cada descarga: para qué título y a qué carpeta ----------
 
   /**
-   * plan: { entry: { tmdb, type, title, year }?, dest: carpeta relativa a la biblioteca o '' (Automática) }.
+   * plan: { entry: { tmdb, type, title, year }?, dest: carpeta (ruta completa) o '' (Automática), by: usuario }.
    * Sin ficha, al terminar se intenta identificar por el nombre del archivo.
    */
   setPlan(hash, plan = {}) {
@@ -124,24 +155,46 @@ class AmuleService extends EventEmitter {
         tmdb, type: e.type === 'series' || e.type === 'tv' ? 'series' : 'movie',
         title: String(e.title || '').slice(0, 200), year: +e.year || null
       }),
-      dest: plan.dest ? this.relDir(plan.dest) : '',
+      dest: plan.dest ? this.checkDest(plan.by, plan.dest) : '',
+      by: keyOf(plan.by),
       at: Date.now()
     };
     this.store.save();
   }
 
   /** Descargar un resultado de la búsqueda o un enlace ed2k, con su plan */
-  async download({ hash, link, entry, dest }) {
-    if (dest) this.relDir(dest);   // antes de descargar: si la carpeta no vale, que no empiece
+  async download(user, { hash, link, entry, dest }) {
+    if (!this.rootsFor(user).length) throw httpError(409, 'No hay ninguna carpeta de tu biblioteca en la que se pueda escribir');
+    if (dest) this.checkDest(user, dest);   // antes de descargar: si la carpeta no vale, que no empiece
     if (link) {
       const m = /\|file\|[^|]+\|\d+\|([0-9a-f]{32})\|/i.exec(String(link));
+      if (m && this.data.plans[m[1].toLowerCase()] && !this.owns(user, m[1])) throw httpError(409, 'Otra persona ya está descargando ese archivo');
       await this.run(c => c.addLink(link));
-      if (m) this.setPlan(m[1], { entry, dest });
+      if (m) this.setPlan(m[1], { entry, dest, by: user });
     } else {
+      if (this.data.plans[String(hash || '').toLowerCase()] && !this.owns(user, hash)) throw httpError(409, 'Otra persona ya está descargando ese archivo');
       await this.run(c => c.download(String(hash || '')));
-      this.setPlan(hash, { entry, dest });
+      this.setPlan(hash, { entry, dest, by: user });
     }
     this.republish();
+  }
+
+  /** Buscar: cada uno con su búsqueda, para que dos personas buscando a la vez no se pisen */
+  async search(user, q) {
+    this.searches ||= new Map();
+    const r = await this.query(c => c.search(q, this.searches.get(keyOf(user))));
+    this.searches.set(keyOf(user), r.searchId);
+    return r;
+  }
+
+  searchResults(user) {
+    return this.query(c => c.searchResults(this.searches?.get(keyOf(user))));
+  }
+
+  /** Pausar, reanudar, cancelar…: un moderador, sólo las suyas */
+  fileOp(user, hash, op) {
+    if (!this.owns(user, hash)) throw httpError(403, 'Esa descarga no es tuya');
+    return this.run(c => c.fileOp(String(hash || ''), String(op || '')));
   }
 
   // ---------- al terminar ----------
@@ -193,28 +246,35 @@ class AmuleService extends EventEmitter {
         }
         info = found;
       }
-      await this.place({ hash: d.hash, name: d.name, file, info, dest: plan?.dest || '' });
+      // las descargas sin dueño (lanzadas en aMule, o de antes de que lo hubiera) son de los administradores
+      await this.place({ hash: d.hash, name: d.name, file, info, dest: plan?.dest || '', by: plan?.by || null });
     } catch (e) {
       await keep(e.message);
     }
   }
 
-  /** Renombra y mueve; deja fijada la ficha para que el escaneo no la confunda con otra */
-  async place({ hash, name, file, info, dest }) {
+  /**
+   * Renombra y mueve; deja fijada la ficha para que el escaneo no la confunda con otra.
+   * by: quien la coloca (sus carpetas) · owner: de quién es (para que la vea en «Colocadas»)
+   */
+  async place({ hash, name, file, info, dest, by, owner = by }) {
     const api = this.library.tmdb();
     if (!api.enabled) throw new Error('Falta la API key de TMDB');
-    const root = this.root;
-    if (!root) throw new Error('No hay carpeta de biblioteca configurada');
+    const admin = !by || this.library.isAdmin(by);
+    const roots = admin ? writable(this.library.roots()) : this.rootsFor(by);
+    if (!roots.length) throw new Error('No hay ninguna carpeta de la biblioteca en la que se pueda escribir');
+    // «Automática»: un administrador, en la biblioteca principal; un moderador, en las carpetas de sus NAS
+    const main = this.library.settings.data.libraryPath;
+    const auto = admin && roots.includes(main) ? [main] : roots;
+    const destAbs = dest ? (path.isAbsolute(dest) ? dest : path.join(main, dest)) : null;   // antes, relativo a la principal
+    if (destAbs && !roots.some(r => within(r, destAbs))) throw new Error('No puedes guardar en esa carpeta');
     const names = await englishNames(api, info);
-    const target = targetPath({
-      info, names, ext: path.extname(name).toLowerCase(), root,
-      dest: dest ? path.join(root, this.relDir(dest)) : null, items: this.library.seriesFolders()
-    });
-    if (!isInside(root, target)) throw new Error('La carpeta de destino no está dentro de la biblioteca');
+    const target = targetPath({ info, names, ext: path.extname(name).toLowerCase(), roots: auto, dest: destAbs, items: this.library.seriesFolders() });
+    if (!roots.some(r => isInside(r, target))) throw new Error('La carpeta de destino no está dentro de la biblioteca');
     await moveInto(file, target);
     this.library.pinMatch(info.type, info.type === 'movie' ? target : path.dirname(target), info.tmdb);
-    const rel = path.relative(root, target);
-    this.data.placed.unshift({ hash, name, dest: rel.split(path.sep).join('/'), at: Date.now() });
+    const label = this.library.folderLabel(target);
+    this.data.placed.unshift({ hash, name, dest: label, by: owner ? keyOf(owner) : null, at: Date.now() });
     this.data.placed.length = Math.min(this.data.placed.length, KEEP_PLACED);
     delete this.data.plans[hash];
     delete this.data.pending[hash];
@@ -222,14 +282,14 @@ class AmuleService extends EventEmitter {
     this.store.save();
     this.client.fileOp(hash, 'clear').catch(() => {});
     this.library.scan();
-    this.emit('placed', { name, dest: rel });
+    this.emit('placed', { name, dest: label, by: owner ? keyOf(owner) : null });
     this.republish();
-    return rel;
+    return label;
   }
 
   async addPending(d, file, reason, suggestion) {
     const plan = this.data.plans[d.hash];
-    this.data.pending[d.hash] = { hash: d.hash, name: d.name, size: d.size, file, reason, suggestion, dest: plan?.dest || '', at: Date.now() };
+    this.data.pending[d.hash] = { hash: d.hash, name: d.name, size: d.size, file, reason, suggestion, dest: plan?.dest || '', by: plan?.by || null, at: Date.now() };
     // el destino ya va en la pendiente; sin plan ni seguimiento, quitarla de la lista no la hace volver
     delete this.data.plans[d.hash];
     delete this.data.tracked[d.hash];
@@ -240,10 +300,10 @@ class AmuleService extends EventEmitter {
     this.republish();
   }
 
-  /** Administrador: coloca una pendiente con la ficha y la carpeta que elige. body: { hash, entry, dest } */
-  async placePending({ hash, entry, dest }) {
+  /** Coloca una pendiente con la ficha y la carpeta que se eligen. body: { hash, entry, dest } */
+  async placePending(user, { hash, entry, dest }) {
     const p = this.data.pending[String(hash || '').toLowerCase()];
-    if (!p) throw httpError(404, 'Esa descarga ya no está pendiente');
+    if (!p || !this.owns(user, p.hash)) throw httpError(404, 'Esa descarga ya no está pendiente');
     if (!fs.existsSync(p.file)) throw httpError(409, 'El archivo ya no está en la carpeta de descargas de aMule');
     const tmdb = Number(entry?.tmdb);
     if (!Number.isInteger(tmdb) || tmdb <= 0) throw httpError(400, 'Elige la ficha del título');
@@ -254,10 +314,11 @@ class AmuleService extends EventEmitter {
         ? { season: +entry.season, episode: +entry.episode } : episodeOf(p.name);
       if (!ep) throw httpError(400, 'Indica la temporada y el episodio');
     }
+    const destAbs = dest ? this.checkDest(user, dest) : '';
     if (this.busy.has(p.hash)) throw httpError(409, 'Ya se está colocando');
     this.busy.add(p.hash);
     try {
-      return await this.place({ hash: p.hash, name: p.name, file: p.file, info: { type, tmdb, season: ep?.season, episode: ep?.episode }, dest: dest || '' });
+      return await this.place({ hash: p.hash, name: p.name, file: p.file, info: { type, tmdb, season: ep?.season, episode: ep?.episode }, dest: destAbs, by: user, owner: p.by || keyOf(user) });
     } catch (e) {
       throw e.status ? e : httpError(400, e.message);
     } finally {
@@ -265,43 +326,54 @@ class AmuleService extends EventEmitter {
     }
   }
 
-  dismissPending(hash) {
-    delete this.data.pending[String(hash || '').toLowerCase()];
+  dismissPending(user, hash) {
+    hash = String(hash || '').toLowerCase();
+    if (!this.data.pending[hash] || !this.owns(user, hash)) throw httpError(404, 'Esa descarga ya no está pendiente');
+    delete this.data.pending[hash];
     this.store.save();
     this.republish();
   }
 
-  clearPlaced() {
-    this.data.placed = [];
+  /** Vacía «Colocadas»: un administrador, todas; un moderador, las suyas */
+  clearPlaced(user) {
+    this.data.placed = this.library.isAdmin(user) ? [] : this.data.placed.filter(p => p.by !== keyOf(user));
     this.store.save();
     this.republish();
   }
 
-  // ---------- carpetas de destino (dentro de la biblioteca) ----------
+  // ---------- carpetas de destino ----------
 
-  /** Carpeta relativa a la biblioteca, comprobada: que exista y no salga de ella. '' es la propia biblioteca */
-  relDir(rel) {
-    const root = this.root;
-    if (!root) throw httpError(409, 'No hay carpeta de biblioteca configurada');
-    const clean = String(rel || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
-    const abs = path.resolve(root, clean);
-    if (abs !== path.resolve(root) && !isInside(root, abs)) throw httpError(400, 'La carpeta tiene que estar dentro de la biblioteca');
-    if (clean.split('/').some(s => SKIP_DIRS.test(s))) throw httpError(400, 'Carpeta no válida');
+  /** Carpeta de destino comprobada (ruta completa): que exista, que sea suya y que no sea interna del NAS */
+  checkDest(user, dest) {
+    const abs = path.resolve(String(dest || ''));
+    const root = this.rootsFor(user).find(r => within(r, abs));
+    if (!root) throw httpError(400, 'No puedes guardar en esa carpeta');
+    if (path.relative(root, abs).split(/[\\/]/).some(s => SKIP_DIRS.test(s))) throw httpError(400, 'Carpeta no válida');
     let st = null;
     try { st = fs.statSync(abs); } catch {}
-    if (!st?.isDirectory()) throw httpError(404, 'No existe la carpeta ' + (clean || '(biblioteca)'));
-    return clean;
+    if (!st?.isDirectory()) throw httpError(404, 'No existe esa carpeta');
+    return abs;
   }
 
-  /** Subcarpetas de una carpeta de la biblioteca, para el selector de destino */
-  folders(rel) {
-    const clean = this.relDir(rel);
-    const abs = path.join(this.root, clean);
+  /**
+   * El selector de destino: sin carpeta, las bibliotecas en las que puede guardar (si sólo hay una, directamente su
+   * contenido); con carpeta, sus subcarpetas. crumbs: el camino, para volver atrás
+   */
+  folders(user, dir) {
+    const roots = this.rootsFor(user);
+    if (!roots.length) throw httpError(409, 'No hay ninguna carpeta de tu biblioteca en la que se pueda escribir');
+    if (!dir && roots.length === 1) dir = roots[0];
+    const top = roots.length > 1 ? [{ path: '', name: 'Bibliotecas' }] : [];
+    if (!dir) return { path: '', label: '', crumbs: top, dirs: roots.map(r => ({ path: r, name: this.library.rootLabel(r) })) };
+    const abs = this.checkDest(user, dir);
+    const root = roots.find(r => within(r, abs));
+    const parts = path.relative(root, abs).split(/[\\/]/).filter(Boolean);
+    const crumbs = [...top, { path: root, name: this.library.rootLabel(root) }, ...parts.map((p, i) => ({ path: path.join(root, ...parts.slice(0, i + 1)), name: p }))];
     const dirs = fs.readdirSync(abs, { withFileTypes: true })
       .filter(e => e.isDirectory() && !SKIP_DIRS.test(e.name))
-      .map(e => e.name)
-      .sort((a, b) => a.localeCompare(b, 'es', { numeric: true }));
-    return { path: clean, root: path.basename(this.root) || this.root, dirs };
+      .map(e => ({ path: path.join(abs, e.name), name: e.name }))
+      .sort((a, b) => a.name.localeCompare(b.name, 'es', { numeric: true }));
+    return { path: abs, label: this.library.folderLabel(abs), crumbs, dirs };
   }
 }
 

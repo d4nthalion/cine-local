@@ -1486,14 +1486,16 @@ const isAdmin = () => !!S.me?.admin;
 const LOCAL = () => !WEB && !!S.me?.local;
 /** Corregir fichas, escanear, carpetas y TMDB: en el servidor, sólo un administrador */
 const canManage = () => isAdmin();
-/** Corregir la coincidencia de un título: los administradores y los moderadores del NAS en el que está */
+/** Corregir la coincidencia o cambiar la carátula de un título: los administradores y los moderadores del NAS en el que está */
 const canFix = it => {
   if (canManage()) return true;
   const p = (it?.type === 'movie' ? it.path : it?.episodes?.[0]?.path) || '';
   return (S.me?.mod || []).some(r => p.startsWith(r.replace(/\/+$/, '') + '/'));
 };
-/** Descargas con el aMule del servidor: sólo administradores, y si el servidor tiene aMule configurado */
-const emuleOn = () => !!S.me?.downloads && isAdmin();
+/** Descargas con el aMule del servidor: los administradores y los moderadores con permiso (lo decide el servidor) */
+const emuleOn = () => !!S.me?.downloads;
+/** Un moderador que descarga: Descargas va en la barra de arriba, sin Administración, y sólo con lo suyo */
+const dlOwnNav = () => emuleOn() && !isAdmin();
 /** Botón «Buscar en aMule»: con la ficha, para que al terminar se renombre y se coloque sin preguntar */
 const emuleFindAttrs = (q, alt, entry) => `data-action="emule-find" data-q="${esc(q)}" data-alt="${esc(alt || '')}"${entry?.tmdb ? ` data-entry="${esc(JSON.stringify({ tmdb: entry.tmdb, type: entry.type, title: entry.title, year: entry.year || null }))}"` : ''}`;
 
@@ -1503,6 +1505,7 @@ async function refreshMe() {
   // los administradores tienen Peticiones (y Usuarios, Registro y Descargas) dentro de Administración
   $('#navRequests').classList.toggle('hidden', !hasRequests() || isAdmin());
   $('#navAdmin').classList.toggle('hidden', !adminOn());
+  $('#navDownloads').classList.toggle('hidden', !dlOwnNav());
   loadNotifs();
   if (hasRequests()) await loadRequests(); else setRequests(null);
 }
@@ -1721,7 +1724,7 @@ function adminTabList() {
     hasRequests() && window.api.users && ['users', 'Usuarios'],
     hasRequests() && window.api.announcements && ['announce', 'Avisos'],
     hasRequests() && window.api.accessLog && ['access', 'Registro'],
-    emuleOn() && ['downloads', 'Descargas', activeDownloads().length]
+    isAdmin() && emuleOn() && ['downloads', 'Descargas', activeDownloads().length]
   ].filter(Boolean);
 }
 const adminOn = () => isAdmin() && adminTabList().length > 0;
@@ -1756,7 +1759,7 @@ function viewUsers() {
     return `<button class="user-row" ${admin ? 'disabled title="A los administradores no se les puede limitar"' : `data-user-open="${esc(x.name)}"`}>
       <span class="user-av">${esc(x.name[0].toUpperCase())}</span>
       <span class="user-main"><span class="user-name">${esc(x.name)}</span><span class="user-sub ${x.online ? 'on' : ''}">${seenText(x)}</span></span>
-      ${x.mod?.length && !admin ? `<span class="status-pill" title="Puede corregir coincidencias">Moderador · ${esc(x.mod.map(k => (u.sources || []).find(s => s.key === k)?.label || k).join(', '))}</span>` : ''}
+      ${x.mod?.length && !admin ? `<span class="status-pill" title="Puede corregir coincidencias y carátulas${x.dl ? ', y descargar con aMule' : ''}">Moderador · ${esc(x.mod.map(k => (u.sources || []).find(s => s.key === k)?.label || k).join(', '))}${x.dl ? ' · descarga' : ''}</span>` : ''}
       <span class="status-pill">${x.role ? ROLE_NAME[x.role] : 'Fuera de los grupos'}</span>
       <span class="status-pill ${pill}">${accessSummary(x)}</span>
       <span class="user-go">${admin ? '' : I.right}</span>
@@ -1802,7 +1805,7 @@ async function loadUser(name) {
   } catch (e) { S.userEdit = { name, error: errText(e) }; }
   if (S.route.name === 'user') render(true);
 }
-const userSnap = e => JSON.stringify([e.mode, e.items, e.blocked, e.mod, [...(e.folders || [])].sort()]);
+const userSnap = e => JSON.stringify([e.mode, e.items, e.blocked, e.mod, !!(e.dl && e.mod?.length), [...(e.folders || [])].sort()]);
 const userDirty = e => userSnap(e) !== e.saved;
 
 const ACCESS_MODES = [
@@ -1850,8 +1853,11 @@ function viewUser(name) {
       <div class="ctl"><label class="switch"><input type="checkbox" id="uaccEnter" ${e.blocked ? '' : 'checked'}><span></span></label></div></div>
     ${(S.users.sources || []).length ? `<h2 class="coll-sec">Permisos</h2>
     ${S.users.sources.map(s => `<div class="set-row"><div class="lbl"><div class="t">Moderador de ${esc(s.label)}</div>
-      <div class="d">Puede corregir las coincidencias con TMDB de las películas y series de ese NAS.</div></div>
-      <div class="ctl"><label class="switch"><input type="checkbox" data-uacc-mod="${esc(s.key)}" ${e.mod?.includes(s.key) ? 'checked' : ''}><span></span></label></div></div>`).join('')}` : ''}
+      <div class="d">Puede corregir las coincidencias con TMDB y cambiar las carátulas de las películas y series de ese NAS.</div></div>
+      <div class="ctl"><label class="switch"><input type="checkbox" data-uacc-mod="${esc(s.key)}" ${e.mod?.includes(s.key) ? 'checked' : ''}><span></span></label></div></div>`).join('')}
+    ${e.mod?.length && S.me?.downloads ? `<div class="set-row"><div class="lbl"><div class="t">Puede descargar con aMule</div>
+      <div class="d">Tendrá <b>Descargas</b> en la barra de arriba para buscar y descargar, y lo descargado se guardará en las carpetas de ${esc(e.mod.map(k => S.users.sources.find(s => s.key === k)?.label || k).join(', '))}. Sólo verá sus propias descargas; la conexión de aMule la siguen llevando los administradores.</div></div>
+      <div class="ctl"><label class="switch"><input type="checkbox" id="uaccDl" ${e.dl ? 'checked' : ''}><span></span></label></div></div>` : ''}` : ''}
     ${(S.users.privateFolders || []).length ? `<h2 class="coll-sec">Carpetas privadas</h2>
     ${S.users.privateFolders.map(f => `<div class="set-row"><div class="lbl"><div class="t">Puede ver ${esc(f.label)}</div>
       <div class="d">Lo que hay en esa carpeta sólo lo ven los usuarios que la tengan marcada.</div></div>
@@ -1882,7 +1888,7 @@ async function saveUserAccess() {
   if (!e) return;
   try {
     // con «Todo» la selección se queda guardada en el servidor, por si se vuelve a limitar
-    const r = await window.api.users.set({ name: e.name, mode: e.mode, items: e.items, blocked: e.blocked, mod: e.mod, folders: e.folders });
+    const r = await window.api.users.set({ name: e.name, mode: e.mode, items: e.items, blocked: e.blocked, mod: e.mod, dl: !!e.dl, folders: e.folders });
     S.userEdit = { ...e, ...r, items: [...r.items], mod: [...(r.mod || [])], folders: [...(r.folders || [])] };
     S.userEdit.saved = userSnap(S.userEdit);
     toast(`${e.name}: ${r.blocked ? 'sin acceso' : accessSummary({ ...r, count: r.items.length }).toLowerCase()}`, 'ok');
@@ -2122,7 +2128,7 @@ function viewDetail(id) {
       : `<b>Carpeta</b><span>${esc(it.path)}</span><b>Tamaño</b><span>${fmtSize(it.episodes.reduce((a, e) => a + e.size, 0))}</span>`}
     <b>Metadatos</b><span>${it.meta ? `TMDB #${m.tmdbId}${canFix(it) ? ` · <button class="link-btn" data-action="identify" data-id="${it.id}">Corregir coincidencia</button>` : ''}`
       : `${it.metaFailed ? 'No se encontró en TMDB' : 'Sin metadatos'}${canFix(it) ? ` · <button class="link-btn" data-action="identify" data-id="${it.id}">Identificar manualmente</button>` : ''}`}</span>
-    ${canManage() || it.poster ? `<b>Carátula</b><span>${it.poster ? 'Elegida a mano' : posterOf(it) ? 'La de TMDB' : 'Sin carátula'}${canManage() ? ` · <button class="link-btn" data-action="poster" data-id="${it.id}">Cambiar</button>` : ''}</span>` : ''}
+    ${canFix(it) || it.poster ? `<b>Carátula</b><span>${it.poster ? 'Elegida a mano' : posterOf(it) ? 'La de TMDB' : 'Sin carátula'}${canFix(it) ? ` · <button class="link-btn" data-action="poster" data-id="${it.id}">Cambiar</button>` : ''}</span>` : ''}
   </div>`;
 
   return `<div class="detail">
@@ -2150,7 +2156,7 @@ function viewDetail(id) {
             <div class="menu hidden" id="detailMenu">
               <button data-action="mark-all" data-id="${it.id}" data-watched="${watchedAll ? 0 : 1}">${watchedAll ? I.restart : I.eye}${watchedAll ? 'Marcar como no visto' : 'Marcar como visto'}</button>
               ${canFix(it) ? `<button data-action="identify" data-id="${it.id}">${I.tag}Corregir coincidencia</button>` : ''}
-              ${canManage() ? `<button data-action="poster" data-id="${it.id}">${I.image}Cambiar carátula</button>` : ''}
+              ${canFix(it) ? `<button data-action="poster" data-id="${it.id}">${I.image}Cambiar carátula</button>` : ''}
               ${emuleOn() ? `<button ${emuleFindAttrs(T(it), m.originalTitle, m.tmdbId && { tmdb: m.tmdbId, type: it.type, title: T(it), year: m.year })}>${I.download}Buscar en aMule</button>` : ''}
               ${WEB ? '' : `<button data-action="reveal" data-path="${esc(it.type === 'movie' ? it.path : it.episodes[0].path)}">${I.folder}Abrir ubicación</button>`}
             </div>
@@ -2452,12 +2458,14 @@ function emuleStatusHTML() {
   const kad = { ok: ['ok', 'Abierto'], firewalled: ['warn', 'Tras cortafuegos'], connecting: ['', 'Conectando…'], off: ['bad', 'Desconectado'] }[st.kad];
   const busy = (k) => srv.busy === k ? ' disabled' : '';
   const n = srv.list?.length;
-  return `<div class="dl-status">
+  // sin carpeta en la que escribir (p. ej. las del otro NAS, montadas sólo para leer): que se vea antes de descargar
+  const noWrite = sn.canWrite === false ? `<div class="banner warn"><div class="txt"><b>Ahora mismo no se puede guardar en ${isAdmin() ? 'ninguna carpeta de la biblioteca' : 'las carpetas de tu NAS'}.</b> ${isAdmin() ? 'Revisa que estén montadas con escritura.' : 'Avisa a un administrador: tienen que estar montadas con escritura.'}</div></div>` : '';
+  return `${noWrite}<div class="dl-status">
     <span><small>Servidor</small><span class="status-pill ${server[0]}">${server[1]}</span>${(st.server === 'high' || st.server === 'low') && st.serverName ? `<em title="${esc(st.serverName)}">${esc(st.serverName)}</em>` : ''}</span>
     <span><small>Kad</small><span class="status-pill ${kad[0]}">${kad[1]}</span>${st.kad !== 'off' && st.kadContacts ? `<em>${st.kadContacts} contactos</em>` : ''}</span>
     <span><small>Bajada</small><b>${fmtRate(st.down) || '0 KB/s'}</b></span>
     <span><small>Subida</small><b>${fmtRate(st.up) || '0 KB/s'}</b></span>
-    <span class="dl-conn-btns">
+    ${isAdmin() ? `<span class="dl-conn-btns">
       ${st.server === 'off'
         ? `<button class="btn btn-accent btn-sm" data-action="emule-srv-any"${busy('srv')}>Conectar</button>`
         : `<button class="btn btn-ghost btn-sm" data-action="emule-srv-off"${busy('srv')}>${st.server === 'connecting' ? 'Cancelar' : 'Desconectar'}</button>`}
@@ -2465,7 +2473,7 @@ function emuleStatusHTML() {
         ? `<button class="btn btn-accent btn-sm" data-action="emule-kad" data-op="connect"${busy('kad')}>Conectar Kad</button>`
         : `<button class="btn btn-ghost btn-sm" data-action="emule-kad" data-op="disconnect"${busy('kad')}>Desconectar Kad</button>`}
       <button class="btn btn-ghost btn-sm srv-toggle${srvOpen() ? ' on' : ''}" data-action="emule-srv-toggle" aria-expanded="${srvOpen()}">Servidores${n ? `<span class="srv-n">${n}</span>` : ''}${I.right}</button>
-    </span>
+    </span>` : ''}
   </div>`;
 }
 
@@ -2551,7 +2559,7 @@ function setServers(r) {
 /** Se pide al abrir Descargas y, con la lista visible, cada 5 s como mucho (al ritmo del sondeo del servidor) */
 async function loadServers(force = false) {
   const srv = S.emule.srv;
-  if (S.route.name !== 'downloads' || !emuleOn() || !S.emule.snap.ok || document.hidden) return;
+  if (S.route.name !== 'downloads' || !emuleOn() || !isAdmin() || !S.emule.snap.ok || document.hidden) return;
   if (!force && !srvOpen() && srv.list) return;
   if (srv.loading || (!force && Date.now() - srv.at < 5000)) return;
   srv.loading = true;
@@ -2654,9 +2662,9 @@ function viewDownloads() {
   const s = S.emule.search;
   const method = S.emule.method;
   return `<div class="page downloads">
-    ${adminHead('downloads')}
+    ${isAdmin() ? adminHead('downloads') : '<div class="coll-head"><h1 class="page-title">Descargas</h1></div>'}
     <div id="dlStatus">${emuleStatusHTML()}</div>
-    ${serversPanelHTML()}
+    ${isAdmin() ? serversPanelHTML() : ''}
     <form class="dl-search" id="dlSearch">
       <div class="search big">${I.search}<input name="q" value="${esc(s.query)}" placeholder="Buscar en aMule: título, año, calidad…" spellcheck="false" autocomplete="off"></div>
       <select class="select" name="method" title="Dónde buscar">
@@ -2681,6 +2689,9 @@ function viewDownloads() {
 function paintEmule() {
   const n = activeDownloads().length;
   $('#navAdmin').classList.toggle('hidden', !adminOn());
+  $('#navDownloads').classList.toggle('hidden', !dlOwnNav());
+  $('#dlBadge').textContent = n || '';
+  $('#dlBadge').classList.toggle('hidden', !dlOwnNav() || !n);
   const tab = $('[data-nav="downloads"] .n') || null;
   if (tab) tab.textContent = n || '';
   if (S.route.name === 'downloads') {
@@ -2758,7 +2769,7 @@ function placeDialog({ mode, name, entry = null, dest = '' }) {
           <label>Episodio <input class="input" name="episode" inputmode="numeric" value="${guess.episode ?? ''}"></label></div>
       </div>
       <div class="pl-sec"><h3>Carpeta</h3>
-        <label class="pl-radio"><input type="radio" name="plDest" value="auto" ${st.auto ? 'checked' : ''}> Automática <small>películas a «Películas»; episodios a la carpeta de su serie</small></label>
+        <label class="pl-radio"><input type="radio" name="plDest" value="auto" ${st.auto ? 'checked' : ''}> Automática <small>${isAdmin() ? 'películas a «Películas»; episodios a la carpeta de su serie' : 'en tu NAS: películas a su carpeta de películas; episodios a la de su serie'}</small></label>
         <label class="pl-radio"><input type="radio" name="plDest" value="pick" ${st.auto ? '' : 'checked'}> Elegir carpeta</label>
         <div class="pl-browser hidden" id="plBrowser"></div>
       </div>
@@ -2789,13 +2800,13 @@ function placeDialog({ mode, name, entry = null, dest = '' }) {
     const browse = async (dir) => {
       browser.innerHTML = '<p class="pl-msg">Cargando…</p>';
       try {
+        // sin carpeta: las bibliotecas en las que puede guardar; con carpeta, sus subcarpetas (rutas completas)
         const r = await window.api.emule.folders(dir);
         st.browse = r.path;
-        const parts = r.path ? r.path.split('/') : [];
-        const crumbs = [`<button class="link-btn" data-dir="">${esc(r.root)}</button>`, ...parts.map((p, i) => `<button class="link-btn" data-dir="${esc(parts.slice(0, i + 1).join('/'))}">${esc(p)}</button>`)].join(' / ');
-        browser.innerHTML = `<div class="pl-crumbs">${crumbs}</div>
-          <div class="pl-dirs">${r.dirs.map(d => `<button class="pl-dir" data-dir="${esc(r.path ? r.path + '/' + d : d)}">${I.right}${esc(d)}</button>`).join('') || '<p class="pl-msg">Sin subcarpetas</p>'}</div>
-          <div class="pl-here">Irá a: <b>${esc([r.root, ...parts].join(' / '))}</b></div>`;
+        const crumbs = r.crumbs.map(c => `<button class="link-btn" data-dir="${esc(c.path)}">${esc(c.name)}</button>`).join(' / ');
+        browser.innerHTML = `${crumbs ? `<div class="pl-crumbs">${crumbs}</div>` : ''}
+          <div class="pl-dirs">${r.dirs.map(d => `<button class="pl-dir" data-dir="${esc(d.path)}">${I.right}${esc(d.name)}</button>`).join('') || '<p class="pl-msg">Sin subcarpetas</p>'}</div>
+          <div class="pl-here">${r.path ? `Irá a: <b>${esc(r.label)}</b>` : 'Elige dónde guardarlo'}</div>`;
       } catch (e) { browser.innerHTML = `<p class="pl-msg err">${esc(errText(e))}</p>`; }
     };
     const paintDest = () => {
@@ -2823,6 +2834,7 @@ function placeDialog({ mode, name, entry = null, dest = '' }) {
       if (!b) return;
       if (b.dataset.r === '0') { closeModal(); return resolve(null); }
       if (mode === 'place' && !st.entry) return toast('Elige la ficha del título', 'error');
+      if (!st.auto && !st.browse) return toast('Elige la carpeta', 'error');
       const out = { entry: st.entry ? { ...st.entry } : null, dest: st.auto ? '' : st.browse };
       if (mode === 'place' && st.entry.type === 'series') {
         const season = $('[name="season"]', m).value.trim(), episode = $('[name="episode"]', m).value.trim();
@@ -3837,6 +3849,12 @@ document.addEventListener('change', (e) => {
   if (e.target.dataset.uaccMod && S.userEdit) {
     const k = e.target.dataset.uaccMod, m = S.userEdit.mod || [];
     S.userEdit.mod = e.target.checked ? [...new Set([...m, k])] : m.filter(x => x !== k);
+    // el permiso de descargar depende de que modere algún NAS: se enseña u oculta con él
+    render(true);
+    return;
+  }
+  if (e.target.id === 'uaccDl' && S.userEdit) {
+    S.userEdit.dl = e.target.checked;
     const b = $('[data-action="uacc-save"]'); if (b) b.disabled = !userDirty(S.userEdit);
     return;
   }

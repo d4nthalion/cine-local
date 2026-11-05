@@ -52,8 +52,7 @@ const amule = new AmuleService({
   client: env.AMULE_URL && env.AMULE_PASSWORD ? new AmuleClient({ url: env.AMULE_URL, password: env.AMULE_PASSWORD }) : null,
   library,
   store: store(DATA, 'amule.json', { plans: {}, tracked: {}, pending: {}, placed: [] }),
-  incoming: env.AMULE_INCOMING || '/media/@amule/incoming',
-  root: env.AMULE_LIBRARY || null
+  incoming: env.AMULE_INCOMING || '/media/@amule/incoming'
 });
 
 // ---------- utilidades HTTP ----------
@@ -192,11 +191,11 @@ library.on('rules', name => {
     else c.res.write('event: library:changed\ndata: {}\n\n');
   }
 });
-// descargas: sólo a los administradores
-const toAdmins = (event, data) => sendTo(u => auth.isAdmin(u), event, () => data);
-amule.on('update', snap => toAdmins('emule:update', snap));
-amule.on('placed', ({ dest }) => toAdmins('toast', { type: 'ok', text: `Descarga colocada en la biblioteca: ${dest}`, action: 'downloads' }));
-amule.on('pending', p => toAdmins('toast', { type: 'info', text: `«${p.name}» ha terminado y está pendiente de colocar: ${p.reason}`, action: 'downloads' }));
+// descargas: a los administradores, todo; a los moderadores que descargan, sólo lo suyo
+amule.on('update', () => sendTo(u => amule.canUse(u), 'emule:update', u => amule.snapshotFor(u)));
+const toOwner = (by, event, data) => sendTo(u => auth.isAdmin(u) || (!!by && u.toLowerCase() === by), event, () => data);
+amule.on('placed', ({ dest, by }) => toOwner(by, 'toast', { type: 'ok', text: `Descarga colocada en la biblioteca: ${dest}`, action: 'downloads' }));
+amule.on('pending', p => toOwner(p.by, 'toast', { type: 'info', text: `«${p.name}» ha terminado y está pendiente de colocar: ${p.reason}`, action: 'downloads' }));
 setInterval(() => { for (const c of clients) c.res.write(': ping\n\n'); }, 25000).unref();
 
 // ---------- rutas ----------
@@ -226,7 +225,8 @@ route('GET', '/api/me', (req, res, { user }) => json(res, 200, {
   user, role: auth.role(user), admin: auth.isAdmin(user), version: VERSION, hwaccel: media.HWACCEL,
   // moderador: las carpetas de los NAS en los que puede corregir coincidencias
   mod: library.modRoots(user),
-  downloads: auth.isAdmin(user) && amule.enabled,
+  // Descargas: los administradores y los moderadores con permiso de descargar en sus NAS
+  downloads: amule.canUse(user),
   groups: auth.groupsActive() ? { admin: auth.adminGroup, user: auth.userGroup } : null
 }));
 
@@ -294,15 +294,17 @@ function withLinks(v, user) {
     ? { ...it, ...link(it.id, it.path) }
     : { ...it, episodes: it.episodes.map(e => ({ ...e, ...link(e.id, e.path) })) });
 }
-// carátula: las de TMDB para elegir, y cambiarla (otra de TMDB o una imagen subida, ya reducida) o volver a la de la ficha
+// carátula: las de TMDB para elegir, y cambiarla (otra de TMDB o una imagen subida, ya reducida) o volver a la de la ficha.
+// Los administradores y, como con las coincidencias, los moderadores de ese NAS
 route('GET', '/api/item/:id/posters', async (req, res, { p }) => json(res, 200, await library.posters(p.id)));
 route('POST', '/api/item/:id/poster', async (req, res, { p, user }) => {
+  if (!library.canModerate(user, p.id)) throw httpError(403, 'No puedes cambiar las carátulas de este NAS');
   const b = await readBody(req, 512 * 1024);
   const it = library.library.data.items.find(i => i.id === p.id);
   act(req, user, 'poster', it && titleOf({ item: it }), b.poster ? (b.poster.startsWith('data:') ? 'Imagen propia' : 'Otra de TMDB') : 'La de la ficha');
   try { json(res, 200, library.setPoster(p.id, b.poster || null)); }
   catch (e) { throw httpError(400, e.message); }
-}, { admin: true });
+});
 route('POST', '/api/scan', async (req, res, { user }) => { act(req, user, 'scan'); await library.scan(); json(res, 200, library.view(user, { slim: true })); }, { admin: true });
 route('POST', '/api/meta/refresh', (req, res, { user }) => { act(req, user, 'meta-refresh'); library.fetchMissingMetadata(true); json(res, 200, true); }, { admin: true });
 route('GET', '/api/person/:id', async (req, res, { p, user }) => json(res, 200, await library.person(+p.id, user)));
@@ -480,33 +482,40 @@ route('POST', '/api/requests', async (req, res, { user }) => {
 });
 
 // ---------- descargas (aMule en el NAS, administradores) ----------
-route('GET', '/api/downloads', (req, res) => json(res, 200, amule.snapshot), { admin: true });
-route('GET', '/api/downloads/folders', (req, res, { q }) => json(res, 200, amule.folders(q.get('path') || '')), { admin: true });
+// ---------- descargas (aMule en el NAS): administradores, y moderadores en sus NAS ----------
+const canDownload = user => { if (!amule.canUse(user)) throw httpError(403, 'No tienes permiso para descargar'); };
+route('GET', '/api/downloads', (req, res, { user }) => { canDownload(user); json(res, 200, amule.snapshotFor(user)); });
+route('GET', '/api/downloads/folders', (req, res, { q, user }) => { canDownload(user); json(res, 200, amule.folders(user, q.get('path') || '')); });
 route('POST', '/api/downloads', async (req, res, { user }) => {
+  canDownload(user);
   const b = await readBody(req, 16384);
   const ops = {
-    search: () => amule.query(c => c.search({ query: b.query, method: b.method })),
-    results: () => amule.query(c => c.searchResults()),
-    download: () => amule.download({ hash: b.hash, link: b.link, entry: b.entry, dest: b.dest }).then(() => ({ ok: true })),
-    op: () => amule.run(c => c.fileOp(String(b.hash || ''), String(b.op || ''))).then(() => ({ ok: true })),
+    search: () => amule.search(user, { query: b.query, method: b.method }),
+    results: () => amule.searchResults(user),
+    download: () => amule.download(user, { hash: b.hash, link: b.link, entry: b.entry, dest: b.dest }).then(() => ({ ok: true })),
+    op: () => amule.fileOp(user, b.hash, b.op).then(() => ({ ok: true })),
+    place: () => amule.placePending(user, b).then(dest => ({ ok: true, dest })),
+    dismiss: () => { amule.dismissPending(user, b.hash); return { ok: true }; },
+    clearPlaced: () => { amule.clearPlaced(user); return { ok: true }; }
+  };
+  // la conexión de aMule (servidores, Kad) es de todos: sólo la tocan los administradores
+  const adminOps = {
     connect: () => amule.run(c => c.connect()).then(() => ({ ok: true })),
     servers: () => amule.query(c => c.servers()),
     connectServer: () => amule.run(c => c.connectServer(b.ip, b.port)),
     disconnect: () => amule.run(c => c.disconnectServer()),
     kad: () => amule.run(c => c.kad(b.op, b.ip, b.port)),
-    updateServerMet: () => amule.run(c => c.updateServerMet(b.url)),
-    place: () => amule.placePending(b).then(dest => ({ ok: true, dest })),
-    dismiss: () => { amule.dismissPending(b.hash); return { ok: true }; },
-    clearPlaced: () => { amule.clearPlaced(); return { ok: true }; }
+    updateServerMet: () => amule.run(c => c.updateServerMet(b.url))
   };
-  const fn = ops[b.action];
+  if (adminOps[b.action] && !auth.isAdmin(user)) throw httpError(403, 'Sólo un administrador puede cambiar la conexión de aMule');
+  const fn = ops[b.action] || adminOps[b.action];
   if (!fn) throw httpError(400, 'Operación no válida');
   if (['download', 'place', 'dismiss'].includes(b.action) || (b.action === 'op' && b.op === 'cancel')) {
-    act(req, user, 'download-' + (b.action === 'op' ? 'cancel' : b.action), b.entry?.title || b.name || null, b.dest || null);
+    act(req, user, 'download-' + (b.action === 'op' ? 'cancel' : b.action), b.entry?.title || b.name || null, b.dest ? library.folderLabel(String(b.dest)) : null);
   }
   try { json(res, 200, await fn()); }
   catch (e) { throw e.status ? e : httpError(e.code === 'offline' || e.code === 'unconfigured' ? 503 : 400, e.message); }
-}, { admin: true });
+});
 
 route('GET', '/api/segments', async (req, res, { q }) => {
   const skip = { type: q.get('type'), tmdbId: +q.get('tmdbId'), ...(q.get('season') && { season: +q.get('season'), episode: +q.get('episode') }) };
@@ -567,13 +576,14 @@ route('POST', '/api/users', async (req, res, { user }) => {
   if (!name) throw httpError(400, 'Falta el usuario');
   if (auth.baseRole(name) === 'admin') throw httpError(400, 'A los administradores no se les puede limitar');
   const before = library.ruleView(name);
-  try { library.setRule(name, { mode: b.mode, items: b.items, blocked: b.blocked, mod: b.mod, folders: b.folders }); }
+  try { library.setRule(name, { mode: b.mode, items: b.items, blocked: b.blocked, mod: b.mod, dl: b.dl, folders: b.folders }); }
   catch (e) { throw httpError(400, e.message); }
   const after = library.ruleView(name);
   const MODES = { all: 'Ve todo', except: 'Todo menos lo elegido', only: 'Sólo lo elegido' };
   const label = k => library.sources().find(s => s.key === k)?.label || k;
   const detail = before.blocked !== after.blocked ? (after.blocked ? 'Acceso quitado' : 'Acceso devuelto')
     : before.mod.join() !== after.mod.join() ? (after.mod.length ? 'Moderador de ' + after.mod.map(label).join(', ') : 'Ya no es moderador')
+    : before.dl !== after.dl ? (after.dl ? 'Puede descargar con aMule en sus NAS' : 'Ya no puede descargar con aMule')
     : `${MODES[after.mode]}${after.mode === 'all' ? '' : ` (${after.items.length} ${after.items.length === 1 ? 'título' : 'títulos'})`}`;
   act(req, user, 'user-access', name, detail);
   json(res, 200, { ...after, ...userRow(name), items: after.items });

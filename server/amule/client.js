@@ -91,7 +91,6 @@ class AmuleClient {
     this.password = password || '';
     this.fetch = fetch;
     this.token = null;
-    this.searchId = null;
   }
 
   /** Las peticiones en paralelo (estado y descargas) comparten un solo inicio de sesión */
@@ -219,30 +218,28 @@ class AmuleClient {
     return { ...r, message: 'aMule está descargando la lista; los servidores aparecerán en unos segundos.' };
   }
 
-  // ---- búsqueda: una a la vez, como en la interfaz (la anterior se libera al empezar otra)
+  // ---- búsqueda: cada usuario lleva la suya (searchId); la anterior se libera al empezar otra
 
-  /** method: global (servidores) | kademlia · min/max en MB */
-  async search({ query, method = 'global', min, max }) {
+  /** method: global (servidores) | kademlia · min/max en MB · prev: la búsqueda anterior de quien busca */
+  async search({ query, method = 'global', min, max }, prev) {
     query = String(query || '').trim();
     if (!query) throw err('Escribe qué buscar');
-    if (this.searchId) this.call('DELETE', '/search/' + this.searchId).catch(() => {});
+    if (prev) this.call('DELETE', '/search/' + prev).catch(() => {});
     const body = { query, type: method === 'kademlia' ? 'kad' : 'global', file_type: 'video' };
     if (min) body.min_size_bytes = Math.round(min * 1048576);
     if (max) body.max_size_bytes = Math.round(max * 1048576);
     const s = await this.call('POST', '/search', body);
-    this.searchId = s.search_id;
-    return this.searchResults();
+    return { searchId: s.search_id, ...await this.searchResults(s.search_id) };
   }
 
   /** done: aMule ha terminado de buscar (la interfaz deja de preguntar) */
-  async searchResults() {
-    if (!this.searchId) return { message: '', results: [], done: true };
+  async searchResults(id) {
+    if (!id) return { message: '', results: [], done: true };
     let r;
-    try { r = await this.call('GET', `/search/${this.searchId}/results`); }
+    try { r = await this.call('GET', `/search/${+id}/results`); }
     catch (e) {
       if (e.code !== 'not_found') throw e;
-      this.searchId = null;
-      return { message: 'La búsqueda ha caducado: vuelve a buscar', results: [], done: true };
+      return { message: 'La búsqueda ha caducado: vuelve a buscar', results: [], done: true, expired: true };
     }
     return { message: '', results: (r.results || []).map(toResult).filter(x => x.hash), done: r.progress?.state !== 'running' };
   }

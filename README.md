@@ -117,7 +117,7 @@ Pruebas: `node test/introdb-test.js` (normalización, tramo activo, caché, 429;
 
 ## Descargas con aMule
 
-Sólo para administradores (grupo `cinelocal-admin`), en la app de escritorio y en la web. aMule corre en el propio NAS, en un contenedor junto a CineLocal Server, así que no hace falta tener el PC encendido ni subir nada después: CineLocal busca, descarga y, al terminar, **renombra y coloca** cada vídeo en la biblioteca. La instalación está en [`server/README.md`](server/README.md#descargas-con-amule). Sin CineLocal Server (carpetas de este PC) no hay descargas.
+Para administradores (grupo `cinelocal-admin`) y, si se les da permiso, para los moderadores de un NAS, en la app de escritorio y en la web. aMule corre en el propio NAS, en un contenedor junto a CineLocal Server, así que no hace falta tener el PC encendido ni subir nada después: CineLocal busca, descarga y, al terminar, **renombra y coloca** cada vídeo en la biblioteca. La instalación está en [`server/README.md`](server/README.md#descargas-con-amule). Sin CineLocal Server (carpetas de este PC) no hay descargas.
 
 * **Buscar:** en **Descargas** (servidores o Kad), o desde un título: `···` → **Buscar en aMule** en la ficha, en Peticiones, en los resultados de TMDB y en la watchlist de Letterboxd. También se puede pegar un enlace `ed2k://`.
 * **Descargar:** al pulsar *Descargar* se elige:
@@ -131,6 +131,7 @@ Sólo para administradores (grupo `cinelocal-admin`), en la app de escritorio y 
 * **Pendientes de colocar:** sin ficha, si el nombre no deja claro qué es (en películas hace falta el año: hay varias *Night of the Living Dead*), si es un episodio sin `S01E02`/`1x02`/`Cap.102`, o si ya existe un archivo con ese nombre, la descarga queda en *Pendientes de colocar* con el motivo y, si la hay, la ficha más probable. **Colocar** pide la ficha (y la temporada y el episodio, en series) y la carpeta. **Quitar** la saca de la lista; el archivo se queda en `@amule/incoming`.
 * **Conexión:** la barra de arriba muestra el servidor (*ID alta* / *ID baja*), Kad (*Abierto*, *Tras cortafuegos*…, con los contactos) y las velocidades, con **Conectar** / **Desconectar** para cada red. **Servidores** despliega la lista (usuarios, archivos, ping, fallos; se ordena pulsando la cabecera y cada fila tiene **Conectar**), **Añadir servidores de un server.met** y, con Kad sin conectar, **Conectar Kad desde un nodo** (`IP:puerto`).
 * **Ajustes → Descargas (aMule)** muestra si el servidor llega a aMule y avisa si hay *ID baja*.
+* **Moderadores:** en *Usuarios*, a quien es moderador de un NAS se le puede activar **Puede descargar con aMule**. Tiene **Descargas** en la barra de arriba (sin Administración), guarda sólo en las carpetas de los NAS que modera (*Automática*: su carpeta de películas o la de la serie), ve únicamente sus propias descargas y no toca la conexión de aMule. Los moderadores también pueden cambiar las carátulas de los títulos de su NAS, además de corregir la coincidencia. Si sus carpetas están montadas sólo para leer, Descargas lo avisa.
 
 Pruebas: `node test/amule-test.js` (cliente del API de aMule simulado, nombres, identificación y el paso de descarga terminada a la biblioteca sobre carpetas temporales).
 

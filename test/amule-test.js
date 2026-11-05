@@ -131,22 +131,41 @@ const tmdb = {
 
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'cl-amule-'));
   const root = path.join(tmp, 'Multimedia');
-  for (const d of ['Peliculas', 'Series/Drácula (2020)', 'Peticiones', '@amule/incoming']) fs.mkdirSync(path.join(root, d), { recursive: true });
+  // el otro NAS, con sus carpetas como las de vorgak4b: una de vídeo (con Peliculas) y otra de series
+  const nas2 = path.join(tmp, 'nas2');
+  const nas2v = path.join(nas2, 'video'), nas2s = path.join(nas2, 'SeriesVol1');
+  for (const d of [path.join(root, 'Peliculas'), path.join(root, 'Series', 'Drácula (2020)'), path.join(root, 'Peticiones'), path.join(root, '@amule', 'incoming'),
+    path.join(nas2v, 'Peliculas'), path.join(nas2v, '#recycle'), path.join(nas2s, 'Series')]) fs.mkdirSync(d, { recursive: true });
+
+  /** Biblioteca de mentira: dos NAS, un administrador («admin») y un moderador de nas2 con permiso de descargar («vorgak») */
+  function fakeLibrary(extra = {}) {
+    const roots = [root, nas2v, nas2s];
+    return {
+      settings: { data: { libraryPath: root } }, tmdb: () => tmdb, roots: () => roots, seriesFolders: () => [],
+      isAdmin: u => String(u).toLowerCase() === 'admin',
+      downloadRoots: u => (String(u).toLowerCase() === 'admin' ? roots : String(u).toLowerCase() === 'vorgak' ? [nas2v, nas2s] : []),
+      rootLabel: r => (r === root ? 'danthalion-nas' : 'vorgak4b · ' + path.basename(r)),
+      folderLabel: d => d, pinMatch() {}, scan() {}, ...extra
+    };
+  }
 
   await test('targetPath: automática, carpeta elegida y serie que ya existe', async () => {
     const movie = await englishNames(tmdb, { type: 'movie', tmdb: 1 });
-    assert.strictEqual(targetPath({ info: { type: 'movie' }, names: movie, ext: '.mkv', root }), path.join(root, 'Peliculas', 'Mission - Impossible (1996).mkv'));
-    assert.strictEqual(targetPath({ info: { type: 'movie' }, names: movie, ext: '.mkv', root, dest: path.join(root, 'Peticiones') }), path.join(root, 'Peticiones', 'Mission - Impossible (1996).mkv'));
+    assert.strictEqual(targetPath({ info: { type: 'movie' }, names: movie, ext: '.mkv', roots: [root] }), path.join(root, 'Peliculas', 'Mission - Impossible (1996).mkv'));
+    assert.strictEqual(targetPath({ info: { type: 'movie' }, names: movie, ext: '.mkv', roots: [root], dest: path.join(root, 'Peticiones') }), path.join(root, 'Peticiones', 'Mission - Impossible (1996).mkv'));
     const ep = { type: 'series', tmdb: 86848, season: 1, episode: 1 };
     const names = await englishNames(tmdb, ep);
     const show = { type: 'series', path: path.join(root, 'Series', 'Drácula (2020)'), meta: { tmdbId: 86848 } };
     // nueva: Series/Dracula (2020)/Dracula (2020) 1x01 The Rules of the Beast.mkv
-    assert.strictEqual(targetPath({ info: ep, names, ext: '.mkv', root }), path.join(root, 'Series', 'Dracula (2020)', 'Dracula (2020) 1x01 The Rules of the Beast.mkv'));
+    assert.strictEqual(targetPath({ info: ep, names, ext: '.mkv', roots: [root] }), path.join(root, 'Series', 'Dracula (2020)', 'Dracula (2020) 1x01 The Rules of the Beast.mkv'));
     // ya está (por su ficha): su carpeta, aunque se llame en español
-    assert.strictEqual(targetPath({ info: ep, names, ext: '.mkv', root, items: [show] }), path.join(show.path, 'Dracula (2020) 1x01 The Rules of the Beast.mkv'));
+    assert.strictEqual(targetPath({ info: ep, names, ext: '.mkv', roots: [root], items: [show] }), path.join(show.path, 'Dracula (2020) 1x01 The Rules of the Beast.mkv'));
     // «Episode 2» de TMDB no es un título
     const n2 = await englishNames(tmdb, { ...ep, episode: 2 });
-    assert.strictEqual(path.basename(targetPath({ info: { ...ep, episode: 2 }, names: n2, ext: '.mkv', root })), 'Dracula (2020) 1x02.mkv');
+    assert.strictEqual(path.basename(targetPath({ info: { ...ep, episode: 2 }, names: n2, ext: '.mkv', roots: [root] })), 'Dracula (2020) 1x02.mkv');
+    // varias carpetas (el otro NAS): las películas a la que tiene «Peliculas»; las series, a la que tiene «Series»
+    assert.strictEqual(targetPath({ info: { type: 'movie' }, names: movie, ext: '.mkv', roots: [nas2v, nas2s] }), path.join(nas2v, 'Peliculas', 'Mission - Impossible (1996).mkv'));
+    assert.strictEqual(targetPath({ info: ep, names, ext: '.mkv', roots: [nas2v, nas2s], items: [show] }), path.join(nas2s, 'Series', 'Dracula (2020)', 'Dracula (2020) 1x01 The Rules of the Beast.mkv'));
   });
 
   // ---------- servicio: de descarga terminada a la biblioteca ----------
@@ -164,12 +183,11 @@ const tmdb = {
     let scans = 0;
     // la serie ya está en la biblioteca, con su carpeta en español
     const show = path.join(root, 'Series', 'Drácula (2020)');
-    const library = { settings: { data: { libraryPath: root } }, tmdb: () => tmdb, seriesFolders: () => [{ type: 'series', path: show, meta: { tmdbId: 86848 } }],
-      pinMatch: (...a) => pins.push(a), scan: () => { scans++; } };
+    const library = fakeLibrary({ seriesFolders: () => [{ type: 'series', path: show, meta: { tmdbId: 86848 } }], pinMatch: (...a) => pins.push(a), scan: () => { scans++; } });
     const data = { plans: {}, tracked: {}, pending: {}, placed: [] };
     const svc = new AmuleService({ client, library, store: { data, save() {} }, incoming: path.join(root, '@amule', 'incoming') });
-    // H3 se lanzó desde la ficha de la serie, a la carpeta Peticiones
-    svc.setPlan(H3, { entry: { tmdb: 86848, type: 'series', title: 'Drácula', year: 2020 }, dest: 'Peticiones' });
+    // H3 lo lanzó el administrador desde la ficha de la serie, a la carpeta Peticiones
+    svc.setPlan(H3, { entry: { tmdb: 86848, type: 'series', title: 'Drácula', year: 2020 }, dest: path.join(root, 'Peticiones'), by: 'admin' });
     await svc.refresh();
     for (const d of list) fs.writeFileSync(path.join(root, '@amule', 'incoming', d.name), 'x');
     list = list.map(d => ({ ...d, state: 'complete' }));
@@ -183,22 +201,78 @@ const tmdb = {
     assert.deepStrictEqual(pins.map(p => p[0]).sort(), ['movie', 'series', 'series']);
     assert.deepStrictEqual(cleared.sort(), [H1, H2, H3, H4]);
     assert.strictEqual(scans, 3);
-    // la dudosa, a mano, a otra carpeta
-    const dest = await svc.placePending({ hash: H2, entry: { tmdb: 10331, type: 'movie' }, dest: 'Peticiones' });
-    assert.strictEqual(dest, path.join('Peticiones', 'Night of the Living Dead (1968).mkv'));
+    // la dudosa (sin dueño: de los administradores), a mano, a otra carpeta
+    const dest = await svc.placePending('admin', { hash: H2, entry: { tmdb: 10331, type: 'movie' }, dest: path.join(root, 'Peticiones') });
+    assert.strictEqual(dest, path.join(root, 'Peticiones', 'Night of the Living Dead (1968).mkv'));
     assert.deepStrictEqual(data.pending, {});
     assert.strictEqual(data.placed.length, 4);
     // no se sobrescribe nada: la misma película otra vez
     fs.writeFileSync(path.join(root, '@amule', 'incoming', 'otra.mkv'), 'y');
     data.pending.x = { hash: 'x', name: 'otra.mkv', file: path.join(root, '@amule', 'incoming', 'otra.mkv') };
-    await assert.rejects(svc.placePending({ hash: 'x', entry: { tmdb: 10331, type: 'movie' }, dest: 'Peticiones' }), /Ya existe/);
+    await assert.rejects(svc.placePending('admin', { hash: 'x', entry: { tmdb: 10331, type: 'movie' }, dest: path.join(root, 'Peticiones') }), /Ya existe/);
   });
-  await test('carpetas: dentro de la biblioteca y sin las ocultas', () => {
-    const svc = new AmuleService({ client: {}, library: { settings: { data: { libraryPath: root } } }, store: { data: {}, save() {} }, root });
-    assert.deepStrictEqual(svc.folders('').dirs, ['Peliculas', 'Peticiones', 'Series']);
-    assert.throws(() => svc.relDir('../fuera'), /dentro de la biblioteca/);
-    assert.throws(() => svc.relDir('@amule'), /no válida/);
-    assert.throws(() => svc.relDir('NoExiste'), /No existe/);
+
+  await test('moderador: sólo en su NAS, sólo lo suyo', async () => {
+    const H5 = '5'.repeat(32), H6 = '6'.repeat(32);
+    let list = [{ hash: H5, name: 'The.Matrix.1999.1080p.mkv', state: 'downloading', size: 10 }, { hash: H6, name: 'Otra.2001.mkv', state: 'downloading', size: 10 }];
+    const client = { transfers: async () => ({ status: {}, downloads: list }), fileOp: async () => {}, download: async () => {} };
+    const data = { plans: {}, tracked: {}, pending: {}, placed: [] };
+    const svc = new AmuleService({ client, library: fakeLibrary(), store: { data, save() {} }, incoming: path.join(root, '@amule', 'incoming') });
+    // no puede guardar en el NAS principal ni descargar sin permiso
+    assert.throws(() => svc.checkDest('vorgak', path.join(root, 'Peliculas')), /No puedes guardar/);
+    assert.throws(() => svc.checkDest('vorgak', path.join(nas2v, '#recycle')), /no válida/);
+    await assert.rejects(svc.download('pepe', { hash: H5 }), /ninguna carpeta/);
+    // la suya, en automático; la otra es del administrador
+    await svc.download('vorgak', { hash: H5, entry: { tmdb: 603, type: 'movie', title: 'The Matrix', year: 1999 } });
+    await svc.download('admin', { hash: H6 });
+    await assert.rejects(svc.download('vorgak', { hash: H6 }), /Otra persona/);
+    assert.throws(() => svc.fileOp('vorgak', H6, 'pause'), /no es tuya/);
+    await svc.refresh();
+    assert.deepStrictEqual(svc.snapshotFor('vorgak').downloads.map(d => d.hash), [H5]);
+    assert.strictEqual(svc.snapshotFor('admin').downloads.length, 2);
+    assert.strictEqual(svc.snapshotFor('vorgak').canWrite, true);
+    // al terminar, a la carpeta de películas de su NAS
+    fs.writeFileSync(path.join(root, '@amule', 'incoming', 'The.Matrix.1999.1080p.mkv'), 'm');
+    list = list.map(d => (d.hash === H5 ? { ...d, state: 'complete' } : d));
+    await svc.refresh();
+    await new Promise(r => setTimeout(r, 50));
+    assert.ok(fs.existsSync(path.join(nas2v, 'Peliculas', 'The Matrix (1999).mkv')), 'en el NAS del moderador');
+    assert.deepStrictEqual(svc.snapshotFor('vorgak').placed.map(p => p.by), ['vorgak']);
+    assert.strictEqual(svc.snapshotFor('pepe').placed.length, 0);
+  });
+
+  await test('moveInto: a otro NAS por SMB (sin enlaces duros) copia y renombra, sin pisar nada', async () => {
+    const { moveInto } = require('../server/amule/organize');
+    const link = fs.promises.link;
+    // otro disco (EXDEV) y, en el destino, sin enlaces duros (como un montaje SMB sin extensiones Unix)
+    fs.promises.link = async (a, b) => { throw Object.assign(new Error('x'), { code: a.endsWith('.part') ? 'EOPNOTSUPP' : 'EXDEV' }); };
+    try {
+      const src = path.join(root, '@amule', 'incoming', 'smb.mkv');
+      fs.writeFileSync(src, 'contenido');
+      const dest = path.join(nas2v, 'Peliculas', 'SMB (2000).mkv');
+      await moveInto(src, dest);
+      assert.strictEqual(fs.readFileSync(dest, 'utf8'), 'contenido');
+      assert.ok(!fs.existsSync(src) && !fs.existsSync(dest + '.part'), 'sin restos');
+      fs.writeFileSync(src, 'otro');
+      await assert.rejects(moveInto(src, dest), /Ya existe/);
+      assert.strictEqual(fs.readFileSync(dest, 'utf8'), 'contenido', 'no se pisa');
+      assert.ok(fs.existsSync(src) && !fs.existsSync(dest + '.part'), 'el original se queda y no hay .part');
+    } finally { fs.promises.link = link; }
+  });
+
+  await test('carpetas: las bibliotecas de cada uno, sin las ocultas', () => {
+    const svc = new AmuleService({ client: {}, library: fakeLibrary(), store: { data: {}, save() {} } });
+    // el administrador elige primero la biblioteca; el moderador, entre las de su NAS
+    assert.deepStrictEqual(svc.folders('admin', '').dirs.map(d => d.name), ['danthalion-nas', 'vorgak4b · video', 'vorgak4b · SeriesVol1']);
+    assert.deepStrictEqual(svc.folders('vorgak', '').dirs.map(d => d.name), ['vorgak4b · video', 'vorgak4b · SeriesVol1']);
+    const v = svc.folders('vorgak', nas2v);
+    assert.deepStrictEqual(v.dirs.map(d => d.name), ['Peliculas']);
+    assert.deepStrictEqual(v.crumbs.map(c => c.name), ['Bibliotecas', 'vorgak4b · video']);
+    assert.deepStrictEqual(svc.folders('admin', root).dirs.map(d => d.name), ['Peliculas', 'Peticiones', 'Series']);
+    assert.throws(() => svc.folders('vorgak', root), /No puedes guardar/);
+    assert.throws(() => svc.checkDest('admin', path.join(root, '..')), /No puedes guardar/);
+    assert.throws(() => svc.checkDest('admin', path.join(root, '@amule')), /no válida/);
+    assert.throws(() => svc.checkDest('admin', path.join(root, 'NoExiste')), /No existe/);
   });
 
   fs.rmSync(tmp, { recursive: true, force: true });

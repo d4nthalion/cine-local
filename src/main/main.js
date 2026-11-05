@@ -517,13 +517,6 @@ async function playEmbedded({ mpv, playlist, uiDir }) {
   send('toast', { type: 'error', text: 'No se pudo integrar el reproductor en la ventana; se abre en una ventana aparte.' });
 }
 
-/** Como ipcMain.handle, pero sólo para administradores de CineLocal */
-function adminHandle(ch, fn) {
-  ipcMain.handle(ch, (...a) => {
-    if (!isAdmin()) throw new Error('Sólo un administrador de CineLocal puede hacer esto');
-    return fn(...a);
-  });
-}
 
 // ---------- Letterboxd ----------
 // Las búsquedas en TMDB para emparejar las películas pasan por la biblioteca (la clave de TMDB está allí)
@@ -830,7 +823,7 @@ ipcMain.handle('letterboxd:import', async () => {
 });
 ipcMain.handle('letterboxd:clear', () => { letterboxd.reset(); return letterboxd.snapshot(); });
 
-// descargas: el aMule del servidor (server/amule/), sólo administradores
-adminHandle('downloads:get', () => api().get('/api/downloads'));
-adminHandle('downloads:folders', (_e, dir) => api().get('/api/downloads/folders?path=' + encodeURIComponent(dir || '')));
-adminHandle('downloads:call', (_e, { action, q }) => api().post('/api/downloads', { ...q, action }));
+// descargas: el aMule del servidor (server/amule/); quién puede (administradores y moderadores) lo decide el servidor
+ipcMain.handle('downloads:get', () => api().get('/api/downloads'));
+ipcMain.handle('downloads:folders', (_e, dir) => api().get('/api/downloads/folders?path=' + encodeURIComponent(dir || '')));
+ipcMain.handle('downloads:call', (_e, { action, q }) => api().post('/api/downloads', { ...q, action }));
