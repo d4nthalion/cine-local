@@ -2570,6 +2570,9 @@ async function loadServers(force = false) {
   if ($('#dlStatus')) $('#dlStatus').innerHTML = emuleStatusHTML();
 }
 
+/** De quién es una descarga: sólo se enseña a los administradores (los moderadores sólo ven las suyas) y si no es suya */
+const dlOwner = by => isAdmin() && by && by !== S.me?.user?.toLowerCase() ? `<i class="dot"></i><span class="dl-by">de ${esc(by)}</span>` : '';
+
 function downloadRow(d) {
   const pc = Math.floor(d.progress * 1000) / 10;
   const active = !['complete', 'completing', 'hashing', 'error'].includes(d.state);
@@ -2586,7 +2589,7 @@ function downloadRow(d) {
       <div class="dl-name" title="${esc(d.name)}">${esc(d.name)}</div>
       <div class="dl-bar"><i style="width:${pc}%"></i></div>
       <div class="dl-sub">${sub}</div>
-      ${d.target ? `<div class="dl-target" title="Al terminar">${I.right}${esc(d.target)}</div>` : ''}
+      ${d.target ? `<div class="dl-target" title="Al terminar">${I.right}${esc(d.target)}${dlOwner(d.by)}</div>` : ''}
     </div>
     <div class="dl-actions">
       ${active ? (paused
@@ -2614,7 +2617,7 @@ function pendingHTML() {
     <div class="dl-list">${list.map(p => `<div class="dl pending">
       <div class="dl-main">
         <div class="dl-name" title="${esc(p.name)}">${esc(p.name)}</div>
-        <div class="dl-sub"><b class="st-error">${esc(p.reason)}</b><i class="dot"></i>${fmtSize(p.size)}${p.suggestion ? `<i class="dot"></i>¿${esc(p.suggestion.title)}${p.suggestion.year ? ` (${p.suggestion.year})` : ''}?` : ''}</div>
+        <div class="dl-sub"><b class="st-error">${esc(p.reason)}</b><i class="dot"></i>${fmtSize(p.size)}${p.suggestion ? `<i class="dot"></i>¿${esc(p.suggestion.title)}${p.suggestion.year ? ` (${p.suggestion.year})` : ''}?` : ''}${dlOwner(p.by)}</div>
       </div>
       <div class="dl-actions">
         <button class="btn btn-accent btn-sm" data-action="dl-place" data-hash="${p.hash}">Colocar</button>
@@ -2630,7 +2633,7 @@ function placedHTML() {
     <div class="dl-list">${list.map(p => `<div class="dl placed">
       <div class="dl-main">
         <div class="dl-name" title="${esc(p.dest)}">${I.check}${esc(p.dest)}</div>
-        <div class="dl-sub">${esc(p.name)}<i class="dot"></i>${new Date(p.at).toLocaleString('es-ES', { dateStyle: 'short', timeStyle: 'short' })}</div>
+        <div class="dl-sub">${esc(p.name)}<i class="dot"></i>${new Date(p.at).toLocaleString('es-ES', { dateStyle: 'short', timeStyle: 'short' })}${dlOwner(p.by)}</div>
       </div>
     </div>`).join('')}</div>`;
 }
