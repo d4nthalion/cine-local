@@ -142,8 +142,10 @@ function createWindow() {
     }
   });
   // enlaces externos (tráiler, TMDB) en el navegador
-  win.webContents.setWindowOpenHandler(({ url }) => { shell.openExternal(url); return { action: 'deny' }; });
-  win.webContents.on('will-navigate', (e, url) => { if (!url.startsWith('file:')) { e.preventDefault(); shell.openExternal(url); } });
+  // sólo https: otros esquemas (file:, ms-msdt:, search-ms:…) podrían ejecutar programas en Windows
+  const openSafe = url => { if (/^https:\/\//i.test(url)) shell.openExternal(url); };
+  win.webContents.setWindowOpenHandler(({ url }) => { openSafe(url); return { action: 'deny' }; });
+  win.webContents.on('will-navigate', (e, url) => { if (!url.startsWith('file:')) { e.preventDefault(); openSafe(url); } });
 }
 
 function send(ch, payload) {

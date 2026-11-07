@@ -94,7 +94,9 @@ function cookies(req) {
   const out = {};
   for (const part of (req.headers.cookie || '').split(';')) {
     const i = part.indexOf('=');
-    if (i > 0) out[part.slice(0, i).trim()] = decodeURIComponent(part.slice(i + 1).trim());
+    if (i <= 0) continue;
+    // una cookie mal codificada («%») no puede tirar el servidor: se ignora
+    try { out[part.slice(0, i).trim()] = decodeURIComponent(part.slice(i + 1).trim()); } catch {}
   }
   return out;
 }
@@ -105,8 +107,13 @@ function sessionToken(req) {
   return m ? m[1] : cookies(req).cl_session;
 }
 
-const isHttps = req => req.socket.encrypted || (TRUST_PROXY && req.headers['x-forwarded-proto'] === 'https');
-const clientIp = req => (TRUST_PROXY && String(req.headers['x-forwarded-for'] || '').split(',')[0].trim()) || req.socket.remoteAddress || '';
+// Las cabeceras X-Forwarded-* sólo valen si vienen del proxy inverso de DSM, que está en el propio NAS: quien entra
+// directamente al puerto (red local, VPN) podría inventárselas para saltarse el límite de intentos de inicio de sesión
+const LOOPBACK = /^(127\.\d+\.\d+\.\d+|::1|::ffff:127\.\d+\.\d+\.\d+)$/;
+const viaProxy = req => TRUST_PROXY && LOOPBACK.test(req.socket.remoteAddress || '');
+const isHttps = req => req.socket.encrypted || (viaProxy(req) && req.headers['x-forwarded-proto'] === 'https');
+// la última IP de la lista es la que ha añadido el proxy (las anteriores las puede poner el cliente)
+const clientIp = req => (viaProxy(req) && String(req.headers['x-forwarded-for'] || '').split(',').pop().trim()) || req.socket.remoteAddress || '';
 
 function sessionCookie(req, token, maxAge) {
   return `cl_session=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAge}${isHttps(req) ? '; Secure' : ''}`;
@@ -296,7 +303,11 @@ function withLinks(v, user) {
 }
 // carátula: las de TMDB para elegir, y cambiarla (otra de TMDB o una imagen subida, ya reducida) o volver a la de la ficha.
 // Los administradores y, como con las coincidencias, los moderadores de ese NAS
-route('GET', '/api/item/:id/posters', async (req, res, { p }) => json(res, 200, await library.posters(p.id)));
+route('GET', '/api/item/:id/posters', async (req, res, { p, user }) => {
+  // como la ficha: lo que no puede ver (carpetas privadas, límites) no existe para él
+  if (!library.canSee(user, p.id)) throw httpError(404, 'Elemento no encontrado');
+  json(res, 200, await library.posters(p.id));
+});
 route('POST', '/api/item/:id/poster', async (req, res, { p, user }) => {
   if (!library.canModerate(user, p.id)) throw httpError(403, 'No puedes cambiar las carátulas de este NAS');
   const b = await readBody(req, 512 * 1024);
@@ -597,7 +608,9 @@ route('POST', '/api/log', async (req, res, { user }) => {
   const c = clientErrors.get(user);
   const n = c && now - c.from < 60000 ? c.n + 1 : 1;
   clientErrors.set(user, n === 1 ? { n, from: now } : { n, from: c.from });
-  if (n <= 20) act(req, user, 'client-error', b.where, [b.message, b.stack].filter(Boolean).join('\n'));
+  // los de extensiones del navegador no son de CineLocal (las versiones anteriores de la web también los mandan)
+  const extension = /(chrome|moz|safari(-web)?|ms-browser)-extension:\/\//.test(String(b.stack || ''));
+  if (n <= 20 && !extension) act(req, user, 'client-error', b.where, [b.message, b.stack].filter(Boolean).join('\n'));
   json(res, 200, { ok: true });
 });
 
@@ -642,10 +655,12 @@ function rootOf(p) {
 const server = http.createServer(async (req, res) => {
   for (const [k, v] of Object.entries(SECURITY_HEADERS)) res.setHeader(k, v);
   if (isHttps(req)) res.setHeader('Strict-Transport-Security', 'max-age=31536000');
-  const url = new URL(req.url, 'http://x');
-  const pathname = decodeURIComponent(url.pathname);
-  let user = auth.check(sessionToken(req));
+  // dentro del try: una URL mal codificada («/%E0%A4%A») lanzaría un error que tumbaría el proceso entero
+  let pathname = String(req.url || '').split('?')[0], user = null, url;
   try {
+    url = new URL(req.url, 'http://x');
+    try { pathname = decodeURIComponent(url.pathname); } catch { throw httpError(400, 'Dirección no válida'); }
+    user = auth.check(sessionToken(req));
     if (pathname.startsWith('/api/')) {
       // Las peticiones que cambian algo llevan una cabecera propia: otra web no puede enviarla sin permiso (CORS),
       // y la cookie además es SameSite=Strict

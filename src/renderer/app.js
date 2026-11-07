@@ -3830,8 +3830,14 @@ window.addEventListener('mouseup', (e) => { if (e.button === 3) { e.preventDefau
 
 let searchTimer;
 // errores de la interfaz: al registro de actividad del servidor, para saber qué le pasó a cada usuario
+const EXTENSION = /(chrome|moz|safari(-web)?|ms-browser)-extension:\/\//;
+const reported = new Map();
 function reportError(message, stack) {
   if (!S.me || !window.api.logError) return;
+  if (EXTENSION.test(String(stack || ''))) return;   // de una extensión instalada en el navegador, no de CineLocal
+  const key = String(message);
+  if ((reported.get(key) || 0) >= 3) return;
+  reported.set(key, (reported.get(key) || 0) + 1);
   window.api.logError({ where: `${WEB ? 'Web' : 'Escritorio'} · ${S.route?.name || 'inicio'}`, message: String(message || 'Error').slice(0, 500), stack: String(stack || '').slice(0, 3000) }).catch(() => {});
 }
 window.addEventListener('error', e => reportError(e.message, e.error?.stack || `${e.filename}:${e.lineno}`));

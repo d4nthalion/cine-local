@@ -68,7 +68,12 @@ function parseRss(xml) {
 }
 
 // ---------- ZIP de exportación ----------
-/** Lector mínimo de ZIP (directorio central + deflate) */
+// Topes al descomprimir: un ZIP pequeño puede ocupar decenas de GB al abrirse (bomba ZIP) y tumbar el servidor.
+// Una exportación de Letterboxd con miles de películas ocupa unos pocos MB
+const ZIP_MAX_FILE = 50 * 1024 * 1024;
+const ZIP_MAX_TOTAL = 100 * 1024 * 1024;
+
+/** Lector mínimo de ZIP (directorio central + deflate). Sólo abre los .csv, que son lo único que se usa */
 function readZip(buf) {
   let eocd = -1;
   for (let i = buf.length - 22; i >= Math.max(0, buf.length - 65557); i--) if (buf.readUInt32LE(i) === 0x06054b50) { eocd = i; break; }
@@ -76,16 +81,22 @@ function readZip(buf) {
   const count = buf.readUInt16LE(eocd + 10);
   let p = buf.readUInt32LE(eocd + 16);
   const files = {};
+  let total = 0;
   for (let n = 0; n < count; n++) {
     if (buf.readUInt32LE(p) !== 0x02014b50) break;
     const method = buf.readUInt16LE(p + 10), size = buf.readUInt32LE(p + 20);
     const nameLen = buf.readUInt16LE(p + 28), extraLen = buf.readUInt16LE(p + 30), commentLen = buf.readUInt16LE(p + 32);
     const local = buf.readUInt32LE(p + 42);
     const name = buf.toString('utf8', p + 46, p + 46 + nameLen);
+    p += 46 + nameLen + extraLen + commentLen;
+    if (!/\.csv$/i.test(name)) continue;
     const start = local + 30 + buf.readUInt16LE(local + 26) + buf.readUInt16LE(local + 28);
     const data = buf.subarray(start, start + size);
-    if (!name.endsWith('/')) files[name] = method === 8 ? zlib.inflateRawSync(data) : data;
-    p += 46 + nameLen + extraLen + commentLen;
+    let out;
+    try { out = method === 8 ? zlib.inflateRawSync(data, { maxOutputLength: ZIP_MAX_FILE }) : data; }
+    catch (e) { throw new Error(e.code === 'ERR_BUFFER_TOO_LARGE' ? 'El ZIP tiene un archivo demasiado grande' : 'El archivo no es un ZIP válido'); }
+    if (out.length > ZIP_MAX_FILE || (total += out.length) > ZIP_MAX_TOTAL) throw new Error('El ZIP es demasiado grande al descomprimirlo');
+    files[name] = out;
   }
   return files;
 }

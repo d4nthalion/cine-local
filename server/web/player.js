@@ -182,10 +182,10 @@
       const r = await fetch(`/api/media/${P.playlist[P.idx].id}/subs/${sub.key}`);
       if (!r.ok) throw new Error();
       const cues = parseVtt(await r.text());
-      if (token !== P.token || P.sub !== sub) return;
+      if (!P || token !== P.token || P.sub !== sub) return;   // cerrado o cambiado mientras llegaban
       P.cues = cues;
       note(null);
-    } catch { if (token === P.token) note('No se pudieron cargar los subtítulos', 3000); }
+    } catch { if (P && token === P.token) note('No se pudieron cargar los subtítulos', 3000); }
   }
 
   function parseVtt(text) {
