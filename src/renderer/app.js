@@ -1358,7 +1358,8 @@ function watchlistBody() {
 /** Listas: la Watchlist, las propias y, con Letterboxd, su watchlist; una por pestaña */
 function viewList() {
   const lists = [watchlistOf(), ...listsOf()];
-  const lbOn = !WEB && (!!S.settings.lbUser || watchlistEntries().length > 0);
+  // en la web, la del servidor (la sube la app de escritorio o la exportación .zip); en el escritorio, también con el perfil conectado aunque aún esté vacía
+  const lbOn = watchlistEntries().length > 0 || (!WEB && !!S.settings.lbUser);
   const tab = S.listTab === 'lb' && lbOn ? 'lb' : (lists.find(x => x.id === S.listTab) || lists[0]).id;
   const l = lists.find(x => x.id === tab);
   const tabs = `<div class="list-tabs">

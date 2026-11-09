@@ -186,7 +186,8 @@ body.fullscreen #btnFullscreen .ico-enter { display: none; }
 }
 .round-btn:hover { border-color: #fff; background: rgba(255,255,255,.12); }
 .round-btn svg { width: 22px; height: 22px; fill: currentColor; }
-.round-btn.on { border-color: transparent; background: var(--grad); }
+/* el degradado cubre también el borde (transparente): si no, se repite por debajo y se ven franjas en el contorno */
+.round-btn.on, .round-btn.on:hover { border-color: transparent; background: var(--grad) border-box; }
 .btn-progress { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; line-height: 1.1; }
 .btn-progress small { font-size: 12px; font-weight: 500; opacity: .7; }
 

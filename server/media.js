@@ -128,10 +128,36 @@ function sendFile(req, res, file, { download = false } = {}) {
 }
 
 /**
+ * Punto donde puede empezar el flujo reempaquetado para el segundo t: el fotograma clave al que salta el archivo
+ * (su índice; no todos los fotogramas clave están en él). El vídeo copiado sólo puede empezar ahí, así que el audio
+ * se recorta en ese mismo instante y el reproductor lo toma como su cero. Se leen paquetes, no se decodifica.
+ */
+function keyframeBefore(file, t) {
+  if (!(t > 0)) return Promise.resolve(0);
+  return new Promise(resolve => {
+    execFile(FFPROBE, ['-v', 'error', '-select_streams', 'v:0', '-read_intervals', `${t.toFixed(3)}%+#1`,
+      '-show_entries', 'packet=pts_time', '-of', 'csv=p=0', file], { timeout: 20000 }, (err, out) => {
+      const k = parseFloat(String(out || '').split('\n')[0]);
+      resolve(Number.isFinite(k) && k <= t + 0.001 && k >= 0 ? k : t);
+    });
+  });
+}
+// ffmpeg, con -ss, busca 3/23 s antes del punto pedido si el vídeo lleva fotogramas B (por si el orden de
+// decodificación va adelantado), y caería en el fotograma clave anterior: se le pide un poco después y se compensa
+const SEEK_PAD = 0.135;
+
+/** Una reproducción por persona y vídeo: si vuelve a pedirlo (salto, cambio de pista) se corta la anterior ya */
+const streams = new Map();   // usuario|vídeo → ffmpeg
+
+/**
  * Vídeo reempaquetado o convertido, en MP4 fragmentado por la propia respuesta.
  * No se puede saltar dentro del flujo: para ir a otro punto el reproductor vuelve a pedirlo con ?start=
+ * (en remux, ?start= tiene que ser un fotograma clave: lo da /keyframe)
  */
-async function sendStream(req, res, f, q) {
+async function sendStream(req, res, f, q, owner = '') {
+  const slot = owner + '|' + f.path;
+  const prev = streams.get(slot);
+  if (prev && prev.exitCode === null) { prev.kill('SIGKILL'); await new Promise(r => prev.once('close', r)); }
   if (jobs >= MAX_JOBS) { res.writeHead(503, { 'Retry-After': '5' }); return res.end('Demasiadas reproducciones a la vez'); }
   const meta = await info(f, null).catch(() => null);
   const mode = q.get('mode') === 'transcode' ? 'transcode' : 'remux';
@@ -139,12 +165,22 @@ async function sendStream(req, res, f, q) {
   const audioN = Math.max(0, +q.get('audio') || 0);
   const maxH = Math.min(2160, Math.max(360, +q.get('maxh') || 1080));
   const a = meta?.audio?.[audioN];
-  const copyAudio = a && ['aac', 'mp3'].includes(a.codec) && q.get('acopy') === '1';
+  // empezando a mitad en remux el audio sale de una segunda lectura del archivo, recortado al instante exacto:
+  // copiado no se podría recortar, así que entonces se convierte
+  const split = mode === 'remux' && start > 0;
+  const copyAudio = a && !split && ['aac', 'mp3'].includes(a.codec) && q.get('acopy') === '1';
 
   const args = ['-hide_banner', '-loglevel', 'error', '-nostdin'];
   if (mode === 'transcode' && HWACCEL === 'vaapi') args.push('-hwaccel', 'vaapi', '-hwaccel_device', VAAPI_DEVICE, '-hwaccel_output_format', 'vaapi');
-  if (start) args.push('-ss', String(start));
-  args.push('-i', f.path, '-map', '0:v:0', ...(a ? ['-map', `0:a:${audioN}`] : []), '-sn', '-dn', '-map_metadata', '-1', '-map_chapters', '-1');
+  if (split) {
+    // vídeo: desde el fotograma clave «start» (ver SEEK_PAD); audio: desde «start» exacto. Los dos empiezan en 0
+    args.push('-itsoffset', String(SEEK_PAD), '-ss', (start + SEEK_PAD).toFixed(3), '-i', f.path);
+    if (a) args.push('-ss', start.toFixed(3), '-i', f.path);
+  } else {
+    if (start) args.push('-ss', String(start));
+    args.push('-i', f.path);
+  }
+  args.push('-map', '0:v:0', ...(a ? ['-map', `${split ? 1 : 0}:a:${audioN}`] : []), '-sn', '-dn', '-map_metadata', '-1', '-map_chapters', '-1');
   if (mode === 'remux') {
     args.push('-c:v', 'copy');
     if (meta?.video?.codec === 'hevc') args.push('-tag:v', 'hvc1');   // Safari sólo reconoce HEVC en MP4 con esta etiqueta
@@ -159,6 +195,8 @@ async function sendStream(req, res, f, q) {
 
   jobs++;
   const ff = spawn(FFMPEG, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+  streams.set(slot, ff);
+  ff.on('close', () => { if (streams.get(slot) === ff) streams.delete(slot); });
   let err = '';
   ff.stderr.on('data', d => { err = (err + d).slice(-2000); });
   res.writeHead(200, { 'Content-Type': 'video/mp4', 'Cache-Control': 'no-store', 'X-Stream-Start': String(start) });
@@ -219,4 +257,4 @@ function ffmpegVtt(input) {
   });
 }
 
-module.exports = { info, sendFile, sendStream, sendSubs, externalSubs, sidecarSubs, HWACCEL };
+module.exports = { info, sendFile, sendStream, keyframeBefore, sendSubs, externalSubs, sidecarSubs, HWACCEL };

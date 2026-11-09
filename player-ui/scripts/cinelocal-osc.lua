@@ -13,6 +13,10 @@ local ACCENT = 'FF6BB2'                          -- #b26bff en el orden BGR de A
 local WHITE = 'FFFFFF'
 local HIDE_AFTER = 2.6                           -- segundos sin mover el ratón
 local FADE_TIME = 0.18
+-- tamaño de la interfaz: a 1080p, igual que el reproductor web (iconos de 26 px, tiempo de 16…). En ventanas
+-- pequeñas encoge, pero no por debajo del 80 %, para que siga siendo fácil de pulsar
+local UI = 0.68
+local function ui_scale(w, h) return UI * math.max(0.8, math.min(w / 1920, h / 1080)) end
 
 local overlay = mp.create_osd_overlay('ass-events')
 local state = {
@@ -183,14 +187,14 @@ local function render()
   A = {}
   local w, h, f = state.w, state.h, state.fade
   if w <= 0 or h <= 0 then return end
-  local s = math.max(0.55, math.min(w / 1920, h / 1080))
+  local s = ui_scale(w, h)
   local mx, my = state.mx, state.my
 
   -- Al pausar o reanudar: el icono de pausa o de reproducir aparece en el centro y se desvanece
   if state.flash and not state.panel then
     local k = 1 - math.min(1, (mp.get_time() - state.flash.at) / 0.7)
     if k > 0 then
-      icon_soft(w / 2, h / 2, state.flash.icon, 96 * s * (1.1 - 0.1 * k), alpha(0, k), alpha(0x80, k))
+      icon_soft(w / 2, h / 2, state.flash.icon, 140 * s * (1.1 - 0.1 * k), alpha(0, k), alpha(0x80, k))
     else
       state.flash = nil
     end
@@ -201,7 +205,7 @@ local function render()
     rect(-50, -50, w + 50, h * 0.17, '000000', alpha(0x50, f), 0, h * 0.09)
     rect(-50, h * 0.66, w + 50, h + 80, '000000', alpha(0x30, f), 0, h * 0.11)
 
-    local pad = 52 * s
+    local pad = 84 * s
 
     -- ---------- arriba: volver + título · controles de ventana
     local top_y = 58 * s
@@ -211,9 +215,9 @@ local function render()
     local main_title, sub_title = state.title:match('^(.-) · (T%d+:E%d+.*)$')
     main_title = main_title or state.title
     local tx0 = pad + 2 * back_r + 22 * s
-    text(tx0, top_y, 4, main_title, 36 * s, WHITE, alpha(0, f), true)
+    text(tx0, top_y, 4, main_title, 44 * s, WHITE, alpha(0, f), true)
     if sub_title then
-      text(tx0 + ulen(main_title) * 36 * s * 0.47 + 18 * s, top_y, 4, sub_title:gsub(' · ', ' '), 36 * s, 'B4B4B4', alpha(0, f), false)
+      text(tx0 + ulen(main_title) * 44 * s * 0.47 + 18 * s, top_y, 4, sub_title:gsub(" · ", " "), 44 * s, 'B4B4B4', alpha(0, f), false)
     end
 
     if not state.fullscreen then
@@ -242,9 +246,9 @@ local function render()
     }
     local row_icons = {}
     for _, b in ipairs(left_buttons) do
-      local c = add_control(x - 26 * s, row_y - 26 * s, x + 26 * s, row_y + 26 * s, b[2], b[3])
+      local c = add_control(x - 32 * s, row_y - 32 * s, x + 32 * s, row_y + 32 * s, b[2], b[3])
       row_icons[#row_icons + 1] = { x, b[1], c }
-      x = x + 66 * s
+      x = x + 80 * s
     end
     -- control de volumen: se despliega al pasar por el altavoz
     local vol_x1, vol_x2 = x - 30 * s, x + 120 * s
@@ -261,9 +265,9 @@ local function render()
     if state.pl_pos < state.pl_count - 1 then right[#right + 1] = { 'skip_next', 'next', 'Siguiente episodio' } end
     local rx = w - pad - 20 * s
     for _, b in ipairs(right) do
-      local c = add_control(rx - 26 * s, row_y - 26 * s, rx + 26 * s, row_y + 26 * s, b[2], b[3])
+      local c = add_control(rx - 32 * s, row_y - 32 * s, rx + 32 * s, row_y + 32 * s, b[2], b[3])
       row_icons[#row_icons + 1] = { rx, b[1], c }
-      rx = rx - 66 * s
+      rx = rx - 80 * s
     end
 
     -- con las zonas ya conocidas, decidir qué está bajo el ratón
@@ -281,7 +285,7 @@ local function render()
       for _, b in ipairs({ { 'close', 'close' }, { state.maximized and 'filter_none' or 'crop_square', 'maximize' }, { 'minimize', 'minimize' } }) do
         local hv = hov == state.win_ctls[b[2]]
         if hv then rect(bx - 42 * s, top_y - 22 * s, bx + 2 * s, top_y + 22 * s, b[2] == 'close' and '2B11E8' or WHITE, alpha(b[2] == 'close' and 0x20 or 0xD8, f), 6 * s) end
-        icon(bx - 20 * s, top_y, b[1], 26 * s, WHITE, alpha(0, f))
+        icon(bx - 20 * s, top_y, b[1], 32 * s, WHITE, alpha(0, f))
         bx = bx - 52 * s
       end
     end
@@ -306,7 +310,7 @@ local function render()
         end
       end
       circle(px, bar_y, (tl_hover and 13 or 9) * s, ACCENT, alpha(0, f))
-      text(time_x, row_y, 4, fmt_time(pos) .. ' / ' .. fmt_time(dur), 26 * s, WHITE, alpha(0, f), true)
+      text(time_x, row_y, 4, fmt_time(pos) .. ' / ' .. fmt_time(dur), 28 * s, WHITE, alpha(0, f), true)
 
       -- tiempo y miniatura bajo el ratón
       if tl_hover and mx >= bar_x1 - 6 * s and mx <= bar_x2 + 6 * s then
@@ -406,7 +410,7 @@ local function render()
   if pf > 0.001 and state.pill_last and not state.menu_open then
     local label = state.pill_last
     local fs = 25 * s
-    local x2 = w - 52 * s
+    local x2 = w - 84 * s
     local x1 = x2 - (24 * s + 32 * s + 12 * s + ulen(label) * fs * 0.55 + 28 * s)
     local y1, y2 = pill_y2 - 58 * s, pill_y2
     local ctl = state.seg and add_control(x1, y1, x2, y2, 'skip', nil)
@@ -425,7 +429,7 @@ local function render()
     else
       local ta = math.max(0, math.min(1, k / 0.15, (2.4 - k) / 0.4))
       local fs = 23 * s
-      local x2 = w - 52 * s
+      local x2 = w - 84 * s
       local x1 = x2 - (20 * s + 30 * s + 10 * s + ulen(state.toast.text) * fs * 0.52 + 24 * s)
       local y1, y2 = pill_y2 - 50 * s, pill_y2
       rrect(x1, y1, x2, y2, 8 * s, '1A1414', alpha(0x40, ta))
@@ -451,7 +455,7 @@ local function tick()
   -- ocultar tras unos segundos sin mover el ratón (no en pausa, ni arrastrando, ni sobre un botón)
   if state.visible and not state.pause and not state.dragging and not state.menu_open and not state.panel and now - state.last_move > HIDE_AFTER then
     -- sólo se mantiene si el ratón está sobre las barras de arriba o de abajo (no en el centro)
-    local s = math.max(0.55, math.min(state.w / 1920, state.h / 1080))
+    local s = ui_scale(state.w, state.h)
     local on_bars = state.hover and control_at(state.mx, state.my) and (state.my > state.h - 170 * s or state.my < 110 * s)
     if not on_bars then state.visible = false; state.vol_open = false end
   end

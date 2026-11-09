@@ -147,22 +147,34 @@
     P.mode = direct ? 'direct' : vOk ? 'remux' : 'transcode';
     const id = P.playlist[P.idx].id;
     const v = P.video;
+    P.pending = null;
     if (P.mode === 'direct') {
       P.offset = 0;
       if (!v.src.includes(`/api/media/${id}/file`)) v.src = `/api/media/${id}/file`;
       const go = () => { v.currentTime = t; v.play().catch(() => {}); };
       v.readyState >= 1 ? go() : v.addEventListener('loadedmetadata', go, { once: true });
     } else {
-      P.offset = t;
-      const q = new URLSearchParams({ mode: P.mode, start: t.toFixed(2), audio: P.audio, acopy: a && ['aac', 'mp3'].includes(a.codec) ? 1 : 0, maxh: 1080 });
-      v.src = `/api/media/${id}/stream?${q}`;
-      v.play().catch(() => {});
+      P.pending = t;
+      const seq = P.startSeq = (P.startSeq || 0) + 1;
+      const go = s => {
+        if (!P || P.startSeq !== seq) return;   // cerrado, u otro salto mientras tanto
+        P.offset = s; P.pending = null;
+        const q = new URLSearchParams({ mode: P.mode, start: s.toFixed(3), audio: P.audio, acopy: a && ['aac', 'mp3'].includes(a.codec) ? 1 : 0, maxh: 1080 });
+        v.src = `/api/media/${id}/stream?${q}`;
+        v.play().catch(() => {});
+      };
+      // al copiar el vídeo sólo se puede empezar en un fotograma clave: se arranca ahí para que el audio no se desfase
+      if (P.mode === 'remux' && t > 0) {
+        v.pause();
+        fetch(`/api/media/${id}/keyframe?t=${t.toFixed(3)}`).then(r => r.json()).then(r => go(Number.isFinite(r?.t) ? r.t : t)).catch(() => go(t));
+      } else go(t);
     }
     spinner(true);
     paint();
   }
 
-  const now = () => P ? P.offset + (P.video.currentTime || 0) : 0;
+  // P.pending: el punto pedido mientras aún no ha llegado el flujo nuevo (el vídeo sigue con el tiempo del anterior)
+  const now = () => P ? P.pending ?? P.offset + (P.video.currentTime || 0) : 0;
   const dur = () => P?.info?.duration || P?.video.duration || 0;
 
   function seek(t) {
@@ -407,8 +419,22 @@
 
     for (const ev of ['play', 'pause', 'volumechange']) video.addEventListener(ev, () => { paint(); showUi(); if (ev === 'pause') report(true); });
     video.addEventListener('waiting', () => spinner(true));
-    video.addEventListener('playing', () => { spinner(false); note(null); });
-    video.addEventListener('canplay', () => spinner(false));
+    // si el flujo se atasca (el NAS tarda en leer, se corta la conexión…) se vuelve a pedir desde donde iba
+    const stallCheck = () => {
+      clearTimeout(P.stallTimer);
+      if (P.mode === 'direct') return;
+      P.stallTimer = setTimeout(() => {
+        if (!P || P.mode === 'direct' || video.paused || video.readyState >= 3) return;
+        P.stalls = (P.stalls || 0) + 1;
+        if (P.stalls > 3) return fail('El vídeo no carga: revisa la conexión');
+        note('Reconectando…', 3000);
+        start(now());
+      }, 15000);
+    };
+    video.addEventListener('waiting', stallCheck);
+    video.addEventListener('stalled', stallCheck);
+    video.addEventListener('playing', () => { clearTimeout(P.stallTimer); P.stalls = 0; P.netRetries = 0; spinner(false); note(null); });
+    video.addEventListener('canplay', () => { clearTimeout(P.stallTimer); spinner(false); });
     video.addEventListener('timeupdate', () => { paint(); report(false); });
     video.addEventListener('ended', () => {
       // con el flujo reempaquetado, «ended» puede llegar si se corta: sólo es el final si estamos cerca de la duración
@@ -417,7 +443,13 @@
       next();
     });
     video.addEventListener('error', () => {
-      if (!P?.info) return;
+      if (!P?.info || !video.getAttribute('src')) return;
+      // un corte de red (o el servidor ocupado) no es que el navegador no entienda el vídeo: se reintenta igual,
+      // en vez de pasar a convertirlo, que carga mucho más el NAS y va más a tirones
+      if (video.error?.code === MediaError.MEDIA_ERR_NETWORK && P.mode !== 'direct' && (P.netRetries = (P.netRetries || 0) + 1) <= 3) {
+        note('Reconectando…', 3000);
+        return setTimeout(() => P && start(now()), 1500);
+      }
       // si el navegador no traga el archivo directo, se prueba reempaquetando, y si no, convirtiendo
       if (P.mode === 'direct') { P.info.container = 'mkv'; return start(now()); }
       if (P.mode === 'remux') { P.info.video = { ...P.info.video, codec: 'unsupported' }; return start(now()); }
@@ -475,6 +507,7 @@
     const { el, video, onClose } = P;
     clearInterval(P.raf);
     clearTimeout(P.hideTimer);
+    clearTimeout(P.stallTimer);
     document.removeEventListener('keydown', P.onKey, true);
     document.removeEventListener('fullscreenchange', P.onFs);
     video.pause();

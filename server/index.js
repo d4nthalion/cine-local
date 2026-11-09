@@ -557,7 +557,11 @@ route('GET', '/api/media/:id/file', (req, res, { p, q, user }) => {
 route('GET', '/api/media/:id/stream', (req, res, { p, q, user }) => {
   const f = mediaFile(p.id, user);
   logAccess(req, res, user, p.id, f, q.get('mode') === 'transcode' ? 'transcode' : 'remux');
-  return media.sendStream(req, res, f, q);
+  return media.sendStream(req, res, f, q, user);
+});
+route('GET', '/api/media/:id/keyframe', async (req, res, { p, q, user }) => {
+  const f = mediaFile(p.id, user);
+  json(res, 200, { t: await media.keyframeBefore(f.path, Math.max(0, +q.get('t') || 0)) });
 });
 route('GET', '/api/media/:id/subs/:key', (req, res, { p, user }) => {
   const f = mediaFile(p.id, user);
