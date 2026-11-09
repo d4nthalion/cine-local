@@ -243,6 +243,25 @@ body.fullscreen #btnFullscreen .ico-enter { display: none; }
   padding: 3px 7px; border-radius: 4px; background: rgba(0,0,0,.7); backdrop-filter: blur(4px);
 }
 .card .tag.new { background: var(--grad); }
+/* «Nuevo» y las etiquetas propias (VOSE, 4K…), en fila arriba a la izquierda */
+.card .tags { z-index: 3; position: absolute; top: 8px; left: 8px; right: 36px; display: flex; flex-wrap: wrap; gap: 4px; pointer-events: none; }
+.card .tags .tag { position: static; }
+.card .tag.own { background: rgba(10,10,12,.78); border: 1px solid rgba(255,255,255,.22); letter-spacing: .04em; }
+.detail-tags { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+.detail-tags span { font-size: 12px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; padding: 4px 9px; border-radius: 5px;
+  border: 1px solid rgba(255,255,255,.35); color: var(--text); }
+.detail-tags button { font-size: 12px; padding: 4px 9px; border-radius: 5px; border: 1px dashed rgba(255,255,255,.3); background: none; color: var(--text-2); cursor: pointer; }
+.detail-tags button:hover { color: var(--text); border-color: rgba(255,255,255,.6); }
+.tg-edit { padding: 0 24px 6px; }
+.tg-chips { display: flex; flex-wrap: wrap; gap: 6px; min-height: 30px; margin-bottom: 12px; }
+.tg-chips .chip, .tg-sugg .chip { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; padding: 5px 10px; border-radius: 6px;
+  background: var(--bg-3); border: 1px solid rgba(255,255,255,.15); color: var(--text); cursor: pointer; }
+.tg-chips .chip b { font-weight: 400; color: var(--text-3); }
+.tg-chips .chip:hover b { color: #f87171; }
+.tg-sugg { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+.tg-sugg .chip { background: none; border-style: dashed; color: var(--text-2); font-weight: 500; }
+.tg-sugg .chip:hover { color: var(--text); }
+.tg-edit p { color: var(--text-3); font-size: 13px; margin: 10px 0 0; }
 .card .watched-mark { position: absolute; top: 8px; right: 8px; width: 22px; height: 22px; border-radius: 50%; background: rgba(0,0,0,.7); display: grid; place-items: center; }
 .card .watched-mark svg { width: 14px; height: 14px; fill: var(--ok); }
 .card .cap { padding: 10px 2px 0; }

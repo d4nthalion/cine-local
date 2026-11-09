@@ -316,6 +316,14 @@ route('POST', '/api/item/:id/poster', async (req, res, { p, user }) => {
   try { json(res, 200, library.setPoster(p.id, b.poster || null)); }
   catch (e) { throw httpError(400, e.message); }
 });
+// etiquetas propias de un título («VOSE», «4K»…): sólo los administradores
+route('POST', '/api/item/:id/tags', async (req, res, { p, user }) => {
+  const b = await readBody(req);
+  const it = library.library.data.items.find(i => i.id === p.id);
+  act(req, user, 'tags', it && titleOf({ item: it }), (b.tags || []).join(', ') || 'Sin etiquetas');
+  try { json(res, 200, library.setTags(p.id, b.tags)); }
+  catch (e) { throw httpError(400, e.message); }
+}, { admin: true });
 route('POST', '/api/scan', async (req, res, { user }) => { act(req, user, 'scan'); await library.scan(); json(res, 200, library.view(user, { slim: true })); }, { admin: true });
 route('POST', '/api/meta/refresh', (req, res, { user }) => { act(req, user, 'meta-refresh'); library.fetchMissingMetadata(true); json(res, 200, true); }, { admin: true });
 route('GET', '/api/person/:id', async (req, res, { p, user }) => json(res, 200, await library.person(+p.id, user)));

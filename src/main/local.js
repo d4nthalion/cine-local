@@ -111,6 +111,7 @@ class LocalServer extends EventEmitter {
     route('POST', '/api/meta/identify', ({ b }) => lib().identify(b, USER));
     route('GET', '/api/item/:id/posters', ({ p }) => lib().posters(p.id));
     route('POST', '/api/item/:id/poster', ({ p, b }) => lib().setPoster(p.id, b.poster || null));
+    route('POST', '/api/item/:id/tags', ({ p, b }) => lib().setTags(p.id, b.tags));
 
     // lista de reproducción con las rutas de los archivos (y los subtítulos externos de las películas)
     route('POST', '/api/play', ({ b }) => {

@@ -302,7 +302,7 @@ function card(it, note) {
   return `<div class="card" tabindex="0" data-open="${it.id}">
     <div class="art">
       ${poster ? `<img loading="lazy" src="${esc(poster)}" alt="">` : placeholder(it)}
-      ${isNew && !watched ? '<span class="tag new">Nuevo</span>' : ''}
+      ${isNew && !watched || it.tags?.length ? `<div class="tags">${isNew && !watched ? '<span class="tag new">Nuevo</span>' : ''}${(it.tags || []).map(t => `<span class="tag own">${esc(t)}</span>`).join('')}</div>` : ''}
       ${watched ? `<span class="watched-mark" title="Visto">${I.check}</span>` : ''}
       ${lbBadge(lbOf(it))}
       ${bar}
@@ -1641,7 +1641,7 @@ const ACCESS_KIND = {
   'list-create': 'Lista creada', 'list-rename': 'Lista renombrada', 'list-delete': 'Lista borrada', 'list-add': 'Añadido a una lista', 'list-remove': 'Quitado de una lista',
   'collection-create': 'Colección creada', 'collection-update': 'Colección cambiada', 'collection-delete': 'Colección borrada',
   'request-create': 'Petición', 'request-cancel': 'Petición cancelada', 'request-resolve': 'Petición resuelta', 'request-remove': 'Petición borrada',
-  settings: 'Ajustes', scan: 'Escaneo', 'meta-refresh': 'Buscar fichas', identify: 'Ficha corregida', poster: 'Carátula cambiada',
+  settings: 'Ajustes', scan: 'Escaneo', 'meta-refresh': 'Buscar fichas', identify: 'Ficha corregida', poster: 'Carátula cambiada', tags: 'Etiquetas',
   'download-download': 'Descarga en aMule', 'download-cancel': 'Descarga cancelada', 'download-place': 'Descarga colocada', 'download-dismiss': 'Descarga quitada',
   'user-access': 'Acceso de usuario', 'folder-access': 'Carpeta privada', 'announce-create': 'Aviso enviado', 'announce-delete': 'Aviso borrado', 'announce-clear': 'Avisos borrados', error: 'Error', 'client-error': 'Error en la app'
 };
@@ -2035,6 +2035,7 @@ function viewSearch() {
     else if (norm(T(it)).includes(nq)) score += 6;
     if (norm(it.title).includes(nq) || norm(m.originalTitle).includes(nq)) score += 4;
     if ((m.genres || []).some(g => norm(g).includes(nq))) score += 3;
+    if ((it.tags || []).some(t => norm(t) === nq)) score += 5;
     if ((m.cast?.map(c => c.name) || m.people || []).some(n => norm(n).includes(nq))) score += 2;
     if (norm(m.director || m.creators).includes(nq)) score += 2;
     if (String(Y(it)) === q) score += 3;
@@ -2140,6 +2141,7 @@ function viewDetail(id) {
         ${m.logo ? `<img class="title-logo" src="${esc(m.logo)}" alt="${esc(T(it))}">` : `<h1 class="title-text">${esc(T(it))}</h1>`}
         ${metaLine(it)}
         ${m.genres?.length ? `<div class="genres">${m.genres.map(g => `<span>${esc(g)}</span>`).join('')}</div>` : ''}
+        ${it.tags?.length || canManage() ? `<div class="detail-tags">${(it.tags || []).map(t => `<span>${esc(t)}</span>`).join('')}${canManage() ? `<button data-action="tags" data-id="${it.id}">${it.tags?.length ? 'Editar' : '+ Etiquetas'}</button>` : ''}</div>` : ''}
         ${m.tagline ? `<p class="tagline">${esc(m.tagline)}</p>` : ''}
         ${m.overview ? `<p class="overview">${esc(m.overview)}</p>` : ''}
         ${credit ? `<div class="credits-line">${credit}</div>` : ''}
@@ -2157,6 +2159,7 @@ function viewDetail(id) {
               <button data-action="mark-all" data-id="${it.id}" data-watched="${watchedAll ? 0 : 1}">${watchedAll ? I.restart : I.eye}${watchedAll ? 'Marcar como no visto' : 'Marcar como visto'}</button>
               ${canFix(it) ? `<button data-action="identify" data-id="${it.id}">${I.tag}Corregir coincidencia</button>` : ''}
               ${canFix(it) ? `<button data-action="poster" data-id="${it.id}">${I.image}Cambiar carátula</button>` : ''}
+              ${canManage() ? `<button data-action="tags" data-id="${it.id}">${I.tag}Etiquetas</button>` : ''}
               ${emuleOn() ? `<button ${emuleFindAttrs(T(it), m.originalTitle, m.tmdbId && { tmdb: m.tmdbId, type: it.type, title: T(it), year: m.year })}>${I.download}Buscar en aMule</button>` : ''}
               ${WEB ? '' : `<button data-action="reveal" data-path="${esc(it.type === 'movie' ? it.path : it.episodes[0].path)}">${I.folder}Abrir ubicación</button>`}
             </div>
@@ -3213,6 +3216,49 @@ async function identify(id) {
   search();
 }
 
+/** Etiquetas propias de un título («VOSE», «4K», «IMAX»…): las ponen los administradores y se ven sobre la carátula */
+function editTags(id) {
+  const it = byId(id);
+  if (!it) return;
+  let tags = [...(it.tags || [])];
+  // las que ya hay en otros títulos, las más usadas primero
+  const used = new Map();
+  for (const x of S.lib.items) for (const t of x.tags || []) used.set(t, (used.get(t) || 0) + 1);
+  const known = [...new Set([...[...used].sort((a, b) => b[1] - a[1]).map(([t]) => t), 'VOSE', '4K', 'HDR', 'IMAX', 'Dolby Vision', 'Atmos', 'Castellano', 'Extendida'])];
+  const m = modal(`<div class="modal-head"><h2>Etiquetas</h2><p>${esc(T(it))}</p></div>
+    <div class="tg-edit">
+      <div class="tg-chips" id="tgChips"></div>
+      <form id="tgForm" style="display:flex;gap:8px"><input class="input" name="t" maxlength="20" placeholder="Nueva etiqueta (p. ej. VOSE)" autocomplete="off" style="flex:1">
+        <button class="btn btn-ghost btn-sm">Añadir</button></form>
+      <div class="tg-sugg" id="tgSugg"></div>
+      <p>Se ven sobre la carátula y en la ficha, para todos. Hasta 8 por título.</p>
+    </div>
+    <div class="modal-foot" style="gap:10px"><button class="btn btn-ghost btn-sm" data-action="close-modal">Cancelar</button>
+      <button class="btn btn-primary btn-sm" id="tgSave">Guardar</button></div>`);
+  const has = t => tags.some(x => x.toLowerCase() === t.toLowerCase());
+  const add = t => { t = t.replace(/\s+/g, ' ').trim().slice(0, 20); if (t && !has(t) && tags.length < 8) tags.push(t); draw(); };
+  const draw = () => {
+    $('#tgChips', m).innerHTML = tags.length ? tags.map((t, i) => `<span class="chip" data-i="${i}" title="Quitar">${esc(t)}<b>✕</b></span>`).join('')
+      : '<span style="color:var(--text-3);font-size:13px;align-self:center">Sin etiquetas</span>';
+    $('#tgSugg', m).innerHTML = known.filter(t => !has(t)).slice(0, 14).map(t => `<span class="chip" data-t="${esc(t)}">+ ${esc(t)}</span>`).join('');
+  };
+  $('#tgChips', m).addEventListener('click', e => { const c = e.target.closest('[data-i]'); if (c) { tags.splice(+c.dataset.i, 1); draw(); } });
+  $('#tgSugg', m).addEventListener('click', e => { const c = e.target.closest('[data-t]'); if (c) add(c.dataset.t); });
+  const form = $('#tgForm', m);
+  form.addEventListener('submit', e => { e.preventDefault(); add(form.t.value); form.t.value = ''; form.t.focus(); });
+  $('#tgSave', m).addEventListener('click', async () => {
+    if (form.t.value.trim()) add(form.t.value);   // lo escrito sin pulsar «Añadir» también cuenta
+    try {
+      await window.api.setTags(id, tags);
+      fullMeta.delete(id);
+      closeModal();
+      toast('Etiquetas guardadas', 'ok');
+    } catch (e) { toast(errText(e), 'error'); }
+  });
+  draw();
+  form.t.focus();
+}
+
 /**
  * Cambiar la carátula: otra de las de TMDB, una imagen propia (se reduce aquí a 500 px de ancho antes de enviarla)
  * o volver a la de la ficha. Se guarda aparte, así que no se pierde al volver a descargar los metadatos.
@@ -3594,6 +3640,7 @@ document.addEventListener('click', async (e) => {
     else if (a === 'menu') $('#detailMenu').classList.toggle('hidden');
     else if (a === 'identify') { $('#detailMenu')?.classList.add('hidden'); identify(action.dataset.id); }
     else if (a === 'poster') { $('#detailMenu')?.classList.add('hidden'); pickPoster(action.dataset.id); }
+    else if (a === 'tags') { $('#detailMenu')?.classList.add('hidden'); editTags(action.dataset.id); }
     else if (a === 'reveal') window.api.showInFolder(action.dataset.path);
     else if (a === 'mark') {
       // un episodio, con todas sus versiones

@@ -789,10 +789,35 @@ class Library extends EventEmitter {
    * (data:) sólo va en `poster`, para no copiarla en las listas.
    */
   withCustom(it) {
-    const poster = this.custom.data[it.id]?.poster;
+    const { poster, tags } = this.custom.data[it.id] || {};
+    if (tags?.length) it = { ...it, tags };
     if (!poster) return it;
     const meta = it.meta && /^https:/.test(poster) ? { ...it.meta, poster } : it.meta;
     return { ...it, meta, poster };
+  }
+
+  /** Guarda lo elegido a mano de un título (carátula, etiquetas); sin nada, se borra la entrada */
+  setCustom(id, patch) {
+    if (!this.library.data.items.some(i => i.id === id)) throw new Error('Elemento no encontrado');
+    const c = { ...this.custom.data[id], ...patch };
+    for (const k of Object.keys(c)) if (c[k] == null || (Array.isArray(c[k]) && !c[k].length)) delete c[k];
+    if (c.poster || c.tags) this.custom.data[id] = { ...c, at: Date.now() };
+    else delete this.custom.data[id];
+    this.custom.save();
+    this.emit('library');
+    return this.item(id);
+  }
+
+  /** Etiquetas puestas por un administrador («VOSE», «4K», «IMAX»…): se ven en la carátula y en la ficha */
+  setTags(id, tags) {
+    const seen = new Set();
+    const list = (Array.isArray(tags) ? tags : []).map(t => String(t).replace(/\s+/g, ' ').trim().slice(0, 20)).filter(t => {
+      const k = t.toLowerCase();
+      if (!t || seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    }).slice(0, 8);
+    return this.setCustom(id, { tags: list });
   }
 
   /** Carátulas de TMDB para elegir, con la que se usa ahora */
@@ -806,18 +831,13 @@ class Library extends EventEmitter {
 
   /** Cambia la carátula: una de TMDB, una imagen subida (data:image/…, ya reducida) o null para volver a la de la ficha */
   setPoster(id, poster) {
-    if (!this.library.data.items.some(i => i.id === id)) throw new Error('Elemento no encontrado');
-    if (poster == null || poster === '') delete this.custom.data[id];
-    else {
+    if (poster) {
       const tmdb = /^https:\/\/image\.tmdb\.org\/t\/p\/\w+\/[\w-]+\.(jpg|jpeg|png|webp)$/i.test(poster);
       const upload = /^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/.test(poster);
       if (!tmdb && !upload) throw new Error('Imagen no válida');
       if (upload && poster.length > 400 * 1024) throw new Error('La imagen es demasiado grande');
-      this.custom.data[id] = { poster, at: Date.now() };
     }
-    this.custom.save();
-    this.emit('library');
-    return this.item(id);
+    return this.setCustom(id, { poster: poster || null });
   }
 
   /** Archivo de vídeo por su id (el de la película o el del episodio); nunca por ruta */

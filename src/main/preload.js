@@ -35,6 +35,7 @@ contextBridge.exposeInMainWorld('api', {
   identify: (q) => ipcRenderer.invoke('meta:identify', q),
   getPosters: (id) => ipcRenderer.invoke('meta:posters', id),
   setPoster: (id, poster) => ipcRenderer.invoke('meta:setPoster', { id, poster }),
+  setTags: (id, tags) => ipcRenderer.invoke('meta:setTags', { id, tags }),
   play: (q) => ipcRenderer.invoke('play', q),
   markProgress: (q) => ipcRenderer.invoke('progress:mark', q),
   toggleFavorite: (id) => ipcRenderer.invoke('favorites:toggle', id),

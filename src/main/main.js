@@ -704,6 +704,11 @@ ipcMain.handle('meta:setPoster', async (_e, { id, poster }) => {
   send('library:updated', await remoteFetch());
   return it;
 });
+ipcMain.handle('meta:setTags', async (_e, { id, tags }) => {
+  const it = await api().post(`/api/item/${encodeURIComponent(id)}/tags`, { tags });
+  send('library:updated', await remoteFetch());
+  return it;
+});
 ipcMain.handle('meta:identify', async (_e, { itemId, tmdbId }) => {
   const it = await api().post('/api/meta/identify', { itemId, tmdbId });
   send('library:updated', await remoteFetch());

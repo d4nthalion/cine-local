@@ -63,6 +63,7 @@
     identify: q => post('/api/meta/identify', q),
     getPosters: id => get(`/api/item/${encodeURIComponent(id)}/posters`),
     setPoster: (id, poster) => post(`/api/item/${encodeURIComponent(id)}/poster`, { poster }),
+    setTags: (id, tags) => post(`/api/item/${encodeURIComponent(id)}/tags`, { tags }),
     // en la web se reproduce en el navegador (web/player.js) en vez de con mpv
     play: async q => {
       const r = await post('/api/play', q);
