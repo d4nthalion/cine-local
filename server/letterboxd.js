@@ -91,7 +91,7 @@ class LetterboxdUsers extends EventEmitter {
       .filter(it => it.type === 'movie' && seen.has(this.library.metaOf(it.id)?.tmdbId) && !prog[it.path] && !done.has(it.path))
       .map(it => it.path);
     if (!paths.length) return 0;
-    this.library.markProgress(userName, { paths, watched: true });
+    this.library.markProgress(userName, { paths, watched: true }, { keepWatchlist: true });
     svc.store.data = { ...svc.store.data, marked: [...done, ...paths] };
     return paths.length;
   }

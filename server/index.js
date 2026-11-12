@@ -174,6 +174,8 @@ requests.on('resolved', r => {
   // request: la app de escritorio lo sustituye por el suyo, que también avisa con la ventana cerrada (checkRequests)
   sendTo(u => names.has(u.toLowerCase()), 'toast', () => ({ type: r.status === 'done' ? 'ok' : 'info', text, action: 'requests', request: r.id }));
 });
+// una película vista sale de su Watchlist: sus apps vuelven a pedir la biblioteca (lleva las listas)
+library.on('watchlist', name => sendTo(u => u.toLowerCase() === name, 'library:changed', () => ({})));
 library.on('meta:progress', p => broadcast('meta:progress', p));
 library.on('toast', t => broadcast('toast', t));
 // títulos nuevos: a cada uno, sólo lo que puede ver (las carpetas privadas y los límites de cada usuario)

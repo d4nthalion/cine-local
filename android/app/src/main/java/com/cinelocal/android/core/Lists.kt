@@ -50,6 +50,17 @@ object Lists {
 
     fun watchlist(lists: List<UserList>) = lists.firstOrNull { it.id == WATCHLIST }
 
+    /**
+     * Las listas sin [watched] en la Watchlist: las películas vistas salen de ella (como hace el servidor). Sólo
+     * películas: ver un episodio no es haber visto la serie. Devuelve las mismas listas si no había nada que quitar
+     */
+    fun withoutWatched(lists: List<UserList>, watched: List<Title>): List<UserList> {
+        val keys = watched.filter { it.isMovie }.flatMap(::keysOf).toSet()
+        val wl = watchlist(lists)
+        if (keys.isEmpty() || wl == null || wl.items.none { it.key in keys }) return lists
+        return lists.map { l -> if (l.id == WATCHLIST) l.copy(items = l.items.filterNot { it.key in keys }) else l }
+    }
+
     /** ¿Está [t] en alguna de [lists]? */
     fun containsTitle(lists: List<UserList>, t: Title): Boolean {
         val keys = keysOf(t)

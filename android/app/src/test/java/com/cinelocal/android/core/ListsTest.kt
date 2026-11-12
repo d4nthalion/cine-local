@@ -65,6 +65,24 @@ class ListsTest {
         assertEquals(listOf("Dune"), Lists.toggle(l, Lists.WATCHLIST, dune)[0].items.map { it.title })
     }
 
+    @Test fun lasPeliculasVistasSalenDeLaWatchlist() {
+        val duneItem = LibraryItem("abc", "movie", "Peliculas/Dune (2021).mkv", "Dune", 2021)
+        val heatItem = LibraryItem("def", "movie", "Peliculas/Heat (1995).mkv", "Heat", 1995)
+        val duneT = Title(duneItem, Meta(438631, "Dune"))
+        val heatT = Title(heatItem, null)                        // sin ficha: guardada por su id
+        val serie = Title(LibraryItem("ghi", "series", "Series/The Bear", "The Bear", 2022), Meta(136315, "The Bear"))
+        var l = Lists.withWatchlist(emptyList(), listOf(dune, Lists.entryOf(heatT), Lists.entryOf(serie), alien))
+        l = Lists.create(l, "Favoritas", dune)
+        val out = Lists.withoutWatched(l, listOf(duneT, heatT, serie))
+        // fuera Dune (por su ficha) y Heat (por su id); la serie y Alien se quedan
+        assertEquals(listOf("The Bear", "Alien"), Lists.watchlist(out)!!.items.map { it.title })
+        // las otras listas no se tocan
+        assertEquals(listOf("Dune"), out.first { it.name == "Favoritas" }.items.map { it.title })
+        // nada que quitar: las mismas listas
+        assertTrue(Lists.withoutWatched(out, listOf(duneT)) === out)
+        assertTrue(Lists.withoutWatched(out, emptyList()) === out)
+    }
+
     @Test fun tituloGuardadoAntesDeTenerFicha() {
         // se guardó sin ficha (por su id) y después llegó la ficha: se reconoce y se quita esa entrada
         val item = LibraryItem("abc", "movie", "Peliculas/Dune (2021).mkv", "Dune", 2021)

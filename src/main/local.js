@@ -37,6 +37,8 @@ class LocalServer extends EventEmitter {
       clearTimeout(this.timer);
       this.timer = setTimeout(() => ev('library:changed', {}), 250);
     });
+    // una película vista sale de la Watchlist: la ventana vuelve a pedir la biblioteca (lleva las listas)
+    lib.on('watchlist', () => ev('library:changed', {}));
     lib.on('meta:progress', p => ev('meta:progress', p));
     lib.on('toast', t => ev('toast', t));
     lib.on('new', l => ev('library:new', l));

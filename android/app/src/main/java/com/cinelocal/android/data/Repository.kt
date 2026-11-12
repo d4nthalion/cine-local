@@ -426,8 +426,20 @@ class Repository(private val context: Context) {
         return if (pr.pos > 10 && pr.dur - pr.pos > 30) pr.pos else 0.0
     }
 
+    /**
+     * Las películas recién vistas salen de la Watchlist. Con CineLocal Server lo hace también el servidor (y manda la
+     * lista buena al volver a pedir la biblioteca): aquí sólo se adelanta, para que se vea al momento
+     */
+    private fun dropWatchedFromWatchlist(paths: Collection<String>) {
+        if (paths.isEmpty()) return
+        val set = paths.toSet()
+        val seen = titles.value.filter { it.isMovie && it.item.path in set }
+        if (seen.isNotEmpty()) userState.update { it.copy(lists = Lists.withoutWatched(it.lists, seen)) }
+    }
+
     fun saveProgress(path: String, pos: Double, dur: Double) {
         if (dur <= 0) return
+        val wasWatched = progress.value[path]?.watched == true
         progress.update { all ->
             val prev = all[path]
             val watched = pos / dur >= 0.92 || (dur - pos < 120 && dur > 600)
@@ -437,11 +449,15 @@ class Repository(private val context: Context) {
                 at = System.currentTimeMillis()
             ))
         }
-        progress.value[path]?.let { syncProgress(path, it, force = it.watched) }
+        progress.value[path]?.let {
+            if (it.watched && !wasWatched) dropWatchedFromWatchlist(listOf(path))
+            syncProgress(path, it, force = it.watched)
+        }
     }
 
     fun markWatched(paths: List<String>, watched: Boolean) {
         if (!watched) watchedSent.removeAll(paths.toSet())
+        else dropWatchedFromWatchlist(paths.filter { progress.value[it]?.watched != true })
         progress.update { all ->
             if (watched) all + paths.associateWith { Progress(0.0, all[it]?.dur ?: 0.0, true, System.currentTimeMillis()) }
             else all - paths.toSet()

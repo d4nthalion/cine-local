@@ -1114,20 +1114,50 @@ class Library extends EventEmitter {
     const prev = u.data.progress[f.path] || {};
     const watched = pos / dur >= 0.92 || (dur - pos < 120 && dur > 600);
     u.data.progress[f.path] = { pos: watched ? 0 : pos, dur, watched: watched || (prev.watched && pos < 30), at: Date.now() };
+    if (watched && !prev.watched) this.dropFromWatchlist(userName, [f]);
     u.save();
     return u.data.progress;
   }
 
-  markProgress(userName, { paths, watched }) {
+  /**
+   * Marcar como visto o no visto. keepWatchlist: no tocar la Watchlist (lo marcado automáticamente con lo visto en
+   * Letterboxd, que no es haberla visto ahora en CineLocal)
+   */
+  markProgress(userName, { paths, watched }, { keepWatchlist = false } = {}) {
     const u = this.user(userName);
-    const valid = new Set([...this.index.values()].map(f => f.path));
+    const byPath = new Map([...this.index.values()].map(f => [f.path, f]));
+    const newlyWatched = [];
     for (const p of paths || []) {
-      if (!valid.has(p)) continue;
+      const f = byPath.get(p);
+      if (!f) continue;
+      if (watched && !u.data.progress[p]?.watched) newlyWatched.push(f);
       if (watched) u.data.progress[p] = { pos: 0, dur: u.data.progress[p]?.dur || 0, watched: true, at: Date.now() };
       else delete u.data.progress[p];
     }
+    if (!keepWatchlist) this.dropFromWatchlist(userName, newlyWatched);
     u.save();
     return u.data.progress;
+  }
+
+  /**
+   * Las películas recién vistas salen de la Watchlist (lo que se quería ver ya se ha visto). Sólo películas: ver un
+   * episodio no es haber visto la serie. files: entradas del índice ({ item, episode? }). Avisa con «watchlist»
+   */
+  dropFromWatchlist(userName, files) {
+    const keys = new Set();
+    for (const f of files) {
+      if (f.item?.type !== 'movie' || f.episode) continue;
+      const tmdb = this.metadata.data[f.item.id]?.meta?.tmdbId;
+      if (tmdb) keys.add(`movie:${tmdb}`);
+      keys.add('id:' + f.item.id);
+    }
+    if (!keys.size) return;
+    const u = this.user(userName);
+    const wl = (u.data.lists || []).find(l => l.id === WATCHLIST);
+    if (!wl?.items.some(e => keys.has(e.key))) return;
+    u.data.lists = u.data.lists.map(l => l.id === WATCHLIST ? { ...l, items: l.items.filter(e => !keys.has(e.key)) } : l);
+    u.save();
+    this.emit('watchlist', String(userName).toLowerCase());
   }
 
   /** Listas propias del usuario (src/main/lists.js): create · rename · delete · toggle */
