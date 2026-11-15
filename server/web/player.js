@@ -157,6 +157,7 @@
     const id = P.playlist[P.idx].id;
     const v = P.video;
     P.pending = null;
+    stopFeed();
     if (P.mode === 'direct') {
       P.offset = 0;
       if (!v.src.includes(`/api/media/${id}/file`)) v.src = `/api/media/${id}/file`;
@@ -168,18 +169,199 @@
       const go = s => {
         if (!P || P.startSeq !== seq) return;   // cerrado, u otro salto mientras tanto
         P.offset = s; P.pending = null;
-        const q = new URLSearchParams({ mode: P.mode, start: s.toFixed(3), audio: P.audio, acopy: a && ['aac', 'mp3'].includes(a.codec) ? 1 : 0, maxh: 1080, ...diag });
-        v.src = `/api/media/${id}/stream?${q}`;
+        const url = streamUrl(s, diag);
+        if (P.mse !== false && window.MediaSource) openFeed(url, s);
+        else v.src = url;
         v.play().catch(() => {});
       };
       // al copiar el vídeo sólo se puede empezar en un fotograma clave: se arranca ahí para que el audio no se desfase
-      if (P.mode === 'remux' && t > 0) {
-        v.pause();
-        fetch(`/api/media/${id}/keyframe?t=${t.toFixed(3)}`).then(r => r.json()).then(r => go(Number.isFinite(r?.t) ? r.t : t)).catch(() => go(t));
-      } else go(t);
+      if (P.mode === 'remux' && t > 0) v.pause();
+      keyframe(t).then(go);
     }
     spinner(true);
     paint();
+  }
+
+  /** Dirección del flujo reempaquetado / convertido que empieza en el segundo s */
+  function streamUrl(s, diag) {
+    const a = P.info.audio[P.audio];
+    const q = new URLSearchParams({ mode: P.mode, start: s.toFixed(3), audio: P.audio, acopy: a && ['aac', 'mp3'].includes(a.codec) ? 1 : 0, maxh: 1080, ...diag });
+    return `/api/media/${P.playlist[P.idx].id}/stream?${q}`;
+  }
+  /** Al copiar el vídeo sólo se puede empezar en un fotograma clave: el de t o el anterior */
+  function keyframe(t) {
+    if (P.mode !== 'remux' || !(t > 0)) return Promise.resolve(t);
+    return fetch(`/api/media/${P.playlist[P.idx].id}/keyframe?t=${t.toFixed(3)}`).then(r => r.json())
+      .then(r => Number.isFinite(r?.t) ? r.t : t).catch(() => t);
+  }
+
+  // ---------- flujo con MediaSource ----------
+  // El flujo reempaquetado no se puede pedir por trozos: si se deja al <video>, Chrome (y Brave, Edge…) a veces corta
+  // la conexión y la vuelve a pedir «desde el byte N», y el servidor sólo puede volver a empezar; además guarda muy
+  // poco por delante. Así lo descarga la propia página: guarda hasta AHEAD s y, si se corta, sigue desde donde llegó
+  // lo descargado sin tirar nada.
+  const AHEAD = 120, BEHIND = 30;
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  const once = (el, ev) => new Promise(r => el.addEventListener(ev, r, { once: true }));
+
+  function stopFeed() {
+    const f = P?.feed;
+    if (!f) return;
+    f.dead = true;
+    f.ctrl.abort();
+    P.feed = null;
+  }
+
+  /** El tramo descargado en el que está el punto actual del <video> */
+  function curRange(v) {
+    for (let i = 0; i < v.buffered.length; i++) if (v.buffered.start(i) <= v.currentTime + 0.5 && v.buffered.end(i) > v.currentTime) return [v.buffered.start(i), v.buffered.end(i)];
+    return null;
+  }
+  const aheadOf = v => { const r = curRange(v); return r ? r[1] - v.currentTime : 0; };
+  const bufferedEnd = v => curRange(v)?.[1] ?? v.currentTime;
+
+  /** Códecs del segmento de inicio (ftyp + moov) para addSourceBuffer; null si aún no ha llegado entero */
+  function parseInit(b) {
+    const u32 = i => ((b[i] << 24) | (b[i + 1] << 16) | (b[i + 2] << 8) | b[i + 3]) >>> 0;
+    const type = i => String.fromCharCode(b[i], b[i + 1], b[i + 2], b[i + 3]);
+    let p = 0;
+    while (p + 8 <= b.length) {
+      let size = u32(p);
+      if (size === 1) size = u32(p + 8) * 2 ** 32 + u32(p + 12);
+      if (size < 8) return { error: true };
+      if (type(p + 4) === 'moov') {
+        if (p + size > b.length) return null;
+        const m = b.subarray(p, p + size);
+        const find = t => { for (let i = 4; i + 4 <= m.length; i++) if (m[i] === t.charCodeAt(0) && m[i + 1] === t.charCodeAt(1) && m[i + 2] === t.charCodeAt(2) && m[i + 3] === t.charCodeAt(3)) return i; return -1; };
+        const hex = n => n.toString(16).padStart(2, '0');
+        const codecs = [];
+        let i;
+        if ((i = find('avcC')) >= 0) codecs.push('avc1.' + hex(m[i + 5]) + hex(m[i + 6]) + hex(m[i + 7]));
+        else if ((i = find('hvcC')) >= 0) {
+          const x = m[i + 5], space = ['', 'A', 'B', 'C'][x >> 6], tier = x & 0x20 ? 'H' : 'L', prof = x & 0x1f;
+          let compat = ((m[i + 6] << 24) | (m[i + 7] << 16) | (m[i + 8] << 8) | m[i + 9]) >>> 0, rev = 0;
+          for (let k = 0; k < 32; k++) { rev = ((rev << 1) | (compat & 1)) >>> 0; compat >>>= 1; }
+          const cons = [...m.subarray(i + 10, i + 16)];
+          while (cons.length && !cons[cons.length - 1]) cons.pop();
+          const tag = find('hev1') >= 0 ? 'hev1' : 'hvc1';
+          codecs.push([tag, space + prof, rev.toString(16), tier + m[i + 16], ...cons.map(c => c.toString(16).toUpperCase())].join('.'));
+        } else return { error: true };   // otros códecs de vídeo: que lo lea el <video> como antes
+        if (find('mp4a') >= 0) {
+          // tipo de objeto del esds: 0x40 = AAC, 0x69 / 0x6B = MP3
+          const e = find('esds');
+          let ot = 0x40;
+          if (e >= 0) for (let k = e + 8; k < Math.min(m.length - 2, e + 40); k++) if (m[k] === 0x04) { let j = k + 1; while (m[j] & 0x80) j++; ot = m[j + 1]; break; }
+          codecs.push(ot === 0x69 || ot === 0x6b ? 'mp4a.6B' : 'mp4a.40.2');
+        }
+        return { codecs };
+      }
+      p += size;
+    }
+    return b.length > 4 << 20 ? { error: true } : null;
+  }
+
+  /**
+   * Descarga el flujo que empieza en el segundo «at» de la película. Sin MediaSource abierta crea una; con ella
+   * (reconexión) añade el flujo nuevo en su sitio, detrás de lo que ya había.
+   */
+  async function openFeed(url, at) {
+    const v = P.video;
+    const feed = P.feed = { ctrl: new AbortController(), dead: false, lastData: Date.now() };
+    const fresh = at === P.offset;
+    try {
+      if (fresh) {
+        P.ms = new MediaSource(); P.sb = null;
+        if (P.msUrl) URL.revokeObjectURL(P.msUrl);
+        v.src = P.msUrl = URL.createObjectURL(P.ms);
+        await once(P.ms, 'sourceopen');
+        if (feed.dead) return;
+      }
+      const res = await fetch(url, { signal: feed.ctrl.signal });
+      if (!res.ok) throw new Error('http ' + res.status);
+      const reader = res.body.getReader();
+      let head = new Uint8Array(0), init = null;
+      while (!init) {
+        const { done, value } = await reader.read();
+        if (feed.dead) return;
+        if (done) throw new Error('flujo vacío');
+        const nb = new Uint8Array(head.length + value.length); nb.set(head); nb.set(value, head.length); head = nb;
+        init = parseInit(head);
+        if (init?.error) throw Object.assign(new Error('códec'), { noMse: true });
+      }
+      if (fresh) {
+        const mime = 'video/mp4; codecs="' + init.codecs.join(',') + '"';
+        if (!MediaSource.isTypeSupported(mime)) throw Object.assign(new Error(mime), { noMse: true });
+        P.sb = P.ms.addSourceBuffer(mime);
+      }
+      const sb = P.sb;
+      if (sb.updating) await once(sb, 'updateend');
+      if (!fresh) sb.abort();   // si el anterior se cortó a mitad de un fragmento, se descarta ese trozo
+      sb.timestampOffset = at - P.offset;   // cada flujo empieza en su 0: se coloca en su sitio
+      await append(feed, head);
+      if (fresh && v.buffered.length && v.currentTime < v.buffered.start(0)) v.currentTime = v.buffered.start(0);
+      let pend = [], size = 0;
+      for (;;) {
+        // lo bastante por delante: se espera (el servidor también se para) y se suelta lo ya visto
+        while (!feed.dead && aheadOf(v) > AHEAD) { await trim(feed, BEHIND); await sleep(500); }
+        const { done, value } = await reader.read();
+        if (feed.dead) return;
+        if (value) { pend.push(value); size += value.length; feed.lastData = Date.now(); }
+        if (size >= (512 << 10) || (done && size)) {
+          const buf = new Uint8Array(size); let o = 0;
+          for (const c of pend) { buf.set(c, o); o += c.length; }
+          pend = []; size = 0;
+          await append(feed, buf);
+          P.netRetries = 0;
+        }
+        if (done) break;
+      }
+      if (feed.dead) return;
+      if (sb.updating) await once(sb, 'updateend');
+      // si ffmpeg se corta, el servidor cierra la respuesta como si hubiera acabado: lejos del final es un corte
+      const last = v.buffered.length ? v.buffered.end(v.buffered.length - 1) : 0;
+      if (P.offset + last < dur() - 3) throw new Error('flujo cortado');
+      if (P.ms.readyState === 'open') P.ms.endOfStream();
+    } catch (e) {
+      if (feed.dead || !P || P.feed !== feed) return;
+      console.warn('Flujo de vídeo:', e.message);
+      if (e.noMse) { P.mse = false; return start(now(), 'sin-mse'); }
+      if (!P.sb || P.ms.readyState !== 'open') return start(now(), 'red');
+      // corte de red: se sigue desde donde llegó lo descargado, sin tirar nada
+      if ((P.netRetries = (P.netRetries || 0) + 1) > 5) return fail('El vídeo no carga: revisa la conexión');
+      note('Reconectando…', 3000);
+      await sleep(1000 * P.netRetries);
+      if (!P || P.feed !== feed) return;
+      // primero se descarta el fragmento a medias, para seguir desde lo que de verdad hay
+      try { if (!P.sb.updating && P.ms.readyState === 'open') P.sb.abort(); } catch {}
+      const k = await keyframe(P.offset + bufferedEnd(v));
+      if (!P || P.feed !== feed) return;
+      openFeed(streamUrl(k, streamDiag('red')), k);
+    }
+  }
+
+  async function append(feed, data) {
+    const sb = P.sb;
+    for (;;) {
+      if (feed.dead) return;
+      if (P.ms.readyState !== 'open') throw new Error('MediaSource cerrada');
+      try {
+        sb.appendBuffer(data);
+        await once(sb, 'updateend');
+        return;
+      } catch (e) {
+        if (e.name !== 'QuotaExceededError') throw e;
+        // sin sitio: se suelta lo ya visto y se espera a que avance
+        await trim(feed, 5);
+        await sleep(1000);
+      }
+    }
+  }
+
+  async function trim(feed, keep) {
+    const v = P.video, sb = P.sb;
+    if (feed.dead || !sb || sb.updating || P.ms.readyState !== 'open' || !v.buffered.length) return;
+    const cut = v.currentTime - keep;
+    if (v.buffered.start(0) < cut - 1) { sb.remove(0, cut); await once(sb, 'updateend'); }
   }
 
   // P.pending: el punto pedido mientras aún no ha llegado el flujo nuevo (el vídeo sigue con el tiempo del anterior)
@@ -188,7 +370,11 @@
 
   function seek(t) {
     t = Math.max(0, Math.min(dur() - 1, t));
-    if (P.mode === 'direct') P.video.currentTime = t;
+    const v = P.video, rel = t - P.offset;
+    let inBuf = false;
+    for (let i = 0; i < v.buffered.length; i++) if (rel >= v.buffered.start(i) && rel < v.buffered.end(i) - 1) inBuf = true;
+    if (P.mode === 'direct') v.currentTime = t;
+    else if (P.feed && P.pending == null && inBuf) v.currentTime = rel;   // ya descargado: no se vuelve a pedir
     else start(t, 'salto');
     report(true);
     paint();
@@ -434,6 +620,7 @@
       if (P.mode === 'direct') return;
       P.stallTimer = setTimeout(() => {
         if (!P || P.mode === 'direct' || video.paused || video.readyState >= 3) return;
+        if (P.feed && Date.now() - P.feed.lastData < 5000) return stallCheck();   // llega, pero despacio
         P.stalls = (P.stalls || 0) + 1;
         if (P.stalls > 3) return fail('El vídeo no carga: revisa la conexión');
         note('Reconectando…', 3000);
@@ -517,6 +704,8 @@
     clearInterval(P.raf);
     clearTimeout(P.hideTimer);
     clearTimeout(P.stallTimer);
+    stopFeed();
+    if (P.msUrl) URL.revokeObjectURL(P.msUrl);
     document.removeEventListener('keydown', P.onKey, true);
     document.removeEventListener('fullscreenchange', P.onFs);
     video.pause();

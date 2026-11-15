@@ -157,7 +157,14 @@ const streams = new Map();   // usuario|vídeo → ffmpeg
 async function sendStream(req, res, f, q, owner = '') {
   const slot = owner + '|' + f.path;
   const prev = streams.get(slot);
-  if (prev && prev.exitCode === null) { prev.kill('SIGKILL'); await new Promise(r => prev.once('close', r)); }
+  if (prev) {
+    // se espera a que termine («exit»), no a «close»: si el navegador había dejado de leer, su salida se queda a medio
+    // leer y «close» no llegaría nunca (y la reproducción nueva se quedaría colgada)
+    const running = prev.exitCode === null && prev.signalCode === null;
+    const exited = running && new Promise(r => { prev.once('exit', r); setTimeout(r, 3000); });
+    killStream(prev);
+    if (running) await exited;
+  }
   if (jobs >= MAX_JOBS) { res.writeHead(503, { 'Retry-After': '5' }); return res.end('Demasiadas reproducciones a la vez'); }
   const meta = await info(f, null).catch(() => null);
   const mode = q.get('mode') === 'transcode' ? 'transcode' : 'remux';
@@ -196,18 +203,28 @@ async function sendStream(req, res, f, q, owner = '') {
   jobs++;
   const ff = spawn(FFMPEG, args, { stdio: ['ignore', 'pipe', 'pipe'] });
   streams.set(slot, ff);
-  ff.on('close', () => { if (streams.get(slot) === ff) streams.delete(slot); });
+  // la plaza se libera al terminar el proceso, aunque su salida no llegue a cerrarse
+  let counted = true;
+  const release = () => { if (counted) { counted = false; jobs--; } if (streams.get(slot) === ff) streams.delete(slot); };
+  ff.on('exit', release);
+  ff.on('error', release);
   let err = '';
   ff.stderr.on('data', d => { err = (err + d).slice(-2000); });
-  res.writeHead(200, { 'Content-Type': 'video/mp4', 'Cache-Control': 'no-store', 'X-Stream-Start': String(start) });
+  // sin búfer en el proxy de DSM: lo que se envía llega ya al navegador, que es quien decide cuánto guarda
+  res.writeHead(200, { 'Content-Type': 'video/mp4', 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no', 'X-Stream-Start': String(start) });
   ff.stdout.pipe(res);
-  const stop = () => { if (ff.exitCode === null) ff.kill('SIGKILL'); };
-  res.on('close', stop);
+  res.on('close', () => killStream(ff));
   ff.on('close', code => {
-    jobs--;
+    release();
     if (code && !res.destroyed && err) console.warn('ffmpeg', mode, path.basename(f.path), err.trim().split('\n').pop());
     res.end();
   });
+}
+
+/** Corta un ffmpeg del flujo y suelta su salida (si estaba a medio leer, no se cerraría nunca) */
+function killStream(ff) {
+  if (ff.exitCode === null && ff.signalCode === null) ff.kill('SIGKILL');
+  ff.stdout?.destroy();
 }
 
 /** Subtítulo en WebVTT. Los internos se extraen una vez (hay que leer todo el archivo) y se guardan en caché */
