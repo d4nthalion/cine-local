@@ -114,7 +114,7 @@
     P.info = info;
     P.audio = pickAudio(info);
     P.sub = pickSub(info, info.audio[P.audio]);
-    start(cur.start || 0);
+    start(cur.start || 0, 'inicio');
     if (P.sub) loadSubs(P.sub);
     if (cur.skip) {
       const q = new URLSearchParams({ ...cur.skip, dur: info.duration });
@@ -139,8 +139,17 @@
     return audio && langIs(audio.lang, subLang) ? forced || null : full || forced;
   }
 
+  /** Por qué se vuelve a pedir el flujo y cómo estaba el vídeo (sale en el registro del servidor, para saber por qué se atasca) */
+  function streamDiag(why) {
+    const v = P.video;
+    let ahead = 0;
+    for (let i = 0; i < v.buffered.length; i++) if (v.buffered.start(i) <= v.currentTime + 1) ahead = Math.max(ahead, v.buffered.end(i) - v.currentTime);
+    return { why, ahead: ahead.toFixed(1), rs: v.readyState, ns: v.networkState, err: v.error?.code || 0 };
+  }
+
   /** Elige cómo pedir el vídeo y empieza en el segundo t */
-  function start(t) {
+  function start(t, why = 'inicio') {
+    const diag = streamDiag(why);
     const info = P.info, a = info.audio[P.audio];
     const vOk = videoOk(info.video);
     const direct = ['mp4', 'm4v', 'webm', 'mov'].includes(info.container) && vOk && audioOk(a) && P.audio === 0;
@@ -159,7 +168,7 @@
       const go = s => {
         if (!P || P.startSeq !== seq) return;   // cerrado, u otro salto mientras tanto
         P.offset = s; P.pending = null;
-        const q = new URLSearchParams({ mode: P.mode, start: s.toFixed(3), audio: P.audio, acopy: a && ['aac', 'mp3'].includes(a.codec) ? 1 : 0, maxh: 1080 });
+        const q = new URLSearchParams({ mode: P.mode, start: s.toFixed(3), audio: P.audio, acopy: a && ['aac', 'mp3'].includes(a.codec) ? 1 : 0, maxh: 1080, ...diag });
         v.src = `/api/media/${id}/stream?${q}`;
         v.play().catch(() => {});
       };
@@ -180,7 +189,7 @@
   function seek(t) {
     t = Math.max(0, Math.min(dur() - 1, t));
     if (P.mode === 'direct') P.video.currentTime = t;
-    else start(t);
+    else start(t, 'salto');
     report(true);
     paint();
   }
@@ -349,7 +358,7 @@
       const i = +value;
       if (i === P.audio) return;
       P.audio = i;
-      start(now());   // el navegador no puede cambiar de pista: se vuelve a pedir el vídeo con la nueva
+      start(now(), 'pista');   // el navegador no puede cambiar de pista: se vuelve a pedir el vídeo con la nueva
     } else {
       P.sub = value ? P.info.subs.find(s => s.key === value) : null;
       P.cues = [];
@@ -428,7 +437,7 @@
         P.stalls = (P.stalls || 0) + 1;
         if (P.stalls > 3) return fail('El vídeo no carga: revisa la conexión');
         note('Reconectando…', 3000);
-        start(now());
+        start(now(), 'atasco');
       }, 15000);
     };
     video.addEventListener('waiting', stallCheck);
@@ -438,7 +447,7 @@
     video.addEventListener('timeupdate', () => { paint(); report(false); });
     video.addEventListener('ended', () => {
       // con el flujo reempaquetado, «ended» puede llegar si se corta: sólo es el final si estamos cerca de la duración
-      if (dur() - now() > 30) return start(now());
+      if (dur() - now() > 30) return start(now(), 'fin-antes');
       report(true);
       next();
     });
@@ -448,11 +457,11 @@
       // en vez de pasar a convertirlo, que carga mucho más el NAS y va más a tirones
       if (video.error?.code === MediaError.MEDIA_ERR_NETWORK && P.mode !== 'direct' && (P.netRetries = (P.netRetries || 0) + 1) <= 3) {
         note('Reconectando…', 3000);
-        return setTimeout(() => P && start(now()), 1500);
+        return setTimeout(() => P && start(now(), 'red'), 1500);
       }
       // si el navegador no traga el archivo directo, se prueba reempaquetando, y si no, convirtiendo
-      if (P.mode === 'direct') { P.info.container = 'mkv'; return start(now()); }
-      if (P.mode === 'remux') { P.info.video = { ...P.info.video, codec: 'unsupported' }; return start(now()); }
+      if (P.mode === 'direct') { P.info.container = 'mkv'; return start(now(), 'error-directo'); }
+      if (P.mode === 'remux') { P.info.video = { ...P.info.video, codec: 'unsupported' }; return start(now(), 'error-remux'); }
       fail('El navegador no puede reproducir este vídeo');
     });
     P.raf = setInterval(() => { if (P) { paintSubs(); paintSkip(); } }, 200);

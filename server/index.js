@@ -559,6 +559,13 @@ route('GET', '/api/media/:id/file', (req, res, { p, q, user }) => {
 route('GET', '/api/media/:id/stream', (req, res, { p, q, user }) => {
   const f = mediaFile(p.id, user);
   logAccess(req, res, user, p.id, f, q.get('mode') === 'transcode' ? 'transcode' : 'remux');
+  // cada vez que la web vuelve a pedir el flujo: por qué (salto, atasco, corte…) y cuánto tenía cargado por delante
+  const why = String(q.get('why') || '').slice(0, 20);
+  const range = req.headers.range && !/^bytes=0-$/.test(req.headers.range) ? ' · range ' + String(req.headers.range).slice(0, 40) : '';
+  if ((why && why !== 'inicio') || range) {
+    const d = k => String(q.get(k) || '').slice(0, 8);
+    console.log(`flujo ${user} · ${titleOf(f)} · ${q.get('mode')} desde ${(+q.get('start') || 0).toFixed(0)} s · ${why || '?'} · tenía ${d('ahead')} s cargados (rs ${d('rs')}, ns ${d('ns')}, err ${d('err')})${range}`);
+  }
   return media.sendStream(req, res, f, q, user);
 });
 route('GET', '/api/media/:id/keyframe', async (req, res, { p, q, user }) => {
