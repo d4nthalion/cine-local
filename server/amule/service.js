@@ -15,6 +15,8 @@ const AUTH_RETRY = 5 * 60000;   // contraseña rechazada
 const KEEP_PLACED = 30; // últimas colocadas que se enseñan en Descargas
 const SKIP_DIRS = /^(\..*|@.*|#recycle|#snapshot|\$recycle\.bin|system volume information)$/i;
 const HASH = /^[0-9a-f]{32}$/i;
+// Los libros los descarga BiblioLocal con el mismo aMule y los coloca ella: CineLocal ni los enseña ni los toca
+const EBOOK = /\.(epub|mobi|azw3?|fb2|cbz|cbr)$/i;
 
 const httpError = (status, message) => Object.assign(new Error(message), { status });
 const keyOf = user => String(user || '').toLowerCase();
@@ -72,6 +74,7 @@ class AmuleService extends EventEmitter {
     try {
       const r = await this.client.transfers();
       if (gen !== this.gen) return this.snapshot;
+      r.downloads = r.downloads.filter(d => !EBOOK.test(d.name));
       this.publish({ ok: true, code: null, error: null, ...r });
       this.handleCompleted(r.downloads);
     } catch (e) {
