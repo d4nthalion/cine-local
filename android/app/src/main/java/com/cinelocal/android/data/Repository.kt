@@ -261,18 +261,23 @@ class Repository(private val context: Context) {
         }
     }
 
-    /** Biblioteca del servidor. El progreso se junta con el del móvil: lo más reciente de cada archivo gana */
+    /**
+     * Biblioteca del servidor. El progreso se junta con el del móvil: lo más reciente de cada archivo gana. Lo que el
+     * servidor ya no tiene sólo se sube si es de después de la última vez que se bajó (visto sin conexión); si es de
+     * antes, es que se quitó en otro sitio (desmarcar como visto lo borra) y no hay que resucitarlo
+     */
     private fun scanServer() {
         val r = server().library()
         collections.value = r.collections
         collectionsSeenAt.value = r.collectionsSeenAt
         news.value = r.news
         val now = System.currentTimeMillis()
+        val lastSync = library.value.scannedAt
         val lang = settings.value.metaLang
         library.set(LibraryData(r.items, now, r.error, r.links))
         metadata.set(r.items.associate { it.id to MetaEntry(r.meta[it.id]?.tmdbId, r.meta[it.id], lang, now, seasons = it.seasons) })
         val local = progress.value
-        val newer = local.filter { (k, v) -> v.at > (r.progress[k]?.at ?: 0) }
+        val newer = local.filter { (k, v) -> r.progress[k]?.let { v.at > it.at } ?: (v.at > lastSync) }
         progress.set(r.progress + newer)
         // lo visto sin conexión (descargado) sube ahora
         for ((k, v) in newer) syncProgress(k, v, force = true)
