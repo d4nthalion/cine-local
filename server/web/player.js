@@ -389,9 +389,10 @@
     try {
       const r = await fetch(`/api/media/${P.playlist[P.idx].id}/subs/${sub.key}`);
       if (!r.ok) throw new Error();
-      const data = sub.image === 'pgs' ? parsePgs(new Uint8Array(await r.arrayBuffer())) : parseVtt(await r.text());
+      const data = sub.image === 'pgs' ? parsePgs(new Uint8Array(await r.arrayBuffer()))
+        : sub.image === 'vobsub' ? parseVobsub(await r.json()) : parseVtt(await r.text());
       if (!P || token !== P.token || P.sub !== sub) return;   // cerrado o cambiado mientras llegaban
-      if (sub.image === 'pgs') P.pgs = data; else P.cues = data;
+      if (sub.image) P.pgs = data; else P.cues = data;
       note(null);
     } catch { if (P && token === P.token) note('No se pudieron cargar los subtítulos', 3000); }
   }
@@ -474,6 +475,80 @@
     return cv;
   }
 
+  // ---------- subtítulos VobSub (imágenes de DVD) ----------
+  // Cada paquete es una imagen de 4 colores (índices a la paleta de 16 de la cabecera, con su transparencia),
+  // comprimida por nibbles y entrelazada (líneas pares e impares por separado), y unas órdenes de cuándo se ve
+  function parseVobsub(j) {
+    const pal = j.palette || [];
+    const sets = [];
+    const list = (j.packets || []).map(([t, dur, b64]) => {
+      const b = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+      const u16 = i => (b[i] << 8) | b[i + 1];
+      if (b.length < 4) return null;
+      const ctl = u16(2);
+      let start = 0, stop = null, colors = [0, 1, 2, 3], alpha = [0, 15, 15, 15], box = null, offs = null;
+      for (let p = ctl, guard = 0; p + 4 <= b.length && guard < 32; guard++) {
+        const delay = u16(p) * 1024 / 90000, next = u16(p + 2);
+        let q = p + 4;
+        loop: while (q < b.length) {
+          switch (b[q++]) {
+            case 0x00: case 0x01: start = delay; break;
+            case 0x02: stop = delay; break;
+            case 0x03: colors = [b[q + 1] & 15, b[q + 1] >> 4, b[q] & 15, b[q] >> 4]; q += 2; break;
+            case 0x04: alpha = [b[q + 1] & 15, b[q + 1] >> 4, b[q] & 15, b[q] >> 4]; q += 2; break;
+            case 0x05: box = [(b[q] << 4) | (b[q + 1] >> 4), ((b[q + 1] & 15) << 8) | b[q + 2], (b[q + 3] << 4) | (b[q + 4] >> 4), ((b[q + 4] & 15) << 8) | b[q + 5]]; q += 6; break;
+            case 0x06: offs = [u16(q), u16(q + 2)]; q += 4; break;
+            case 0xff: break loop;
+            default: break loop;   // orden desconocida: lo que queda no se puede leer
+          }
+        }
+        if (next === p || next < p) break;
+        p = next;
+      }
+      if (!box || !offs) return null;
+      const w = box[1] - box[0] + 1, h = box[3] - box[2] + 1;
+      if (w <= 0 || h <= 0 || w > 4096 || h > 4096) return null;
+      let img = null;
+      const image = () => {
+        if (img) return img;
+        const rgba = colors.map((c, i) => {
+          const rgb = pal[c] ?? 0, a = alpha[i] * 17;
+          return ((a << 24) | ((rgb & 255) << 16) | (((rgb >> 8) & 255) << 8) | ((rgb >> 16) & 255)) >>> 0;
+        });
+        const px = new Uint32Array(w * h);
+        for (let field = 0; field < 2; field++) {
+          let n = offs[field] * 2;   // posición en nibbles
+          const nib = () => { const v = b[n >> 1]; const r = n & 1 ? v & 15 : v >> 4; n++; return r; };
+          for (let y = field; y < h; y += 2) {
+            let x = 0;
+            while (x < w && (n >> 1) < b.length) {
+              let v = nib();
+              if (v < 0x4) { v = (v << 4) | nib(); if (v < 0x10) { v = (v << 4) | nib(); if (v < 0x40) v = (v << 4) | nib(); } }
+              let run = v >> 2;
+              if (!run) run = w - x;   // hasta el final de la línea
+              const c = rgba[v & 3];
+              for (const end = Math.min(w, x + run); x < end; x++) px[y * w + x] = c;
+            }
+            if (n & 1) n++;   // cada línea empieza en un byte
+          }
+        }
+        const cv = document.createElement('canvas');
+        cv.width = w; cv.height = h;
+        cv.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(px.buffer), w, h), 0, 0);
+        return (img = cv);
+      };
+      return { t: t + start, end: stop != null ? t + stop : t + (dur || 4), x: box[0], y: box[2], image };
+    }).filter(Boolean).sort((a, b) => a.t - b.t);
+    list.forEach((it, i) => {
+      // si el siguiente empieza antes de que este acabe, este se quita al empezar aquel
+      const end = Math.min(it.end, list[i + 1]?.t ?? Infinity);
+      sets.push({ t: it.t, w: j.w, h: j.h, items: [{ x: it.x, y: it.y, image: it.image }] });
+      if (end > it.t) sets.push({ t: end, w: j.w, h: j.h, items: [] });
+    });
+    sets.sort((a, b) => a.t - b.t || a.items.length - b.items.length);
+    return { sets, cur: null, size: '' };
+  }
+
   function clearPgs() {
     const cv = $('.wp-pgs', P.el);
     cv.getContext('2d').clearRect(0, 0, cv.width, cv.height);
@@ -502,7 +577,7 @@
     const sx = cv.width / set.w, sy = cv.height / set.h;
     ctx.imageSmoothingQuality = 'high';
     for (const it of set.items) {
-      const img = pgsImage(it.obj, it.pal);
+      const img = it.image ? it.image() : pgsImage(it.obj, it.pal);
       const [cx, cy, cw, ch] = it.crop || [0, 0, img.width, img.height];
       ctx.drawImage(img, cx, cy, cw, ch, it.x * sx, it.y * sy, cw * sx, ch * sy);
     }

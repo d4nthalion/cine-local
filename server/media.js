@@ -54,7 +54,8 @@ async function info(f, root) {
     forced: !!s.disposition?.forced || /forz|forced/i.test(tag(s, 'title')), def: !!s.disposition?.default,
     text: TEXT_SUBS.has(s.codec_name),
     // los PGS (Blu-ray) son imágenes: se mandan tal cual y los dibuja el reproductor web
-    ...(s.codec_name === 'hdmv_pgs_subtitle' && { image: 'pgs' })
+    ...(s.codec_name === 'hdmv_pgs_subtitle' && { image: 'pgs' }),
+    ...(s.codec_name === 'dvd_subtitle' && { image: 'vobsub' })
   }));
   externalSubs(f, root).forEach((x, i) => subs.push({ key: 'x' + i, codec: path.extname(x.path).slice(1), lang: x.lang || '', title: x.title, forced: /forz|forced/i.test(x.path), def: false, text: true, external: true }));
   return {
@@ -234,6 +235,7 @@ async function sendSubs(res, f, key, root, cacheDir) {
   const meta = await info(f, root);
   const sub = meta.subs.find(s => s.key === key);
   if (sub?.image === 'pgs') return sendPgs(res, f, key, cacheDir);
+  if (sub?.image === 'vobsub') return sendVobsub(res, f, key, cacheDir);
   if (!sub || !sub.text) { res.writeHead(404); return res.end(); }
   let vtt;
   if (sub.external) {
@@ -282,6 +284,47 @@ async function sendPgs(res, f, key, cacheDir) {
   }
   res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Length': fs.statSync(cache).size, 'Cache-Control': 'private, max-age=3600' });
   fs.createReadStream(cache).pipe(res);
+}
+
+/**
+ * Subtítulo VobSub (imágenes de DVD): ffmpeg no sabe guardarlo suelto, así que se leen con ffprobe sus paquetes
+ * y la cabecera (tamaño y paleta) y se guardan en caché como JSON; lo dibuja el reproductor web
+ */
+async function sendVobsub(res, f, key, cacheDir) {
+  const st = fs.statSync(f.path);
+  const cache = path.join(cacheDir, crypto.createHash('sha1').update(`${f.path}|${st.size}|${st.mtimeMs}|${key}`).digest('hex') + '.vobsub.json');
+  if (!fs.existsSync(cache)) {
+    if (!extracting.has(cache)) {
+      extracting.set(cache, new Promise((resolve, reject) => {
+        execFile(FFPROBE, ['-v', 'error', '-select_streams', `s:${+key.slice(1)}`, '-show_streams', '-show_packets', '-show_data', '-of', 'json', f.path],
+          { maxBuffer: 1024 * 1024 * 1024, timeout: 10 * 60e3 }, (err, out) => {
+            if (err) return reject(new Error('No se pudo extraer el subtítulo'));
+            try {
+              const j = JSON.parse(out);
+              const idx = hexDump(j.streams?.[0]?.extradata).toString('latin1');
+              const size = /size:\s*(\d+)x(\d+)/.exec(idx);
+              const pal = /palette:\s*([0-9a-f,\s]+)/i.exec(idx)?.[1].split(',').map(x => parseInt(x.trim(), 16)).filter(Number.isFinite) || [];
+              const data = {
+                w: +size?.[1] || j.streams?.[0]?.width || 720, h: +size?.[2] || j.streams?.[0]?.height || 576, palette: pal,
+                packets: (j.packets || []).filter(p => p.data).map(p => [+(+p.pts_time).toFixed(3), +(+p.duration_time || 0).toFixed(3), hexDump(p.data).toString('base64')])
+              };
+              fs.mkdirSync(cacheDir, { recursive: true });
+              fs.writeFileSync(cache, JSON.stringify(data));
+              resolve();
+            } catch { reject(new Error('No se pudo extraer el subtítulo')); }
+          });
+      }).finally(() => extracting.delete(cache)));
+    }
+    await extracting.get(cache);
+  }
+  res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': fs.statSync(cache).size, 'Cache-Control': 'private, max-age=3600' });
+  fs.createReadStream(cache).pipe(res);
+}
+
+/** Bytes del volcado hexadecimal de ffprobe («00000000: 06b4 0695 …  texto») */
+function hexDump(s) {
+  if (!s) return Buffer.alloc(0);
+  return Buffer.from(String(s).split('\n').map(l => l.slice(10, 50).replace(/[^0-9a-f]/gi, '')).join(''), 'hex');
 }
 
 async function externalToVtt(file) {
