@@ -52,7 +52,9 @@ async function info(f, root) {
   const subs = streams.filter(s => s.codec_type === 'subtitle').map((s, n) => ({
     key: 'i' + n, codec: s.codec_name, lang: tag(s, 'language'), title: tag(s, 'title'),
     forced: !!s.disposition?.forced || /forz|forced/i.test(tag(s, 'title')), def: !!s.disposition?.default,
-    text: TEXT_SUBS.has(s.codec_name)
+    text: TEXT_SUBS.has(s.codec_name),
+    // los PGS (Blu-ray) son imágenes: se mandan tal cual y los dibuja el reproductor web
+    ...(s.codec_name === 'hdmv_pgs_subtitle' && { image: 'pgs' })
   }));
   externalSubs(f, root).forEach((x, i) => subs.push({ key: 'x' + i, codec: path.extname(x.path).slice(1), lang: x.lang || '', title: x.title, forced: /forz|forced/i.test(x.path), def: false, text: true, external: true }));
   return {
@@ -231,6 +233,7 @@ function killStream(ff) {
 async function sendSubs(res, f, key, root, cacheDir) {
   const meta = await info(f, root);
   const sub = meta.subs.find(s => s.key === key);
+  if (sub?.image === 'pgs') return sendPgs(res, f, key, cacheDir);
   if (!sub || !sub.text) { res.writeHead(404); return res.end(); }
   let vtt;
   if (sub.external) {
@@ -253,6 +256,32 @@ async function sendSubs(res, f, key, root, cacheDir) {
   }
   res.writeHead(200, { 'Content-Type': 'text/vtt; charset=utf-8', 'Cache-Control': 'private, max-age=3600' });
   res.end(vtt);
+}
+
+/**
+ * Subtítulo PGS (imágenes de Blu-ray) tal cual, en .sup: se extrae una vez (hay que leer todo el archivo), se guarda
+ * en caché y lo dibuja el reproductor web
+ */
+async function sendPgs(res, f, key, cacheDir) {
+  const st = fs.statSync(f.path);
+  const cache = path.join(cacheDir, crypto.createHash('sha1').update(`${f.path}|${st.size}|${st.mtimeMs}|${key}`).digest('hex') + '.sup');
+  if (!fs.existsSync(cache)) {
+    if (!extracting.has(cache)) {
+      fs.mkdirSync(cacheDir, { recursive: true });
+      const tmp = cache + '.' + process.pid + '.tmp';
+      extracting.set(cache, new Promise((resolve, reject) => {
+        execFile(FFMPEG, ['-hide_banner', '-loglevel', 'error', '-nostdin', '-y', '-i', f.path, '-map', `0:s:${+key.slice(1)}`, '-c:s', 'copy', '-f', 'sup', tmp],
+          { timeout: 10 * 60e3 }, err => {
+            if (err) { fs.rmSync(tmp, { force: true }); return reject(new Error('No se pudo extraer el subtítulo')); }
+            fs.renameSync(tmp, cache);
+            resolve();
+          });
+      }).finally(() => extracting.delete(cache)));
+    }
+    await extracting.get(cache);
+  }
+  res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Length': fs.statSync(cache).size, 'Cache-Control': 'private, max-age=3600' });
+  fs.createReadStream(cache).pipe(res);
 }
 
 async function externalToVtt(file) {

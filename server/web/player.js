@@ -60,6 +60,7 @@
     el.innerHTML = `
       <video playsinline preload="auto"></video>
       <div class="wp-subs"></div>
+      <canvas class="wp-pgs"></canvas>
       <div class="wp-spinner"><div class="spinner"></div></div>
       <div class="wp-flash"></div>
       <div class="wp-shade top"></div><div class="wp-shade bottom"></div>
@@ -96,7 +97,7 @@
     if (!cur) return close();
     const token = ++P.token;
     P.idx = idx;
-    P.info = null; P.cues = []; P.segs = []; P.sub = null;
+    P.info = null; P.cues = []; P.pgs = null; P.segs = []; P.sub = null;
     // «Serie · T1:E2 · Nombre»: la serie y, a su lado y más tenue, «T1:E2 Nombre»
     const tm = cur.title.match(/^(.*?) · (T\d+:E\d+.*)$/);
     $('.wp-t1', P.el).textContent = tm ? tm[1] : cur.title;
@@ -131,7 +132,7 @@
 
   function pickSub(info, audio) {
     const { subLang, subMode } = P.prefs;
-    const subs = info.subs.filter(s => s.text && langIs(s.lang, subLang));
+    const subs = info.subs.filter(s => (s.text || s.image) && langIs(s.lang, subLang));
     if (!subs.length || subMode === 'off' || subLang === 'none') return null;
     const full = subs.find(s => !s.forced), forced = subs.find(s => s.forced);
     if (subMode === 'always') return full || forced;
@@ -383,16 +384,128 @@
   // ---------- subtítulos (se pintan aquí: sirven igual con el vídeo directo o con el flujo que empieza en ?start=) ----------
   async function loadSubs(sub) {
     const token = P.token;
-    P.cues = [];
+    P.cues = []; P.pgs = null;
     note('Cargando subtítulos…');
     try {
       const r = await fetch(`/api/media/${P.playlist[P.idx].id}/subs/${sub.key}`);
       if (!r.ok) throw new Error();
-      const cues = parseVtt(await r.text());
+      const data = sub.image === 'pgs' ? parsePgs(new Uint8Array(await r.arrayBuffer())) : parseVtt(await r.text());
       if (!P || token !== P.token || P.sub !== sub) return;   // cerrado o cambiado mientras llegaban
-      P.cues = cues;
+      if (sub.image === 'pgs') P.pgs = data; else P.cues = data;
       note(null);
     } catch { if (P && token === P.token) note('No se pudieron cargar los subtítulos', 3000); }
+  }
+
+  // ---------- subtítulos PGS (imágenes de Blu-ray) ----------
+  // El .sup son «conjuntos» con su instante: composición (qué objetos y dónde), paletas (YCbCr + alfa) y objetos
+  // (imágenes comprimidas con RLE). Cada conjunto se ve hasta el siguiente; uno sin objetos borra la pantalla.
+  function parsePgs(b) {
+    const u16 = i => (b[i] << 8) | b[i + 1];
+    const sets = [];
+    const palettes = new Map(), objects = new Map();
+    let pcs = null, dirty = false;
+    for (let p = 0; p + 13 <= b.length;) {
+      if (b[p] !== 0x50 || b[p + 1] !== 0x47) break;   // «PG»
+      const pts = ((b[p + 2] << 24) | (b[p + 3] << 16) | (b[p + 4] << 8) | b[p + 5]) >>> 0;
+      const type = b[p + 10], size = u16(p + 11), d = p + 13;
+      p = d + size;
+      if (type === 0x16) {   // composición
+        const state = b[d + 7], n = b[d + 10];
+        if (state & 0x80) { palettes.clear(); objects.clear(); }   // empieza una época: lo anterior ya no vale
+        pcs = { t: pts / 90000, w: u16(d), h: u16(d + 2), palette: b[d + 9], items: [] };
+        for (let i = 0, q = d + 11; i < n; i++) {
+          const it = { id: u16(q), x: u16(q + 4), y: u16(q + 6) };
+          if (b[q + 3] & 0x40) { it.crop = [u16(q + 8), u16(q + 10), u16(q + 12), u16(q + 14)]; q += 16; } else q += 8;
+          pcs.items.push(it);
+        }
+        dirty = true;
+      } else if (type === 0x14) {   // paleta
+        const pal = palettes.get(b[d]) || new Uint32Array(256);
+        for (let q = d + 2; q + 5 <= d + size; q += 5) {
+          const Y = b[q + 1], Cr = b[q + 2] - 128, Cb = b[q + 3] - 128, A = b[q + 4];
+          const c = v => Math.max(0, Math.min(255, Math.round(v)));
+          const yy = (Y - 16) * 1.164;   // BT.709, rango limitado
+          // RGBA en el orden de bytes de ImageData (en memoria little endian: R, G, B, A)
+          pal[b[q]] = ((A << 24) | (c(yy + 2.112 * Cb) << 16) | (c(yy - 0.213 * Cb - 0.533 * Cr) << 8) | c(yy + 1.793 * Cr)) >>> 0;
+        }
+        palettes.set(b[d], pal);
+      } else if (type === 0x15) {   // objeto (puede venir en varios trozos)
+        const id = u16(d), seq = b[d + 3];
+        if (seq & 0x80) objects.set(id, { w: u16(d + 7), h: u16(d + 9), parts: [b.subarray(d + 11, d + size)], img: null });
+        else objects.get(id)?.parts.push(b.subarray(d + 4, d + size));
+      } else if (type === 0x80 && pcs && dirty) {   // fin del conjunto
+        const pal = palettes.get(pcs.palette);
+        const items = pcs.items.map(it => {
+          const o = objects.get(it.id);
+          return o && pal ? { x: it.x, y: it.y, crop: it.crop, obj: o, pal } : null;
+        }).filter(Boolean);
+        sets.push({ t: pcs.t, w: pcs.w, h: pcs.h, items });
+        dirty = false;
+      }
+    }
+    sets.sort((a, b) => a.t - b.t);
+    return { sets, cur: null, size: '' };
+  }
+
+  /** Imagen de un objeto PGS con su paleta (se descomprime al verse por primera vez) */
+  function pgsImage(o, pal) {
+    if (o.img && o.imgPal === pal) return o.img;
+    const total = o.parts.reduce((n, x) => n + x.length, 0);
+    const rle = new Uint8Array(total);
+    let off = 0;
+    for (const x of o.parts) { rle.set(x, off); off += x.length; }
+    const px = new Uint32Array(o.w * o.h);
+    let i = 0, x = 0, y = 0;
+    const put = (n, c) => { const v = pal[c]; for (let k = 0; k < n && x < o.w; k++, x++) px[y * o.w + x] = v; };
+    while (i < rle.length && y < o.h) {
+      const c = rle[i++];
+      if (c) { put(1, c); continue; }
+      const f = rle[i++];
+      if (f === 0) { x = 0; y++; continue; }   // fin de línea
+      const long = f & 0x40, color = f & 0x80;
+      let n = f & 0x3f;
+      if (long) n = (n << 8) | rle[i++];
+      put(n, color ? rle[i++] : 0);
+    }
+    const cv = document.createElement('canvas');
+    cv.width = o.w; cv.height = o.h;
+    cv.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(px.buffer), o.w, o.h), 0, 0);
+    o.img = cv; o.imgPal = pal;
+    return cv;
+  }
+
+  function clearPgs() {
+    const cv = $('.wp-pgs', P.el);
+    cv.getContext('2d').clearRect(0, 0, cv.width, cv.height);
+  }
+
+  /** Dibuja el conjunto PGS de este instante sobre la parte del <video> donde se ve la imagen */
+  function paintPgs() {
+    const g = P.pgs, t = now();
+    let lo = 0, hi = g.sets.length - 1, k = -1;
+    while (lo <= hi) { const m = (lo + hi) >> 1; if (g.sets[m].t <= t) { k = m; lo = m + 1; } else hi = m - 1; }
+    const set = k >= 0 ? g.sets[k] : null;
+    const v = P.video, cv = $('.wp-pgs', P.el);
+    // el vídeo se ve encajado (object-fit: contain): el lienzo ocupa justo esa parte
+    const vw = v.videoWidth || P.info?.video?.width || 16, vh = v.videoHeight || P.info?.video?.height || 9;
+    const W = v.clientWidth, H = v.clientHeight, s = Math.min(W / vw, H / vh);
+    const size = [Math.round((W - vw * s) / 2), Math.round((H - vh * s) / 2), Math.round(vw * s), Math.round(vh * s)].join();
+    if (set === g.cur && size === g.size) return;
+    g.cur = set; g.size = size;
+    const [L, T, CW, CH] = size.split(',').map(Number);
+    const dpr = window.devicePixelRatio || 1;
+    Object.assign(cv.style, { left: L + 'px', top: T + 'px', width: CW + 'px', height: CH + 'px' });
+    cv.width = Math.max(1, Math.round(CW * dpr)); cv.height = Math.max(1, Math.round(CH * dpr));
+    const ctx = cv.getContext('2d');
+    ctx.clearRect(0, 0, cv.width, cv.height);
+    if (!set || !set.items.length) return;
+    const sx = cv.width / set.w, sy = cv.height / set.h;
+    ctx.imageSmoothingQuality = 'high';
+    for (const it of set.items) {
+      const img = pgsImage(it.obj, it.pal);
+      const [cx, cy, cw, ch] = it.crop || [0, 0, img.width, img.height];
+      ctx.drawImage(img, cx, cy, cw, ch, it.x * sx, it.y * sy, cw * sx, ch * sy);
+    }
   }
 
   function parseVtt(text) {
@@ -410,6 +523,7 @@
   }
 
   function paintSubs() {
+    if (P.pgs) return paintPgs();
     const t = now();
     const html = P.cues.filter(c => t >= c.start && t <= c.end).map(c => `<span>${c.html}</span>`).join('<br>');
     const box = $('.wp-subs', P.el);
@@ -504,8 +618,8 @@
       if (!info) return;
       const audio = info.audio.map((a, i) => ({ v: i, on: i === P.audio, label: [langName(a.lang) || `Pista ${i + 1}`, a.title].filter(Boolean).join(' · ') }));
       const subs = [{ v: '', on: !P.sub, label: 'Desactivados' }].concat(info.subs.map(s => ({
-        v: s.key, on: P.sub?.key === s.key, off: !s.text,
-        label: [langName(s.lang) || 'Subtítulos', s.title, s.forced ? 'forzados' : '', s.text ? '' : '(imagen, no disponible)'].filter(Boolean).join(' · ')
+        v: s.key, on: P.sub?.key === s.key, off: !s.text && !s.image,
+        label: [langName(s.lang) || 'Subtítulos', s.title, s.forced ? 'forzados' : '', s.text || s.image ? '' : '(imagen, no disponible)'].filter(Boolean).join(' · ')
       })));
       const col = (k, title, items) => `<div class="wp-col"><div class="wp-menu-h">${title}</div>` +
         items.map(x => `<button class="wp-mi${x.on ? ' on' : ''}" ${x.off ? 'disabled' : ''} data-kind="${k}" data-wp-pick="${esc(x.v)}">${IC.check}<span>${esc(x.label)}</span></button>`).join('') + '</div>';
@@ -547,8 +661,9 @@
       start(now(), 'pista');   // el navegador no puede cambiar de pista: se vuelve a pedir el vídeo con la nueva
     } else {
       P.sub = value ? P.info.subs.find(s => s.key === value) : null;
-      P.cues = [];
+      P.cues = []; P.pgs = null;
       $('.wp-subs', P.el).innerHTML = '';
+      clearPgs();
       if (P.sub) loadSubs(P.sub);
     }
   }

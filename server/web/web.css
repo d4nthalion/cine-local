@@ -45,6 +45,7 @@ body.wp-open { overflow: hidden; }
 .wp-volbar { width: 0; opacity: 0; transition: width .2s, opacity .2s; accent-color: var(--accent); }
 .wp-vol:hover .wp-volbar, .wp-volbar:focus { width: 96px; opacity: 1; margin: 0 8px 0 2px; }
 
+.wp-pgs { position: absolute; pointer-events: none; }
 .wp-subs { position: absolute; left: 6%; right: 6%; bottom: 9%; text-align: center; pointer-events: none; font-size: clamp(18px, 2.6vw, 38px); line-height: 1.3; font-weight: 600; transition: bottom .25s; }
 .wp.show .wp-subs, .wp.paused .wp-subs { bottom: 150px; }
 .wp-subs span { background: rgba(0,0,0,.55); padding: .05em .35em; border-radius: 4px; box-decoration-break: clone; -webkit-box-decoration-break: clone; text-shadow: 0 1px 3px #000; }
