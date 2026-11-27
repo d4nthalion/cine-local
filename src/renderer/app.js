@@ -73,6 +73,9 @@ const S = {
   ann: { items: null, error: null },                               // avisos enviados (administradores)
   annEdit: null,                                                   // el aviso que se está escribiendo
   titles: {},                                                      // fichas de TMDB de lo que no está en la biblioteca
+  // calendario de estrenos: vista (semana o mes), el día en el que está, filtros y los meses ya pedidos («movies:2026-11»)
+  cal: { view: (() => { try { return localStorage.getItem('cal-view') === 'week' ? 'week' : 'month'; } catch { return 'month'; } })(),
+    day: null, show: { movies: 'all', series: 'all' }, prov: { movies: '', series: '' }, data: {} },
   emule: {
     snap: { ok: false, code: 'offline', downloads: [], pending: [], placed: [] },
     method: 'global',   // buscar en los servidores eD2k o en Kad
@@ -450,7 +453,9 @@ function directorChip(d) {
 }
 
 /** Películas y Directores, como pestañas de la sección Películas */
-const movieTabs = on => `<div class="list-tabs page-tabs">${[['movies', 'Películas'], ['directors', 'Directores']]
+const movieTabs = on => `<div class="list-tabs page-tabs">${[['movies', 'Películas'], ['directors', 'Directores'], ['movie-releases', 'Estrenos']]
+  .map(([k, l]) => `<button class="gchip ${on === k ? 'on' : ''}" data-nav="${k}">${l}</button>`).join('')}</div>`;
+const seriesTabs = on => `<div class="list-tabs page-tabs">${[['series', 'Series'], ['series-releases', 'Estrenos']]
   .map(([k, l]) => `<button class="gchip ${on === k ? 'on' : ''}" data-nav="${k}">${l}</button>`).join('')}</div>`;
 
 function viewDirectors() {
@@ -1300,7 +1305,7 @@ function viewGrid(kind) {
   const shown = Math.max(GRID_PAGE, f.shown || 0);
   return `<div class="page">
     <h1 class="page-title">${title}<span class="count">${list.length}</span></h1>
-    ${kind === 'movies' ? movieTabs('movies') : ''}
+    ${kind === 'movies' ? movieTabs('movies') : seriesTabs('series')}
     <div class="toolbar">
       <div class="chips">
         <button class="chip ${f.seen === 'all' ? 'on' : ''}" data-seen="all">Todas · ${byCat.length}</button>
@@ -3040,6 +3045,147 @@ function paintUpdate() {
 }
 
 
+// ---------------------------------------------------------------- calendario de estrenos
+// Pestaña «Estrenos» de Películas y de Series: por semanas o por meses; cada mes se pide al servidor al verlo
+// (y se guarda mientras la app está abierta). Lo que ya tienes abre su ficha; lo demás, la de TMDB (Pedir, Watchlist…)
+const pad2 = n => String(n).padStart(2, '0');
+const isoDay = d => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+const parseDay = s => { const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d); };
+const addDays = (d, n) => new Date(d.getFullYear(), d.getMonth(), d.getDate() + n);
+const weekStart = d => addDays(d, -((d.getDay() + 6) % 7));   // lunes
+const CAL_DOW = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'];
+const cap1 = s => s.charAt(0).toUpperCase() + s.slice(1);
+
+/** Los días que se ven: la semana del día elegido, o el mes entero (de lunes a domingo, con los días de los meses de al lado) */
+function calDays() {
+  const day = parseDay(S.cal.day || isoDay(new Date()));
+  if (S.cal.view === 'week') { const a = weekStart(day); return Array.from({ length: 7 }, (_, i) => addDays(a, i)); }
+  const first = new Date(day.getFullYear(), day.getMonth(), 1);
+  const a = weekStart(first), last = new Date(day.getFullYear(), day.getMonth() + 1, 0);
+  const n = Math.ceil((last - a) / 864e5 + 1);
+  return Array.from({ length: Math.ceil(n / 7) * 7 }, (_, i) => addDays(a, i));
+}
+
+async function loadCal(kind, month) {
+  const k = `${kind}:${month}`;
+  if (S.cal.data[k]) return;
+  S.cal.data[k] = { loading: true };
+  try { S.cal.data[k] = { items: (await window.api.getCalendar({ kind, month })).items || [] }; }
+  catch (e) { S.cal.data[k] = { error: errText(e) }; }
+  if (S.route.name === (kind === 'movies' ? 'movie-releases' : 'series-releases')) render(true);
+}
+
+function calAction(ds) {
+  const day = parseDay(S.cal.day || isoDay(new Date()));
+  if (ds.cal === 'today') S.cal.day = isoDay(new Date());
+  else if (ds.cal === 'prev' || ds.cal === 'next') {
+    const n = ds.cal === 'prev' ? -1 : 1;
+    S.cal.day = isoDay(S.cal.view === 'week' ? addDays(day, 7 * n) : new Date(day.getFullYear(), day.getMonth() + n, 1));
+  } else if (ds.cal === 'retry') {
+    for (const [k, v] of Object.entries(S.cal.data)) if (v.error) delete S.cal.data[k];
+  } else if (ds.calView) {
+    // de mes a semana: si es el mes de hoy, la semana de hoy (si no, la primera del mes)
+    const now = new Date();
+    if (ds.calView === 'week' && S.cal.view === 'month' && day.getFullYear() === now.getFullYear() && day.getMonth() === now.getMonth()) S.cal.day = isoDay(now);
+    S.cal.view = ds.calView;
+    try { localStorage.setItem('cal-view', ds.calView); } catch {}
+  } else if (ds.calShow) S.cal.show[ds.calKind] = ds.calShow;
+  else if (ds.calProv !== undefined) S.cal.prov[ds.calKind] = ds.calProv;
+  else if (ds.calWeek) { S.cal.view = 'week'; S.cal.day = ds.calWeek; try { localStorage.setItem('cal-view', 'week'); } catch {} }
+  render(true);
+}
+
+/** Cómo se ve un estreno: dónde (cines o sus plataformas) y si ya lo tienes */
+function calInfo(e) {
+  const type = e.type === 'series' ? 'series' : 'movie';
+  const owned = S.lib.items.find(i => i.type === type && i.meta?.tmdbId === e.id);
+  const where = e.kind === 'cinema' ? 'Cines' : (e.providers || []).map(p => p.name).join(', ');
+  const what = e.kind === 'premiere' ? 'Estreno' : e.kind === 'season' ? `Temporada ${e.season}` : '';
+  const open = owned ? `data-open="${owned.id}"` : `data-title-type="${type}" data-title-id="${e.id}"`;
+  const badge = e.kind === 'cinema' ? `<span class="cal-where cine" title="Cines">${I.film}</span>`
+    : (e.providers || []).slice(0, 2).map(p => p.logo ? `<img class="cal-where" src="${esc(p.logo)}" alt="${esc(p.name)}" title="${esc(p.name)}">` : `<span class="cal-where txt" title="${esc(p.name)}">${esc(p.name.slice(0, 2))}</span>`).join('');
+  const marks = (owned ? `<span class="cal-mark own" title="Ya está en la biblioteca">${I.check}</span>`
+    : inWatchlist(`${type}:${e.id}`) ? `<span class="cal-mark" title="En tu Watchlist">${I.bookmarkOn}</span>` : '');
+  return { owned, where, what, open, badge, marks };
+}
+
+function calItemSmall(e) {
+  const c = calInfo(e);
+  return `<div class="cal-it" tabindex="0" ${c.open} title="${esc([e.title, c.what, c.where].filter(Boolean).join(' · '))}">
+    <img loading="lazy" src="${esc(e.poster)}" alt="">${c.badge ? `<div class="cal-badges">${c.badge}</div>` : ''}${c.marks}</div>`;
+}
+function calItemCard(e) {
+  const c = calInfo(e);
+  return `<div class="cal-card" tabindex="0" ${c.open}>
+    <div class="cal-art"><img loading="lazy" src="${esc(e.poster)}" alt="">${c.badge ? `<div class="cal-badges">${c.badge}</div>` : ''}${c.marks}</div>
+    <div class="cal-t">${esc(e.title)}</div><div class="cal-s">${esc([c.what, c.where].filter(Boolean).join(' · '))}</div></div>`;
+}
+
+function viewReleases(kind) {
+  const type = kind === 'movies' ? 'movie' : 'series';
+  const days = calDays();
+  const cur = parseDay(S.cal.day || isoDay(new Date()));
+  const months = [...new Set((S.cal.view === 'week' ? days : [cur]).map(d => isoDay(d).slice(0, 7)))];
+  months.forEach(m => loadCal(kind, m));
+  const states = months.map(m => S.cal.data[`${kind}:${m}`] || { loading: true });
+  const err = states.find(x => x.error)?.error;
+  const loading = states.some(x => x.loading);
+  const all = states.flatMap(x => x.items || []);
+  // filtros: dónde (películas: cines o plataformas; series: estrenos o temporadas) y plataforma
+  const show = S.cal.show[kind], prov = S.cal.prov[kind];
+  const provs = [...new Set(all.flatMap(e => (e.providers || []).map(p => p.name)))].sort();
+  const list = all.filter(e => (show === 'all' || e.kind === show || (show === 'season' && e.kind === 'season'))
+    && (!prov || (e.providers || []).some(p => p.name === prov)));
+  const byDay = new Map();
+  for (const e of list) { if (!byDay.has(e.date)) byDay.set(e.date, []); byDay.get(e.date).push(e); }
+  const today = isoDay(new Date());
+  const title = S.cal.view === 'month'
+    ? cap1(cur.toLocaleDateString('es-ES', { month: 'long', year: 'numeric' }))
+    : (() => { const a = days[0], b = days[6]; const same = a.getMonth() === b.getMonth();
+      return `${a.getDate()}${same ? '' : ' ' + a.toLocaleDateString('es-ES', { month: 'short' })} – ${b.getDate()} ${b.toLocaleDateString('es-ES', { month: 'short', year: 'numeric' })}`; })();
+  const showChips = (kind === 'movies' ? [['all', 'Todo'], ['cinema', 'Cines'], ['platform', 'Plataformas']] : [['all', 'Todo'], ['premiere', 'Estrenos'], ['season', 'Temporadas nuevas']])
+    .map(([k, l]) => `<button class="gchip ${show === k ? 'on' : ''}" data-cal-kind="${kind}" data-cal-show="${k}">${l}</button>`).join('');
+  const provChips = provs.length ? `<span class="cal-sep"></span><button class="gchip ${!prov ? 'on' : ''}" data-cal-kind="${kind}" data-cal-prov="">Todas</button>` +
+    provs.map(p => `<button class="gchip ${prov === p ? 'on' : ''}" data-cal-kind="${kind}" data-cal-prov="${esc(p)}">${esc(p)}</button>`).join('') : '';
+  let body;
+  if (err) body = `<div class="empty"><h2>No se ha podido cargar el calendario</h2><p>${esc(err)}</p><button class="btn btn-ghost" data-cal="retry">Reintentar</button></div>`;
+  else if (S.cal.view === 'month') {
+    const curMonth = isoDay(cur).slice(0, 7);
+    body = `<div class="cal-month">${CAL_DOW.map(d => `<div class="cal-dow">${d}</div>`).join('')}${days.map(d => {
+      const k = isoDay(d), its = byDay.get(k) || [], out = k.slice(0, 7) !== curMonth;
+      return `<div class="cal-day ${out ? 'out' : ''} ${k === today ? 'today' : ''}"><div class="cal-num">${d.getDate()}</div>
+        ${out ? '' : `<div class="cal-its">${its.slice(0, 6).map(calItemSmall).join('')}</div>
+        ${its.length > 6 ? `<button class="cal-more" data-cal-week="${k}">+${its.length - 6} más</button>` : ''}`}</div>`;
+    }).join('')}</div>
+    <div class="cal-agenda">${[...byDay.keys()].filter(k => k.slice(0, 7) === curMonth).map(k => `<div class="cal-aday"><h3>${cap1(parseDay(k).toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'long' }))}</h3>
+      <div class="cal-row">${byDay.get(k).map(calItemCard).join('')}</div></div>`).join('') || (loading ? '' : '<div class="empty"><p>No hay estrenos este mes con estos filtros.</p></div>')}</div>`;
+  } else {
+    body = `<div class="cal-week">${days.map(d => {
+      const k = isoDay(d), its = byDay.get(k) || [];
+      return `<div class="cal-col ${k === today ? 'today' : ''}"><div class="cal-colh"><span>${CAL_DOW[(d.getDay() + 6) % 7]}</span><b>${d.getDate()}</b></div>
+        <div class="cal-colb">${its.map(calItemCard).join('') || '<div class="cal-none">—</div>'}</div></div>`;
+    }).join('')}</div>`;
+  }
+  const future = months.every(m => m > today.slice(0, 7));
+  const hint = kind === 'movies' && future && show !== 'cinema'
+    ? '<p class="cal-hint">Las plataformas suelen confirmar sus estrenos poco antes: para los meses que vienen salen sobre todo sus películas propias, y el resto aparece al acercarse la fecha.</p>' : '';
+  return `<div class="page cal-page">
+    <h1 class="page-title">${kind === 'movies' ? 'Películas' : 'Series'}</h1>
+    ${kind === 'movies' ? movieTabs('movie-releases') : seriesTabs('series-releases')}
+    <div class="cal-bar">
+      <button class="icon-btn" data-cal="prev" title="${S.cal.view === 'week' ? 'Semana anterior' : 'Mes anterior'}">${I.left}</button>
+      <button class="btn btn-ghost btn-sm" data-cal="today">Hoy</button>
+      <button class="icon-btn" data-cal="next" title="${S.cal.view === 'week' ? 'Semana siguiente' : 'Mes siguiente'}">${I.right}</button>
+      <h2 class="cal-title">${esc(title)}</h2>${loading ? '<span class="spinner sm"></span>' : ''}
+      <div class="spacer"></div>
+      <div class="cal-seg"><button class="${S.cal.view === 'week' ? 'on' : ''}" data-cal-view="week">Semana</button><button class="${S.cal.view === 'month' ? 'on' : ''}" data-cal-view="month">Mes</button></div>
+    </div>
+    <div class="cat-chips cal-filters">${showChips}${provChips}</div>
+    ${hint}
+    ${body}
+  </div>`;
+}
+
 // ---------------------------------------------------------------- render y navegación
 function render(keepScroll = false) {
   const view = $('#view');
@@ -3052,6 +3198,8 @@ function render(keepScroll = false) {
   switch (r.name) {
     case 'movies': html = viewGrid('movies'); break;
     case 'series': html = viewGrid('series'); break;
+    case 'movie-releases': html = viewReleases('movies'); break;
+    case 'series-releases': html = viewReleases('series'); break;
     case 'list': html = viewList(); break;
     case 'watchlist': html = viewWatchlist(); break;
     case 'search': html = viewSearch(); break;
@@ -3076,7 +3224,7 @@ function render(keepScroll = false) {
   // Directores es una pestaña de Películas, y Sagas y cada colección, de Colecciones
   // y Peticiones, Usuarios, Registro y Descargas, de Administración
   const section = ADMIN_ROUTES.includes(r.name) && adminOn() ? 'admin'
-    : { directors: 'movies', director: 'movies', sagas: 'collections', collection: 'collections', 'collection-edit': 'collections' }[r.name] || r.name;
+    : { directors: 'movies', director: 'movies', 'movie-releases': 'movies', 'series-releases': 'series', sagas: 'collections', collection: 'collections', 'collection-edit': 'collections' }[r.name] || r.name;
   if (section === 'admin' && r.name !== 'user') S.adminTab = r.name;
   $$('#nav a').forEach(a => a.classList.toggle('active', a.dataset.nav === section));
   if (r.name === 'director') loadPerson(r.id);
@@ -3535,6 +3683,9 @@ document.addEventListener('click', async (e) => {
     go(route);
     return;
   }
+
+  const cal = t.closest('[data-cal], [data-cal-view], [data-cal-show], [data-cal-prov], [data-cal-week]');
+  if (cal) { calAction(cal.dataset); return; }
 
   const lt = t.closest('[data-list-tab]');
   if (lt) { S.listTab = lt.dataset.listTab || null; render(true); return; }

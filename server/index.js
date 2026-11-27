@@ -329,6 +329,12 @@ route('POST', '/api/item/:id/tags', async (req, res, { p, user }) => {
 route('POST', '/api/scan', async (req, res, { user }) => { act(req, user, 'scan'); await library.scan(); json(res, 200, library.view(user, { slim: true })); }, { admin: true });
 route('POST', '/api/meta/refresh', (req, res, { user }) => { act(req, user, 'meta-refresh'); library.fetchMissingMetadata(true); json(res, 200, true); }, { admin: true });
 route('GET', '/api/person/:id', async (req, res, { p, user }) => json(res, 200, await library.person(+p.id, user)));
+// calendario de estrenos de un mes (pestaña «Estrenos» de Películas y de Series)
+route('GET', '/api/calendar/:kind/:month', async (req, res, { p, user }) => {
+  if (!['movies', 'series'].includes(p.kind)) throw httpError(400, 'Calendario no válido');
+  try { json(res, 200, await library.calendar(p.kind, p.month, user)); }
+  catch (e) { throw e.status ? e : httpError(502, e.message); }
+});
 route('GET', '/api/title/:type/:id', async (req, res, { p, user }) => {
   if (!['movie', 'series'].includes(p.type) || !/^\d{1,9}$/.test(p.id)) throw httpError(400, 'Título no válido');
   try { json(res, 200, await library.title(p.type, +p.id, user)); }

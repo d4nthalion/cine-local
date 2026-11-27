@@ -11,6 +11,7 @@ const { LibraryWatcher, isStable } = require('../src/main/watcher');
 const { GENERIC_EPISODE } = require('../src/main/discord');
 const { applyListOp, withWatchlist, WATCHLIST } = require('../src/main/lists');
 const { store } = require('./store');
+const { Calendar } = require('./calendar');
 
 const DEFAULT_SETTINGS = {
   libraryPath: process.env.CINELOCAL_LIBRARY || '/media',
@@ -1063,6 +1064,12 @@ class Library extends EventEmitter {
   }
 
   /** Ficha de TMDB de un título que no está en la biblioteca (película o serie, sin temporadas) */
+  /** Calendario de estrenos de un mes («2026-11») de películas o series (ver calendar.js) */
+  calendar(kind, month, userName) {
+    this.cal ||= new Calendar(lang => this.requireTmdb(lang));
+    return this.cal.month(kind === 'series' ? 'series' : 'movies', month, this.langOf(userName));
+  }
+
   async title(type, id, userName) {
     this.titleCache ||= new Map();
     const lang = this.langOf(userName);

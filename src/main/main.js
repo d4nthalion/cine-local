@@ -698,6 +698,7 @@ ipcMain.handle('meta:person', (_e, id) => api().get('/api/person/' + encodeURICo
 ipcMain.handle('meta:search', (_e, { type, query, year }) => api().post('/api/meta/search', { type, query, year }));
 // ficha de TMDB de un título que no está en la biblioteca (para entrar igualmente a verla)
 ipcMain.handle('meta:title', (_e, { type, id }) => api().get(`/api/title/${type === 'series' ? 'series' : 'movie'}/${+id}`));
+ipcMain.handle('calendar', (_e, { kind, month }) => api().get(`/api/calendar/${kind === 'series' ? 'series' : 'movies'}/${encodeURIComponent(month)}`));
 ipcMain.handle('meta:posters', (_e, id) => api().get(`/api/item/${encodeURIComponent(id)}/posters`));
 ipcMain.handle('meta:setPoster', async (_e, { id, poster }) => {
   const it = await api().post(`/api/item/${encodeURIComponent(id)}/poster`, { poster });

@@ -26,6 +26,7 @@ contextBridge.exposeInMainWorld('api', {
   getPerson: (id) => ipcRenderer.invoke('meta:person', id),
   searchMeta: (q) => ipcRenderer.invoke('meta:search', q),
   getTitle: (q) => ipcRenderer.invoke('meta:title', q),
+  getCalendar: (q) => ipcRenderer.invoke('calendar', q),
   requests: { get: () => ipcRenderer.invoke('requests:get'), op: (q) => ipcRenderer.invoke('requests:op', q) },
   notifications: { get: () => ipcRenderer.invoke('notifications:get'), seen: () => ipcRenderer.invoke('notifications:seen'), dismiss: (q) => ipcRenderer.invoke('notifications:dismiss', q) },
   announcements: { list: () => ipcRenderer.invoke('announcements:list'), op: (q) => ipcRenderer.invoke('announcements:op', q) },

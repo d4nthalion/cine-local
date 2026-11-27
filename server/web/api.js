@@ -60,6 +60,7 @@
     getPerson: id => get('/api/person/' + encodeURIComponent(id)),
     searchMeta: q => post('/api/meta/search', q),
     getTitle: q => get('/api/title/' + (q.type === 'series' ? 'series' : 'movie') + '/' + encodeURIComponent(q.id)),
+    getCalendar: q => get('/api/calendar/' + (q.kind === 'series' ? 'series' : 'movies') + '/' + encodeURIComponent(q.month)),
     identify: q => post('/api/meta/identify', q),
     getPosters: id => get(`/api/item/${encodeURIComponent(id)}/posters`),
     setPoster: (id, poster) => post(`/api/item/${encodeURIComponent(id)}/poster`, { poster }),

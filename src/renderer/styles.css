@@ -1053,3 +1053,72 @@ body.login-mode .topbar, body.login-mode #view, body.login-mode #metaStatus { di
 .ann-row-text { color: var(--text-2); font-size: 13.5px; }
 .ann-row small { color: var(--text-3); font-size: 12px; }
 .ann-to small { color: var(--text-3); font-size: 13px; }
+
+/* ---------- calendario de estrenos (Películas y Series › Estrenos) ---------- */
+.cal-bar { display: flex; align-items: center; gap: 6px; margin: 0 0 14px; flex-wrap: wrap; }
+.cal-title { font-size: 20px; font-weight: 700; margin: 0 8px 0 6px; }
+.cal-bar .spacer { flex: 1; }
+.cal-seg { display: inline-flex; background: var(--bg-3); border: 1px solid var(--line); border-radius: 8px; padding: 3px; }
+.cal-seg button { border: 0; background: transparent; color: var(--text-2); font: inherit; font-size: 13px; padding: 6px 14px; border-radius: 6px; cursor: pointer; }
+.cal-seg button.on { background: rgba(255,255,255,.14); color: var(--text); font-weight: 600; }
+.cal-filters { margin: 0 0 18px; align-items: center; }
+.cal-sep { width: 1px; height: 20px; background: var(--line); margin: 0 6px; }
+.cal-hint { color: var(--text-3); font-size: 13px; margin: -8px 0 16px; }
+
+/* mes: cuadrícula de lunes a domingo con carátulas pequeñas */
+.cal-month { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px; }
+.cal-dow { color: var(--text-3); font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; padding: 0 6px 2px; }
+.cal-day { background: var(--bg-2); border: 1px solid var(--line); border-radius: var(--radius); min-height: 118px; padding: 6px; display: flex; flex-direction: column; gap: 5px; }
+.cal-day.out { background: transparent; border-color: transparent; opacity: .35; }
+.cal-day.today { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.cal-num { font-size: 13px; font-weight: 600; color: var(--text-2); }
+.cal-day.today .cal-num { color: var(--accent); }
+.cal-its { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; }
+.cal-it { position: relative; aspect-ratio: 2 / 3; border-radius: 4px; overflow: hidden; cursor: pointer; background: var(--bg-3); }
+.cal-it > img { width: 100%; height: 100%; object-fit: cover; display: block; transition: transform .25s; }
+.cal-it:hover > img, .cal-it:focus > img { transform: scale(1.06); }
+.cal-more { border: 0; background: transparent; color: var(--text-2); font: inherit; font-size: 12px; text-align: left; padding: 0 2px; cursor: pointer; }
+.cal-more:hover { color: var(--text); }
+
+/* dónde se estrena (logo de la plataforma o cines) y si ya la tienes */
+.cal-badges { position: absolute; left: 3px; bottom: 3px; display: flex; gap: 2px; }
+.cal-where { width: 18px; height: 18px; border-radius: 4px; object-fit: cover; box-shadow: 0 1px 4px rgba(0,0,0,.6); }
+.cal-where.cine, .cal-where.txt { display: grid; place-items: center; background: rgba(10,10,16,.85); color: #fff; font-size: 9px; font-weight: 700; }
+.cal-where.cine svg { width: 12px; height: 12px; fill: #fbbf24; }
+.cal-mark { position: absolute; right: 3px; top: 3px; width: 18px; height: 18px; border-radius: 50%; display: grid; place-items: center; background: rgba(10,10,16,.85); }
+.cal-mark svg { width: 12px; height: 12px; fill: var(--accent); }
+.cal-mark.own { background: var(--ok); }
+.cal-mark.own svg { fill: #fff; }
+
+/* tarjetas (semana y lista del mes en pantallas estrechas) */
+.cal-card { cursor: pointer; min-width: 0; }
+.cal-art { position: relative; aspect-ratio: 2 / 3; border-radius: 6px; overflow: hidden; background: var(--bg-3); }
+.cal-art > img { width: 100%; height: 100%; object-fit: cover; display: block; transition: transform .25s; }
+.cal-card:hover .cal-art > img, .cal-card:focus .cal-art > img { transform: scale(1.04); }
+.cal-art .cal-where { width: 22px; height: 22px; }
+.cal-t { font-size: 13px; font-weight: 600; margin-top: 6px; line-height: 1.25; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.cal-s { font-size: 12px; color: var(--text-3); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* semana: siete columnas */
+.cal-week { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 10px; align-items: start; }
+.cal-col { background: var(--bg-2); border: 1px solid var(--line); border-radius: var(--radius); padding: 8px; min-height: 240px; }
+.cal-col.today { border-color: var(--accent); }
+.cal-colh { display: flex; align-items: baseline; gap: 6px; margin-bottom: 8px; color: var(--text-3); font-size: 12px; text-transform: uppercase; font-weight: 600; }
+.cal-colh b { color: var(--text); font-size: 18px; }
+.cal-col.today .cal-colh b { color: var(--accent); }
+.cal-colb { display: flex; flex-direction: column; gap: 12px; }
+.cal-none { color: var(--text-3); text-align: center; padding: 20px 0; }
+
+/* lista del mes: sólo en pantallas estrechas, en lugar de la cuadrícula */
+.cal-agenda { display: none; }
+.cal-aday h3 { font-size: 15px; margin: 18px 0 10px; }
+.cal-row { display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 12px; }
+
+@media (max-width: 760px) {
+  .cal-month { display: none; }
+  .cal-agenda { display: block; }
+  .cal-week { grid-template-columns: 1fr; }
+  .cal-col { min-height: 0; }
+  .cal-colb { display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 12px; }
+  .cal-title { font-size: 17px; }
+}

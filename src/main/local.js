@@ -108,6 +108,7 @@ class LocalServer extends EventEmitter {
     route('POST', '/api/scan', async () => { await lib().scan(); return view(true); });
     route('POST', '/api/meta/refresh', () => { lib().fetchMissingMetadata(true); return true; });
     route('GET', '/api/person/:id', ({ p }) => lib().person(+p.id, USER));
+    route('GET', '/api/calendar/:kind/:month', ({ p }) => lib().calendar(p.kind, p.month, USER));
     route('GET', '/api/title/:type/:id', ({ p }) => lib().title(p.type === 'series' ? 'series' : 'movie', +p.id, USER));
     route('POST', '/api/meta/search', ({ b }) => lib().search(b, USER));
     route('POST', '/api/meta/identify', ({ b }) => lib().identify(b, USER));
