@@ -3116,9 +3116,11 @@ function calItemSmall(e) {
 }
 function calItemCard(e) {
   const c = calInfo(e);
-  return `<div class="cal-card" tabindex="0" ${c.open}>
-    <div class="cal-art"><img loading="lazy" src="${esc(e.poster)}" alt="">${c.badge ? `<div class="cal-badges">${c.badge}</div>` : ''}${c.marks}</div>
-    <div class="cal-t">${esc(e.title)}</div><div class="cal-s">${esc([c.what, c.where].filter(Boolean).join(' · '))}</div></div>`;
+  // fila compacta: carátula pequeña y, al lado, el título y dónde se estrena (con su logo)
+  return `<div class="cal-card" tabindex="0" ${c.open} title="${esc(e.title)}">
+    <div class="cal-art"><img loading="lazy" src="${esc(e.poster)}" alt="">${c.marks}</div>
+    <div class="cal-txt"><div class="cal-t">${esc(e.title)}</div>
+      <div class="cal-s">${c.badge}<span>${esc([c.what, c.where].filter(Boolean).join(' · '))}</span></div></div></div>`;
 }
 
 function viewReleases(kind) {
